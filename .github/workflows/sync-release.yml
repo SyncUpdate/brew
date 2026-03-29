@@ -1,0 +1,114 @@
+name: Sync Homebrew Release
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync-and-mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git Bot Identity
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Ensure 'main' branch exists and checkout (clear all tags)
+        run: |
+          if git ls-remote --heads origin main | grep -q 'refs/heads/main'; then
+            echo "Main branch exists. Fetching and checking out..."
+            git fetch origin main
+            git checkout main
+          else
+            echo "Main branch does not exist. Creating initial empty branch..."
+            git checkout --orphan main
+            git rm -rf .
+            git commit --allow-empty -m "Initial release tracking commit"
+
+            # Delete all local tags (if any)
+            if git tag -l | grep -q .; then
+              git tag -l | xargs -r -n1 git tag -d
+            fi
+
+            # Delete all remote tags on 'origin' (if any)
+            REMOTE_TAGS=$(git ls-remote --tags origin | awk '{print $2}' | sed 's#refs/tags/##' | grep -v '\^{}' || true)
+            if [ -n "$REMOTE_TAGS" ]; then
+              echo "$REMOTE_TAGS" | xargs -r -n1 git push origin --delete
+            fi
+
+            git push origin main
+          fi
+
+      - name: Fetch Latest Homebrew Tag
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(curl -sL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/Homebrew/brew/releases/latest | jq -r .tag_name)
+
+          if [[ -z "$TAG" || "$TAG" == "null" ]]; then
+            echo "::error::Could not fetch latest tag"
+            exit 1
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Create Squashed Release Commit
+        id: squash
+        run: |
+          UPSTREAM_TAG="${{ steps.upstream.outputs.tag }}"
+
+          if git rev-parse "$UPSTREAM_TAG" >/dev/null 2>&1; then
+            echo "Release $UPSTREAM_TAG already exists. Skipping commit creation."
+            echo "updated=false" >> $GITHUB_OUTPUT
+          else
+            echo "New release found: $UPSTREAM_TAG"
+            git remote add upstream https://github.com/Homebrew/brew.git
+            git fetch upstream tag "$UPSTREAM_TAG" --no-tags
+
+            if git tag -l | grep -q "^${UPSTREAM_TAG}$"; then
+              git tag -d "${UPSTREAM_TAG}"
+            fi
+
+            TMP_INDEX=$(mktemp)
+            export GIT_INDEX_FILE="$TMP_INDEX"
+
+            git read-tree FETCH_HEAD
+
+            git rm -r --cached --ignore-unmatch .github/workflows || true
+
+            TREE_HASH=$(git write-tree)
+
+            unset GIT_INDEX_FILE
+            rm -f "$TMP_INDEX"
+
+            COMMIT_HASH=$(git commit-tree "$TREE_HASH" -p HEAD -m "Homebrew Release $UPSTREAM_TAG")
+
+            git reset --hard "$COMMIT_HASH"
+            git tag -f "$UPSTREAM_TAG"
+            echo "updated=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push to GitHub
+        if: steps.squash.outputs.updated == 'true'
+        run: |
+          git push origin main
+          git push origin --tags
+
+      - name: Sync External Mirror
+        env:
+          MIRROR_URL: ${{ secrets.MIRROR_REMOTE_URL }}
+        run: |
+          git remote add mirror "$MIRROR_URL"
+          git push mirror main --force
+          git push mirror --tags --force
