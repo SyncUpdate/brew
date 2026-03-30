@@ -138,7 +138,7 @@ and are now no longer needed.
 
 Bundler for non-Ruby dependencies from Homebrew, Homebrew Cask, Mac App Store
 dependencies, VSCode (and forks/variants) extensions, Go packages, Cargo
-packages, uv tools and Flatpak packages.
+packages, uv tools, Flatpak packages, Krew plugins and npm packages.
 
 Note: Flatpak support is only available on Linux.
 
@@ -193,16 +193,16 @@ By default, only Homebrew formula dependencies are listed.
 `brew bundle add` *`name`* \[...\]
 
 : Add entries to your `Brewfile`. Adds formulae by default. Use `--cask`,
-  `--tap`, `--vscode`, `--go`, `--cargo`, `--uv` and `--flatpak` to add the
-  corresponding entry instead.
+  `--tap`, `--vscode`, `--go`, `--cargo`, `--uv`, `--flatpak`, `--krew` and
+  `--npm` to add the corresponding entry instead.
 
 `brew bundle remove` *`name`* \[...\]
 
 : Remove entries that match `name` from your `Brewfile`. Use `--formula`,
-  `--cask`, `--tap`, `--mas`, `--vscode`, `--go`, `--cargo`, `--uv` and
-  `--flatpak` to remove only entries of the corresponding type. Passing
-  `--formula` also removes matches against formula aliases and old formula
-  names.
+  `--cask`, `--tap`, `--mas`, `--vscode`, `--go`, `--cargo`, `--uv`,
+  `--flatpak`, `--krew` and `--npm` to remove only entries of the corresponding
+  type. Passing `--formula` also removes matches against formula aliases and old
+  formula names.
 
 `brew bundle exec` \[`--check`\] \[`--no-secrets`\] *`command`*
 
@@ -317,6 +317,14 @@ flags which will help with finding keg-only dependencies like `openssl`,
 
 : `list`, `dump` or `cleanup` Flatpak packages. Note: Linux only.
 
+`--krew`
+
+: `list` or `dump` Krew plugins.
+
+`--npm`
+
+: `list` or `dump` npm packages.
+
 `--no-vscode`
 
 : `dump` without VSCode (and forks/variants) extensions. Enabled by default if
@@ -342,11 +350,21 @@ flags which will help with finding keg-only dependencies like `openssl`,
 : `dump` without Flatpak packages. Enabled by default if
   `$HOMEBREW_BUNDLE_DUMP_NO_FLATPAK` is set.
 
+`--no-krew`
+
+: `dump` without Krew plugins. Enabled by default if
+  `$HOMEBREW_BUNDLE_DUMP_NO_KREW` is set.
+
+`--no-npm`
+
+: `dump` without npm packages. Enabled by default if
+  `$HOMEBREW_BUNDLE_DUMP_NO_NPM` is set.
+
 `--describe`
 
-: `dump` adds a description comment above each line, unless the dependency does
-  not have a description. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_DESCRIBE`
-  is set.
+: `dump` and `add` add a description comment above each line, unless the
+  dependency does not have a description. Enabled by default if
+  `$HOMEBREW_BUNDLE_DESCRIBE` is set.
 
 `--no-restart`
 
@@ -4311,6 +4329,11 @@ command execution (e.g. `$(cat file)`).
 
 : If set, require `brew` to be invoked by the value of
   `$HOMEBREW_FORCE_BREW_WRAPPER` for non-trivial `brew` commands.
+
+`HOMEBREW_FORCE_BREW_WRAPPER_HELP_MESSAGE`
+
+: If set, appended to the `$HOMEBREW_FORCE_BREW_WRAPPER` error message to
+  provide additional help or context to the user.
 
 `HOMEBREW_FORCE_VENDOR_RUBY`
 

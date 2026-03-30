@@ -57,26 +57,29 @@ module Cask
 
     sig {
       params(
-        token:              String,
-        sourcefile_path:    T.nilable(Pathname),
-        source:             T.nilable(String),
-        tap:                T.nilable(Tap),
-        loaded_from_api:    T::Boolean,
-        api_source:         T.nilable(T::Hash[String, T.untyped]),
-        config:             T.nilable(Config),
-        allow_reassignment: T::Boolean,
-        loader:             T.nilable(CaskLoader::ILoader),
-        block:              T.nilable(T.proc.bind(DSL).void),
+        token:                    String,
+        sourcefile_path:          T.nilable(Pathname),
+        source:                   T.nilable(String),
+        tap:                      T.nilable(Tap),
+        loaded_from_api:          T::Boolean,
+        loaded_from_internal_api: T::Boolean,
+        api_source:               T.nilable(T::Hash[String, T.untyped]),
+        config:                   T.nilable(Config),
+        allow_reassignment:       T::Boolean,
+        loader:                   T.nilable(CaskLoader::ILoader),
+        block:                    T.nilable(T.proc.bind(DSL).void),
       ).void
     }
-    def initialize(token, sourcefile_path: nil, source: nil, tap: nil, loaded_from_api: false, api_source: nil,
-                   config: nil, allow_reassignment: false, loader: nil, &block)
+    def initialize(token, sourcefile_path: nil, source: nil, tap: nil, loaded_from_api: false,
+                   loaded_from_internal_api: false, api_source: nil, config: nil, allow_reassignment: false,
+                   loader: nil, &block)
       @token = token
       @sourcefile_path = sourcefile_path
       @source = source
       @tap = tap
       @allow_reassignment = allow_reassignment
       @loaded_from_api = loaded_from_api
+      @loaded_from_internal_api = loaded_from_internal_api
       @api_source = api_source
       @loader = loader
       # Sorbet has trouble with bound procs assigned to instance variables:
@@ -94,6 +97,9 @@ module Cask
 
     sig { returns(T::Boolean) }
     def loaded_from_api? = @loaded_from_api
+
+    sig { returns(T::Boolean) }
+    def loaded_from_internal_api? = @loaded_from_internal_api
 
     sig { returns(T.nilable(T::Hash[String, T.untyped])) }
     attr_reader :api_source
@@ -127,6 +133,9 @@ module Cask
     end
 
     def_delegators :@dsl, *::Cask::DSL::DSL_METHODS
+
+    sig { returns(DSL::Caveats) }
+    def caveats_object = @dsl.caveats_object
 
     sig { params(caskroom_path: Pathname).returns(T::Array[[String, String]]) }
     def timestamped_versions(caskroom_path: self.caskroom_path)
@@ -252,7 +261,7 @@ module Cask
       caskfile_dir = metadata_main_container_path(caskroom_path: installed_caskroom_path)
                      .join(*installed_version, "Casks")
 
-      ["json", "rb"]
+      ["internal.json", "json", "rb"]
         .map { |ext| caskfile_dir.join("#{installed_token}.#{ext}") }
         .find(&:exist?)
     end
@@ -433,7 +442,8 @@ module Cask
         "outdated"                        => outdated?,
         "sha256"                          => sha256,
         "artifacts"                       => artifacts_list,
-        "caveats"                         => (Tty.strip_ansi(caveats) unless caveats.empty?),
+        "caveats"                         => caveats_for_api,
+        "caveats_rosetta"                 => caveats_object.invoked?(:requires_rosetta) || nil,
         "depends_on"                      => depends_on,
         "conflicts_with"                  => conflicts_with,
         "container"                       => container&.pairs,
@@ -462,6 +472,10 @@ module Cask
     private_constant :HASH_KEYS_TO_SKIP
 
     def to_hash_with_variations
+      if loaded_from_internal_api?
+        raise UsageError, "Cannot call #to_hash_with_variations on casks loaded from the internal API"
+      end
+
       if loaded_from_api? && (json_cask = api_source) && !Homebrew::EnvConfig.no_install_from_api?
         return api_to_local_hash(json_cask.dup)
       end
@@ -526,6 +540,16 @@ module Cask
     end
 
     private
+
+    # Returns caveats text for API serialization, excluding conditional
+    # built-in caveats that depend on the current machine's state.
+    # These are stored as separate boolean fields (e.g. caveats_rosetta)
+    # and evaluated at install time instead.
+    sig { returns(T.nilable(String)) }
+    def caveats_for_api
+      Tty.strip_ansi(caveats_object.to_s_without_conditional)
+         .presence
+    end
 
     sig { returns(T.nilable(Homebrew::BundleVersion)) }
     def bundle_version
