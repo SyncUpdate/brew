@@ -899,6 +899,8 @@ module GitHub
       end
     end
     commits
+  rescue GitHub::API::GitRepositoryIsEmptyError
+    []
   end
 
   sig {
@@ -991,8 +993,12 @@ module GitHub
     from_date = Date.parse(from)
     to_date = Date.parse(to)
 
-    rest_api_url = "#{GitHub::API_URL}/orgs/#{organisation}/repos?type=sources&per_page=#{MAX_PER_PAGE}"
-    repositories = GitHub::API.open_rest(rest_api_url)
+    rest_api_url = "#{GitHub::API_URL}/orgs/#{organisation}/repos"
+    params = "type=sources"
+    repositories = []
+    GitHub::API.paginate_rest(rest_api_url, per_page: MAX_PER_PAGE, additional_query_params: params) do |result|
+      repositories.concat(result)
+    end
     repositories.filter_map do |repository|
       pushed_at = Date.parse(repository.fetch("pushed_at"))
       created_at = Date.parse(repository.fetch("created_at"))

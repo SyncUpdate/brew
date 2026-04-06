@@ -44,6 +44,7 @@ require "api"
 require "api_hashable"
 require "utils/output"
 require "pypi_packages"
+require "time"
 
 # A formula provides instructions and metadata for Homebrew to install a piece
 # of software. Every Homebrew formula is a {Formula}.
@@ -910,7 +911,7 @@ class Formula
   # exists and is not empty.
   sig { returns(T::Boolean) }
   def latest_version_installed?
-    (dir = latest_installed_prefix).directory? && !dir.children.empty?
+    (dir = latest_installed_prefix).directory? && !dir.empty?
   end
 
   # If at least one version of {Formula} is installed.
@@ -2132,6 +2133,9 @@ class Formula
   }
   def std_pip_args(prefix: self.prefix, build_isolation: false)
     args = ["--verbose", "--no-deps", "--no-binary=:all:", "--ignore-installed", "--no-compile"]
+    # Delay packages published in the last day so builds are less likely to
+    # install a freshly compromised PyPI release.
+    args << "--uploaded-prior-to=#{(Time.now.utc - (24 * 60 * 60)).iso8601(0)}"
     args << "--prefix=#{prefix}" if prefix
     args << "--no-build-isolation" unless build_isolation
     args

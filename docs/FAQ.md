@@ -1,5 +1,5 @@
 ---
-last_review_date: "2026-01-23"
+last_review_date: "2026-04-04"
 ---
 
 # FAQ (Frequently Asked Questions)
@@ -35,11 +35,17 @@ To stop something from being updated/upgraded:
 
     brew pin <formula>
 
+If you also do not want Homebrew to automatically learn about newer versions until you choose to, disable auto-updating entirely:
+
+    export HOMEBREW_NO_AUTO_UPDATE=1
+
+For the tradeoffs and alternatives, see [Locking installed formulae at specific versions](Versions.md#locking-installed-formulae-at-specific-versions).
+
 To allow that formulae to update again:
 
     brew unpin <formula>
 
-Note that pinned, outdated formulae that another formula depends on need to be upgraded when required, as we do not allow formulae to be built against outdated versions. If this is not desired, you can instead use `brew version-install` to install your own copy of the formula from [your own tap](How-to-Create-and-Maintain-a-Tap.md).
+Note that pinned, outdated formulae that another formula depends on need to be upgraded when required, as we do not allow formulae to be built against outdated versions. If this is not desired, see [Locking installed formulae at specific versions](Versions.md#locking-installed-formulae-at-specific-versions) instead.
 
 ## How do I uninstall Homebrew?
 
@@ -108,7 +114,7 @@ The prefix `/opt/homebrew` was chosen to allow installations in `/opt/homebrew` 
 
 ## Why is the default installation prefix `/home/linuxbrew/.linuxbrew` on Linux?
 
-The prefix `/home/linuxbrew/.linuxbrew` was chosen so that users without admin access can still benefit from precompiled binaries via a `linuxbrew` role account. If you do not yourself have admin privileges, consider asking your admin staff to create a `linuxbrew` role account for you with home directory `/home/linuxbrew`.
+The prefix `/home/linuxbrew/.linuxbrew` was chosen to avoid writing to system-owned directories after installation while still allowing most precompiled binaries (bottles) to be used. Homebrew is designed for single-user installations rather than shared role accounts. See [Support Tiers](Support-Tiers.md#unsupported) for unsupported multi-user environments.
 
 ## Why does Homebrew say sudo is bad?
 
