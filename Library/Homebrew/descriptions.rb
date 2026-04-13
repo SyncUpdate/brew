@@ -2,7 +2,6 @@
 # frozen_string_literal: true
 
 require "formula"
-require "formula_versions"
 require "search"
 require "cask/cask_loader"
 
@@ -159,7 +158,7 @@ class Descriptions
   sig { returns(T::Hash[String, String]) }
   def short_names
     @short_names ||= T.let(
-      @descriptions.keys.to_h { |k| [k, k.split("/").fetch(-1)] },
+      @descriptions.keys.to_h { |k| [k, Utils.name_from_full_name(k)] },
       T.nilable(T::Hash[String, String]),
     )
   end

@@ -4,7 +4,6 @@
 require "json"
 require "time"
 require "unpack_strategy"
-require "lazy_object"
 require "lock_file"
 require "system_command"
 require "utils/output"
@@ -365,12 +364,6 @@ class AbstractFileDownloadStrategy < AbstractDownloadStrategy # rubocop:todo Sty
   end
 
   private
-
-  sig { returns(String) }
-  def resolved_url
-    resolved_url, = resolved_url_and_basename
-    resolved_url
-  end
 
   sig { returns(String) }
   def resolved_basename
@@ -850,7 +843,7 @@ class LocalBottleDownloadStrategy < AbstractFileDownloadStrategy # rubocop:todo 
   # rubocop:disable Lint/MissingSuper
   sig { params(path: Pathname).void }
   def initialize(path)
-    @cached_location = T.let(path, Pathname)
+    @cached_location = path
   end
   # rubocop:enable Lint/MissingSuper
 
@@ -1069,7 +1062,7 @@ class GitDownloadStrategy < VCSDownloadStrategy # rubocop:todo Style/OneClassPer
 
   sig { override.returns(T::Boolean) }
   def repo_valid?
-    silent_command("git", args: ["--git-dir", git_dir, "status", "-s"]).success?
+    silent_command("git", args: ["-C", cached_location, "status", "-s"]).success?
   end
 
   sig { returns(T::Boolean) }
@@ -1273,7 +1266,7 @@ class GitHubGitDownloadStrategy < GitDownloadStrategy # rubocop:todo Style/OneCl
   sig { params(url: String, name: String, version: T.nilable(Version), meta: T.untyped).void }
   def initialize(url, name, version, **meta)
     super
-    @version = T.let(version, T.nilable(Version))
+    @version = version
 
     match_data = %r{^https?://github\.com/(?<user>[^/]+)/(?<repo>[^/]+)\.git$}.match(@url)
     return unless match_data

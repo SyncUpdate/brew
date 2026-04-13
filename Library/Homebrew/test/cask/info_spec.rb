@@ -32,6 +32,7 @@ RSpec.describe Cask::Info, :cask do
     allow(described_class).to receive(:installation_info).and_wrap_original do |method, arg, **kwargs|
       (arg.token == cask_name) ? "Installed" : method.call(arg, **kwargs)
     end
+    (Cask::Caskroom.path/cask_name).mkpath
   end
 
   before do
@@ -78,7 +79,7 @@ RSpec.describe Cask::Info, :cask do
   it "prints inline summary information for casks" do
     cask = Cask::CaskLoader.load("local-transmission")
     allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
-    allow(cask).to receive_messages(supports_macos?: true, supports_linux?: false)
+    allow(cask).to receive_messages(supports_linux?: false)
 
     expect { described_class.info(cask, args:) }
       .to output(/Requirements\nRequired: .*macOS >= 10\.15.*✔/).to_stdout

@@ -52,12 +52,13 @@ module Homebrew
     def self.load_other_tap_strategies(formulae_and_casks_to_check)
       other_taps = {}
       formulae_and_casks_to_check.each do |formula_or_cask|
-        next if formula_or_cask.tap.blank?
-        next if formula_or_cask.tap.core_tap?
-        next if formula_or_cask.tap.core_cask_tap?
-        next if other_taps[formula_or_cask.tap.name]
+        tap = formula_or_cask.tap
+        next unless tap
+        next if tap.core_tap?
+        next if tap.core_cask_tap?
+        next if other_taps[tap.name]
 
-        other_taps[formula_or_cask.tap.name] = formula_or_cask.tap
+        other_taps[tap.name] = tap
       end
       other_taps = other_taps.sort.to_h
 
@@ -97,6 +98,8 @@ module Homebrew
           Formulary.factory(livecheck_formula)
         elsif livecheck_cask
           Cask::CaskLoader.load(livecheck_cask)
+        else
+          raise "livecheck formula or cask not found"
         end
       end
 
@@ -856,6 +859,8 @@ module Homebrew
           version_info[:meta][:cached] = true if strategy_data[:cached] == true
           version_info[:meta][:throttle] = livecheck_throttle if livecheck_throttle
           version_info[:meta][:throttle_days] = livecheck_throttle_days if livecheck_throttle_days
+
+          version_info[:content] = strategy_data[:content] if strategy_data[:content] && strategy_name == "Pypi"
         end
 
         return version_info

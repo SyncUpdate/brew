@@ -268,7 +268,7 @@ class Formula
 
     @force_bottle = force_bottle
 
-    @tap = T.let(tap, T.nilable(Tap))
+    @tap = tap
     @tap ||= if path == Formulary.core_path(name)
       CoreTap.instance
     else
@@ -562,11 +562,6 @@ class Formula
   # @see .autobump?
   delegate autobump?: :"self.class"
 
-  # Is a `no_autobump!` method defined?
-  # @!method no_autobump_defined?
-  # @see .no_autobump_defined?
-  delegate no_autobump_defined?: :"self.class"
-
   delegate no_autobump_message: :"self.class"
 
   # Is a service specification defined for the software?
@@ -859,7 +854,7 @@ class Formula
   def aliases
     @aliases ||= T.let(
       if (tap = self.tap)
-        tap.alias_reverse_table.fetch(full_name, []).map { it.split("/").fetch(-1) }
+        tap.alias_reverse_table.fetch(full_name, []).map { Utils.name_from_full_name(it) }
       else
         []
       end, T.nilable(T::Array[String])
@@ -2468,7 +2463,7 @@ class Formula
   sig { returns(T::Array[String]) }
   def self.names
     @names ||= T.let((core_names + tap_names.map do |name|
-      name.split("/").fetch(-1)
+      Utils.name_from_full_name(name)
     end).uniq.sort, T.nilable(T::Array[String]))
   end
 
@@ -2554,7 +2549,7 @@ class Formula
   sig { returns(T::Array[String]) }
   def self.aliases
     @aliases ||= T.let((core_aliases + tap_aliases.map do |name|
-      name.split("/").fetch(-1)
+      Utils.name_from_full_name(name)
     end).uniq.sort, T.nilable(T::Array[String]))
   end
 
@@ -4648,10 +4643,6 @@ class Formula
       @autobump != false # @autobump may be `nil`
     end
 
-    # Is a `no_autobump!` method defined?
-    sig { returns(T::Boolean) }
-    def no_autobump_defined? = @no_autobump_defined == true
-
     # Message that explains why the formula was excluded from the autobump list.
     # Returns `nil` if no message is specified.
     #
@@ -4771,7 +4762,7 @@ class Formula
     # ```
     # TODO: replace legacy `replacement` with `replacement_formula` or `replacement_cask`
     #
-    # @see https://docs.brew.sh/Deprecating-Disabling-and-Removing-Formulae
+    # @see https://docs.brew.sh/Deprecating-Disabling-and-Removing#formulae-and-casks
     # @see DeprecateDisable::FORMULA_DEPRECATE_DISABLE_REASONS
     # @api public
     sig {
@@ -4881,7 +4872,7 @@ class Formula
     # ```
     #  TODO: replace legacy `replacement` with `replacement_formula` or `replacement_cask`
     #
-    # @see https://docs.brew.sh/Deprecating-Disabling-and-Removing-Formulae
+    # @see https://docs.brew.sh/Deprecating-Disabling-and-Removing#formulae-and-casks
     # @see DeprecateDisable::FORMULA_DEPRECATE_DISABLE_REASONS
     # @api public
     sig {

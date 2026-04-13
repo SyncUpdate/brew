@@ -2,16 +2,16 @@
 # frozen_string_literal: true
 
 require "keg"
-require "language/python"
 require "formula"
 require "formulary"
+require "utils"
 require "version"
 require "development_tools"
 require "utils/shell"
 require "utils/output"
-require "system_config"
 require "cask/caskroom"
 require "cask/quarantine"
+require "git_repository"
 require "system_command"
 
 module Homebrew
@@ -1050,6 +1050,20 @@ module Homebrew
       end
 
       sig { returns(T.nilable(String)) }
+      def check_cask_corrupt_dirs
+        corrupt = Cask::Caskroom.corrupt_cask_dirs
+        return if corrupt.empty?
+
+        <<~EOS
+          Some directories in the Caskroom do not have valid metadata.
+            #{corrupt.map { |token| "#{Cask::Caskroom.path}/#{token}" }.join("\n  ")}
+          The following #{Utils.pluralize("cask", corrupt.count)} cannot be upgraded as-is.
+          To fix this, run:
+            #{corrupt.map { |token| "brew reinstall --cask --force #{token}" }.join("\n  ")}
+        EOS
+      end
+
+      sig { returns(T.nilable(String)) }
       def check_cask_taps
         error_tap_paths = []
 
@@ -1159,7 +1173,7 @@ module Homebrew
         return if shadowed_formula_full_names.empty?
 
         installed_formula_tap_names = Formula.installed.filter_map(&:tap).uniq.reject(&:official?).map(&:name)
-        shadowed_formula_tap_names = shadowed_formula_full_names.map { |s| s.rpartition("/").first }.uniq
+        shadowed_formula_tap_names = shadowed_formula_full_names.filter_map { |s| Utils.tap_from_full_name(s) }.uniq
         unused_shadowed_formula_tap_names = (shadowed_formula_tap_names - installed_formula_tap_names).sort
 
         resolution = if unused_shadowed_formula_tap_names.empty?
@@ -1187,7 +1201,7 @@ module Homebrew
         return if shadowed_cask_full_names.empty?
 
         installed_cask_tap_names = Cask::Caskroom.casks.filter_map(&:tap).uniq.reject(&:official?).map(&:name)
-        shadowed_cask_tap_names = shadowed_cask_full_names.map { |s| s.rpartition("/").first }.uniq
+        shadowed_cask_tap_names = shadowed_cask_full_names.filter_map { |s| Utils.tap_from_full_name(s) }.uniq
         unused_shadowed_cask_tap_names = (shadowed_cask_tap_names - installed_cask_tap_names).sort
 
         resolution = if unused_shadowed_cask_tap_names.empty?
