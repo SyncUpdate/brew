@@ -140,7 +140,7 @@ class Formula
   # The {Tap} instance associated with this {Formula}.
   # If it's `nil`, then this formula is loaded from a path or URL.
   #
-  # @api internal
+  # @api public
   sig { returns(T.nilable(Tap)) }
   attr_reader :tap
 
@@ -148,7 +148,7 @@ class Formula
   # This contains all the attributes (e.g. URL, checksum) that apply to the
   # stable version of this formula.
   #
-  # @api internal
+  # @api public
   sig { returns(T.nilable(SoftwareSpec)) }
   attr_reader :stable
 
@@ -158,6 +158,7 @@ class Formula
   # commit in the version control system.
   # `nil` if there is no HEAD version.
   #
+  # @api public
   # @see #stable
   sig { returns(T.nilable(SoftwareSpec)) }
   attr_reader :head
@@ -181,27 +182,37 @@ class Formula
 
   # Used for creating new Homebrew versions of software without new upstream
   # versions.
+  #
+  # @api public
   # @see .revision=
   sig { returns(Integer) }
   attr_reader :revision
 
   # Used to change version schemes for packages.
+  #
+  # @api public
   # @see .version_scheme=
   sig { returns(Integer) }
   attr_reader :version_scheme
 
   # Used to indicate API/ABI compatibility for dependencies.
+  #
+  # @api public
   # @see .compatibility_version=
   sig { returns(T.nilable(Integer)) }
   attr_reader :compatibility_version
 
   # The current working directory during builds.
   # Will only be non-`nil` inside {#install}.
+  #
+  # @api public
   sig { returns(T.nilable(Pathname)) }
   attr_reader :buildpath
 
   # The current working directory during tests.
   # Will only be non-`nil` inside {.test}.
+  #
+  # @api public
   sig { returns(T.nilable(Pathname)) }
   attr_reader :testpath
 
@@ -436,6 +447,11 @@ class Formula
   sig { returns(T.nilable(String)) }
   def full_installed_alias_name = full_name_with_optional_tap(installed_alias_name)
 
+  sig { returns(Tap) }
+  def tap!
+    tap || raise("Formula tap is nil")
+  end
+
   sig { returns(Pathname) }
   def tap_path
     return path unless (t = tap)
@@ -448,7 +464,7 @@ class Formula
   # The path that was specified to find this formula.
   sig { returns(T.nilable(Pathname)) }
   def specified_path
-    return Homebrew::API::Internal.cached_formula_json_file_path if loaded_from_internal_api?
+    return Homebrew::API::Internal.cached_packages_json_file_path if loaded_from_internal_api?
     return Homebrew::API::Formula.cached_json_file_path if loaded_from_api?
     return alias_path if alias_path&.exist?
 
@@ -867,7 +883,7 @@ class Formula
 
   # The {Dependency}s for the currently active {SoftwareSpec}.
   #
-  # @api internal
+  # @api public
   delegate deps: :active_spec
 
   # The declared {Dependency}s for the currently active {SoftwareSpec} (i.e. including those provided by macOS).
@@ -1460,6 +1476,8 @@ class Formula
   def systemd_timer_path = (any_installed_prefix || opt_prefix)/"#{service_name}.timer"
 
   # The service specification for the software.
+  #
+  # @api public
   sig { returns(Homebrew::Service) }
   def service
     @service ||= T.let(Homebrew::Service.new(self, &self.class.service), T.nilable(Homebrew::Service))
@@ -1773,6 +1791,9 @@ class Formula
     false
   end
 
+  # Applies all patches in the {.patchlist} to the source tree.
+  #
+  # @api public
   sig { void }
   def patch
     return if patchlist.empty?
@@ -1998,6 +2019,8 @@ class Formula
     [name, *oldnames, *aliases].compact
   end
 
+  # The string representation of this {Formula}, returning its {#name}.
+  #
   # @api public
   sig { returns(String) }
   def to_s = name
@@ -2621,7 +2644,17 @@ class Formula
   # means if `a` depends on `b` then `b` will be ordered before `a` in this list.
   #
   # @api internal
-  sig { params(block: T.nilable(T.proc.params(arg0: Formula, arg1: Dependency).void)).returns(T::Array[Dependency]) }
+  T::Sig::WithoutRuntime.sig {
+    # CaskDependent may not be initialized yet, so we don't use a runtime sig
+    params(
+      block: T.nilable(
+        T.proc.params(
+          arg0: T.any(Formula, CaskDependent),
+          arg1: Dependency,
+        ).returns(T.nilable(Symbol)),
+      ),
+    ).returns(T::Array[Dependency])
+  }
   def recursive_dependencies(&block)
     cache_key = "Formula#recursive_dependencies"
     if block
@@ -2636,7 +2669,17 @@ class Formula
   # The full set of {Requirements} for this formula's dependency tree.
   #
   # @api internal
-  sig { params(block: T.nilable(T.proc.params(arg0: Formula, arg1: Requirement).void)).returns(Requirements) }
+  T::Sig::WithoutRuntime.sig {
+    # CaskDependent may not be initialized yet, so we don't use a runtime sig
+    params(
+      block: T.nilable(
+        T.proc.params(
+          arg0: T.any(Formula, CaskDependent, SoftwareSpec),
+          arg1: Requirement,
+        ).returns(T.nilable(Symbol)),
+      ),
+    ).returns(Requirements)
+  }
   def recursive_requirements(&block)
     cache_key = "Formula#recursive_requirements" unless block
     Requirement.expand(self, cache_key:, &block)
@@ -2765,10 +2808,13 @@ class Formula
       full_name = d["full_name"]
       next if full_name.blank?
 
-      dep = Dependency.new(full_name)
-      dep if hide.include?(dep.name) || dep.to_installed_formula.installed_prefixes.none?
-    rescue FormulaUnavailableError
-      nil
+      # Use base name to check the cellar directly, avoiding Formulary.resolve.
+      # A dep is "missing" if it's in the hide list (pretend uninstalled) or
+      # genuinely not installed in the cellar.
+      base_name = Utils.name_from_full_name(full_name)
+      next if hide.exclude?(base_name) && (HOMEBREW_CELLAR/base_name).directory?
+
+      Dependency.new(full_name)
     end
   end
 
@@ -3163,6 +3209,10 @@ class Formula
     method(:test).owner != Formula
   end
 
+  # This method is overridden in {Formula} subclasses to provide the
+  # test instructions. Called by `brew test`.
+  #
+  # @api public
   sig {
     # TODO: replace `returns(BasicObject)` with `void` after dropping `return false` handling in test
     returns(BasicObject)
@@ -3187,6 +3237,8 @@ class Formula
   #   system "make", "install"
   # end
   # ```
+  #
+  # @api public
   sig { void }
   def install; end
 
@@ -3249,13 +3301,13 @@ class Formula
       cache_timestamp = Time.now
     end
     Dependency.expand(self, cache_key:, cache_timestamp:) do |_, dependency|
-      Dependency.prune if dependency.build?
+      next Dependable::PRUNE if dependency.build?
       next if dependency.required?
 
       if build.any_args_or_options?
-        Dependency.prune if build.without?(dependency)
+        next Dependable::PRUNE if build.without?(dependency)
       elsif !dependency.recommended?
-        Dependency.prune
+        next Dependable::PRUNE
       end
     end
   ensure
@@ -3270,7 +3322,8 @@ class Formula
     return [] unless keg
 
     CacheStoreDatabase.use(:linkage) do |db|
-      linkage_checker = LinkageChecker.new(keg, self, cache_db: db)
+      typed_db = T.cast(db, CacheStoreDatabase[String, T::Hash[T.any(String, Symbol), T.anything]])
+      linkage_checker = LinkageChecker.new(keg, self, cache_db: typed_db)
       linkage_checker.undeclared_deps.map { |n| Dependency.new(n) }
     end
   end
@@ -4128,6 +4181,8 @@ class Formula
     # ```ruby
     # head "https://hg.is.awesome.but.git.has.won.example.com/", using: :hg
     # ```
+    #
+    # @api public
     sig {
       params(val: T.nilable(String), specs: T::Hash[Symbol, T.untyped], block: T.nilable(T.proc.void))
         .returns(T.untyped)

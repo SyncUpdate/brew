@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "abstract_command"
+require "bump"
 require "bump_version_parser"
 require "cask"
 require "cask/download"
@@ -177,6 +178,9 @@ module Homebrew
 
         commit_message ||= "#{cask.token}: update checksum" if new_hash
 
+        # We should have already thrown UsageError above if there's nothing to update
+        raise "Expected to have a commit message" if commit_message.nil?
+
         # Remove nested arrays where elements are identical
         replacement_pairs = replacement_pairs.reject { |pair| pair[0] == pair[1] }.uniq.compact
         Utils::Inreplace.inreplace_pairs(sourcefile_path,
@@ -189,19 +193,34 @@ module Homebrew
         run_cask_audit(cask, old_contents, audit_exceptions)
         run_cask_style(cask, old_contents)
 
-        pr_info = {
-          commits:     [{
-            commit_message:,
-            old_contents:,
-            sourcefile_path: cask.sourcefile_path,
-          }],
-          branch_name:,
-          pr_message:  "Created with `brew bump-cask-pr`.",
-          tap:         cask.tap,
-          pr_title:    commit_message,
-        }
+        return if args.write_only? && !args.commit?
 
-        GitHub.create_bump_pr(pr_info, args:)
+        url = Homebrew::Bump.create_pr(
+          Homebrew::Bump::BumpInfo.new(
+            package_tap: cask.tap,
+            branch_name:,
+            pr_title:    commit_message,
+            pr_message:  Homebrew::Bump.pr_message("bump-cask-pr", user_message: args.message),
+            commits:     [
+              Homebrew::Bump::Commit.new(
+                sourcefile_path:,
+                old_contents:,
+                commit_message:,
+              ),
+            ],
+          ),
+          dry_run:  args.dry_run?,
+          no_fork:  args.no_fork? || args.write_only?,
+          fork_org: args.fork_org,
+          commit:   args.commit?,
+        )
+        return if url.blank?
+
+        if args.no_browse?
+          puts url
+        else
+          exec_browser url
+        end
       end
 
       private
@@ -221,19 +240,15 @@ module Homebrew
         current_os_is_macos = MacOSVersion::SYMBOLS.include?(current_os)
         newest_macos = MacOSVersion.new(HOMEBREW_MACOS_NEWEST_SUPPORTED).to_sym
 
-        depends_on_archs = cask.depends_on.arch&.filter_map { |arch| arch[:type] }&.uniq
-
         # NOTE: We substitute the newest macOS (e.g. `:sequoia`) in place of
         # `:macos` values (when used), as a generic `:macos` value won't apply
         # to on_system blocks referencing macOS versions.
         os_values = []
 
+        arch_values = []
         if new_version.arm || new_version.intel
-          arch_values = []
           arch_values << :arm if new_version.arm
           arch_values << :intel if new_version.intel
-        else
-          arch_values = depends_on_archs.presence || []
         end
 
         if cask.on_system_blocks_exist?
@@ -245,13 +260,18 @@ module Homebrew
             end
           end
 
+          # `depends_on arch:` may be scoped to an `on_os` block, so arch
+          # filtering is deferred to `replace_version_and_checksum`.
           arch_values = OnSystem::ARCH_OPTIONS.dup if arch_values.empty?
         else
           # Architecture is only relevant if on_system blocks are present or
           # the cask uses `depends_on arch`, otherwise we default to ARM for
           # consistency.
           os_values << (current_os_is_macos ? current_os : newest_macos)
-          arch_values << :arm if arch_values.empty?
+          if arch_values.empty?
+            depends_on_archs = cask.depends_on.arch&.filter_map { |arch| arch[:type] }&.uniq
+            arch_values = depends_on_archs.presence || [:arm]
+          end
         end
 
         if arch_values.length > 1 && !new_version.general
@@ -292,6 +312,10 @@ module Homebrew
               raise unless cask.on_system_blocks_exist?
             end
             next if old_cask.nil?
+
+            # Skip archs excluded by the reloaded cask's `depends_on arch:`.
+            reloaded_archs = old_cask.depends_on.arch&.filter_map { |a| a[:type] }&.uniq
+            next if reloaded_archs.present? && reloaded_archs.exclude?(arch)
 
             old_version = old_cask.version
             next unless old_version
@@ -370,7 +394,8 @@ module Homebrew
         tap = cask.tap
         raise "unexpected nil cask.tap" unless tap
 
-        tap_remote_repo = tap.full_name || tap.remote_repository
+        tap_remote_repo = tap.remote_repository
+        odie "#{tap.name} tap does not have a remote repository!" unless tap_remote_repo
 
         sourcefile_path = cask.sourcefile_path
         raise "unexpected nil cask.sourcefile_path" unless sourcefile_path

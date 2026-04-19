@@ -318,6 +318,15 @@ RSpec.describe Cask::Cask, :cask do
 
         expect(cask.outdated_version).to be_nil
       end
+
+      it "is not outdated when plist version segment counts differ from the tap version" do
+        tap_version = "1.0"
+        cask = write_auto_updates_cask(cask_file, version: tap_version, artifacts:)
+        allow(cask).to receive(:installed_version).and_return("0.9")
+        write_info_plist(cask.config.appdir/"MyFancyApp.app", short_version: "1", bundle_version: "200")
+
+        expect(cask.outdated_version).to be_nil
+      end
     end
 
     describe ":latest casks" do
@@ -572,6 +581,10 @@ RSpec.describe Cask::Cask, :cask do
   end
 
   describe "#supports_linux?" do
+    it "returns false for casks with bare depends_on :macos" do
+      expect(Cask::CaskLoader.load("with-depends-on-macos-bare").supports_linux?).to be false
+    end
+
     it "reflects whether the cask has only platform-agnostic artifacts" do
       expect(Cask::CaskLoader.load("with-non-executable-binary").supports_linux?).to be true
       expect(Cask::CaskLoader.load("basic-cask").supports_linux?).to be false

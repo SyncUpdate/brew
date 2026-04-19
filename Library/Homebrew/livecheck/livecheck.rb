@@ -432,7 +432,7 @@ module Homebrew
       when Cask::Cask
         cask_name(package_or_resource, full_name:)
       when Resource
-        package_or_resource.name
+        package_or_resource.name.to_s
       else
         T.absurd(package_or_resource)
       end
@@ -952,7 +952,15 @@ module Homebrew
           puts "Strategy:         #{strategy_name}" if strategy.present?
           puts "Regex:            #{livecheck_regex.inspect}" if livecheck_regex.present?
           if livecheck_reference == :parent
-            puts "Formula Ref:      #{full_name ? resource.owner.full_name : resource.owner.name} (parent)"
+            resource_owner = resource.owner
+            raise "Resource owner is nil" if resource_owner.nil?
+
+            formula = if full_name
+              T.cast(resource_owner, ::Formula).full_name
+            else
+              resource_owner.name
+            end
+            puts "Formula Ref:      #{formula} (parent)"
           end
         end
 
@@ -1057,8 +1065,16 @@ module Homebrew
           livecheck_defined: livecheck_defined,
         }
         if livecheck_reference == :parent
+          resource_owner = resource.owner
+          raise "Resource owner is nil" if resource_owner.nil?
+
+          formula = if full_name
+            T.cast(resource_owner, ::Formula).full_name
+          else
+            resource_owner.name
+          end
           resource_version_info[:meta][:references] =
-            [{ formula: full_name ? resource.owner.full_name : resource.owner.name, symbol: :parent }]
+            [{ formula:, symbol: :parent }]
         end
         if url != "None"
           resource_version_info[:meta][:url] = {}
@@ -1115,31 +1131,35 @@ module Homebrew
       stable = formula.stable
       return if stable.blank?
 
-      current_version = stable.version
+      version_update_revision = find_version_update_revision(formula, stable.version)
+      return if version_update_revision.nil?
+
+      timestamp_for_revision(tap.path, version_update_revision)
+    end
+
+    sig { params(formula: Formula, current_version: Version).returns(T.nilable(String)) }
+    private_class_method def self.find_version_update_revision(formula, current_version)
       version_update_revision = T.let(nil, T.nilable(String))
       found_current_version = T.let(false, T::Boolean)
 
       formula_versions = FormulaVersions.new(formula)
-      catch(:version_update_revision_found) do
-        formula_versions.rev_list("HEAD") do |revision, path|
-          formula_versions.formula_at_revision(revision, path) do |historical_formula|
-            historical_stable = historical_formula.stable
-            next if historical_stable.blank?
+      formula_versions.rev_list("HEAD") do |revision, path|
+        formula_versions.formula_at_revision(revision, path) do |historical_formula|
+          historical_stable = historical_formula.stable
+          next if historical_stable.blank?
 
-            if historical_stable.version == current_version
-              found_current_version = true
-              version_update_revision = revision
-            elsif found_current_version
-              throw :version_update_revision_found
-            end
+          if historical_stable.version == current_version
+            found_current_version = true
+            version_update_revision = revision
+          elsif found_current_version
+            return version_update_revision
           end
-        rescue MacOSVersion::Error, LegacyDSLError
-          break
         end
+      rescue MacOSVersion::Error, LegacyDSLError
+        break
       end
-      return if version_update_revision.nil?
 
-      timestamp_for_revision(tap.path, version_update_revision)
+      version_update_revision
     end
 
     sig {

@@ -18,9 +18,11 @@ module Cask
     extend ::Utils::Output::Mixin
     include Metadata
 
-    # The token of this {Cask}.
+    # The unique identifier for this {Cask}, used to refer to it in commands
+    # and tap paths.
+    # e.g. `firefox`
     #
-    # @api internal
+    # @api public
     sig { returns(String) }
     attr_reader :token
 
@@ -208,6 +210,9 @@ module Cask
     sig { returns(T::Boolean) }
     def supports_linux?
       return true if font?
+
+      # Bare `depends_on :macos` explicitly marks a cask as macOS-only
+      return false if (macos_requirement = depends_on.macos) && !macos_requirement.version_specified?
 
       # Cache the os value before contains_os_specific_artifacts? refreshes the cask
       # (the refresh clears @dsl.os in generic/non-OS-specific contexts)
@@ -478,6 +483,8 @@ module Cask
       @ruby_source_checksum = cask_struct.ruby_source_checksum
     end
 
+    # The string representation of this {Cask}, returning its {#token}.
+    #
     # @api public
     sig { returns(String) }
     def to_s = token
@@ -550,7 +557,7 @@ module Cask
     HASH_KEYS_TO_SKIP = T.let(%w[outdated installed versions].freeze, T::Array[String])
     private_constant :HASH_KEYS_TO_SKIP
 
-    AUTO_UPDATES_BAD_BUNDLE_VERSIONS = %w[0.0].freeze
+    AUTO_UPDATES_BAD_BUNDLE_VERSIONS = %w[0 0.0].freeze
     private_constant :AUTO_UPDATES_BAD_BUNDLE_VERSIONS
 
     sig { returns(T::Hash[String, T.untyped]) }
@@ -671,6 +678,7 @@ module Cask
     sig { params(first: T.nilable(String), second: T.nilable(String)).returns(T.nilable(Integer)) }
     def compare_version_strings(first, second)
       return if first.blank? || second.blank?
+      return if first.split(".").size != second.split(".").size
 
       Version.new(first) <=> Version.new(second)
     rescue
@@ -692,6 +700,8 @@ module Cask
         return false
       end
       installed_bundle_version = nil if AUTO_UPDATES_BAD_BUNDLE_VERSIONS.include?(installed_bundle_version)
+      installed_short_version = nil if AUTO_UPDATES_BAD_BUNDLE_VERSIONS.include?(installed_short_version)
+      return false if installed_short_version.nil? && installed_bundle_version.nil?
 
       return false if [installed_short_version, installed_bundle_version].any? do |installed_plist_version|
         compare_version_strings(installed_plist_version, tap_short_version)&.zero?

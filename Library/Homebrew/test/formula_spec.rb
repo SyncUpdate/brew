@@ -1246,6 +1246,43 @@ RSpec.describe Formula do
     end
   end
 
+  describe "#missing_dependencies" do
+    let(:f) { formula("foo") { url "foo-1.0" } }
+    let(:keg) { instance_double(Keg) }
+
+    before do
+      allow(f).to receive(:any_installed_keg).and_return(keg)
+    end
+
+    it "returns empty when no tab runtime_dependencies data" do
+      allow(keg).to receive(:runtime_dependencies).and_return(nil)
+      expect(f.missing_dependencies).to be_empty
+    end
+
+    it "returns empty when dep is present in cellar" do
+      (HOMEBREW_CELLAR/"bar").mkpath
+      allow(keg).to receive(:runtime_dependencies).and_return([{ "full_name" => "bar" }])
+      expect(f.missing_dependencies).to be_empty
+    end
+
+    it "returns dep when not present in cellar" do
+      allow(keg).to receive(:runtime_dependencies).and_return([{ "full_name" => "baz" }])
+      expect(f.missing_dependencies.map(&:name)).to eq(["baz"])
+    end
+
+    it "returns dep as missing when it is in the hide list, even if installed" do
+      (HOMEBREW_CELLAR/"bar").mkpath
+      allow(keg).to receive(:runtime_dependencies).and_return([{ "full_name" => "bar" }])
+      expect(f.missing_dependencies(hide: ["bar"]).map(&:name)).to eq(["bar"])
+    end
+
+    it "matches tapnamed deps against base-name hide list" do
+      (HOMEBREW_CELLAR/"wget").mkpath
+      allow(keg).to receive(:runtime_dependencies).and_return([{ "full_name" => "homebrew/core/wget" }])
+      expect(f.missing_dependencies(hide: ["wget"]).map(&:name)).to eq(["homebrew/core/wget"])
+    end
+  end
+
   specify "requirements" do
     # don't try to load/fetch gcc/glibc
     allow(DevelopmentTools).to receive_messages(needs_libc_formula?: false, needs_compiler_formula?: false)
@@ -1280,7 +1317,7 @@ RSpec.describe Formula do
     ).to eq(Set[xcode])
 
     requirements = f2.recursive_requirements do |_dependent, requirement|
-      Requirement.prune if requirement.is_a?(XcodeRequirement)
+      next Dependable::PRUNE if requirement.is_a?(XcodeRequirement)
     end
 
     expect(Set.new(requirements)).to eq(Set[])
@@ -2356,7 +2393,7 @@ RSpec.describe Formula do
       end
 
       it "returns the internal API path" do
-        expect(f.specified_path).to eq(Homebrew::API::Internal.cached_formula_json_file_path)
+        expect(f.specified_path).to eq(Homebrew::API::Internal.cached_packages_json_file_path)
       end
     end
   end

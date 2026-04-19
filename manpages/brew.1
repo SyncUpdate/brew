@@ -158,6 +158,9 @@ Read from or write to the \fBBrewfile\fP from \fB$HOMEBREW_BUNDLE_FILE_GLOBAL\fP
 \fB\-\-install\fP
 Run \fBinstall\fP before continuing to other operations, e\.g\. \fBexec\fP\&\.
 .TP
+\fB\-\-jobs\fP
+\fBinstall\fP runs up to this many formula installations in parallel\. Defaults to 1 (sequential)\. Use \fBauto\fP for the number of CPU cores (max 4)\.
+.TP
 \fB\-\-services\fP
 Temporarily start services while running the \fBexec\fP or \fBsh\fP command\. Enabled by default if \fB$HOMEBREW_BUNDLE_SERVICES\fP is set\.
 .TP
@@ -596,10 +599,10 @@ Delete files that already exist in the prefix while linking\.
 Treat all named arguments as casks\.
 .TP
 \fB\-\-[no\-]binaries\fP
-Disable/enable linking of helper executables (default: enabled)\. Enabled by default if \fB$HOMEBREW_CASK_OPTS_BINARIES\fP is set\.
+Disable/enable linking of helper executables (default: enabled)\.
 .TP
 \fB\-\-require\-sha\fP
-Require all casks to have a checksum\. Enabled by default if \fB$HOMEBREW_CASK_OPTS_REQUIRE_SHA\fP is set\.
+Require all casks to have a checksum\.
 .TP
 \fB\-\-adopt\fP
 Adopt existing artifacts in the destination that are identical to those being installed\. Cannot be combined with \fB\-\-force\fP\&\.
@@ -850,10 +853,10 @@ Create a Git repository, useful for creating patches to the software\.
 Treat all named arguments as casks\.
 .TP
 \fB\-\-[no\-]binaries\fP
-Disable/enable linking of helper executables (default: enabled)\. Enabled by default if \fB$HOMEBREW_CASK_OPTS_BINARIES\fP is set\.
+Disable/enable linking of helper executables (default: enabled)\.
 .TP
 \fB\-\-require\-sha\fP
-Require all casks to have a checksum\. Enabled by default if \fB$HOMEBREW_CASK_OPTS_REQUIRE_SHA\fP is set\.
+Require all casks to have a checksum\.
 .TP
 \fB\-\-adopt\fP
 Adopt existing artifacts in the destination that are identical to those being installed\. Cannot be combined with \fB\-\-force\fP\&\.
@@ -1139,10 +1142,10 @@ Also include casks with \fBversion :latest\fP\&\.
 Also include \fBauto_updates true\fP casks that would otherwise be skipped\.
 .TP
 \fB\-\-[no\-]binaries\fP
-Disable/enable linking of helper executables (default: enabled)\. Enabled by default if \fB$HOMEBREW_CASK_OPTS_BINARIES\fP is set\.
+Disable/enable linking of helper executables (default: enabled)\.
 .TP
 \fB\-\-require\-sha\fP
-Require all casks to have a checksum\. Enabled by default if \fB$HOMEBREW_CASK_OPTS_REQUIRE_SHA\fP is set\.
+Require all casks to have a checksum\.
 .SS "\fBuses\fP \fR[\fIoptions\fP] \fIformula\fP \fR[\.\.\.]"
 Show formulae and casks that specify \fIformula\fP as a dependency; that is, show dependents of \fIformula\fP\&\. When given multiple formula arguments, show the intersection of formulae that use \fIformula\fP\&\. By default, \fBuses\fP shows all formulae and casks that specify \fIformula\fP as a required or recommended dependency for their stable builds\.
 .P

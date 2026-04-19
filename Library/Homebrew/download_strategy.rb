@@ -145,6 +145,12 @@ class AbstractDownloadStrategy # rubocop:todo Style/OneClassPerFile
     Pathname.pwd.to_enum(:find).select(&:file?).map(&:mtime).max
   end
 
+  # Return the checked out source revision for version control downloads.
+  #
+  # @api public
+  sig { overridable.returns(T.nilable(String)) }
+  def source_revision; end
+
   # Remove {#cached_location} and any other files associated with the resource
   # from the cache.
   #
@@ -889,6 +895,9 @@ class SubversionDownloadStrategy < VCSDownloadStrategy # rubocop:todo Style/OneC
     Time.parse T.must(time)
   end
 
+  sig { override.returns(T.nilable(String)) }
+  def source_revision = last_commit
+
   # Return last commit's unique identifier for the repository.
   #
   # @api public
@@ -1002,6 +1011,9 @@ class GitDownloadStrategy < VCSDownloadStrategy # rubocop:todo Style/OneClassPer
   def source_modified_time
     Time.parse(silent_command("git", args: ["--git-dir", git_dir, "show", "-s", "--format=%cD"]).stdout)
   end
+
+  sig { override.returns(T.nilable(String)) }
+  def source_revision = current_revision.presence
 
   # Return last commit's unique identifier for the repository if fetched locally.
   #
@@ -1277,7 +1289,8 @@ class GitHubGitDownloadStrategy < GitDownloadStrategy # rubocop:todo Style/OneCl
 
   sig { override.returns(String) }
   def last_commit
-    @last_commit ||= GitHub.last_commit(@user, @repo, @ref, version, length: MINIMUM_COMMIT_HASH_LENGTH)
+    @last_commit ||= GitHub.last_commit(T.must(@user), T.must(@repo), @ref, T.cast(T.must(version), Version),
+                                        length: MINIMUM_COMMIT_HASH_LENGTH)
     @last_commit || super
   end
 
@@ -1287,7 +1300,7 @@ class GitHubGitDownloadStrategy < GitDownloadStrategy # rubocop:todo Style/OneCl
     return super if last_commit.blank?
     return true unless last_commit.start_with?(commit)
 
-    if GitHub.multiple_short_commits_exist?(@user, @repo, commit)
+    if GitHub.multiple_short_commits_exist?(T.must(@user), T.must(@repo), commit)
       true
     else
       T.must(@version).update_commit(commit)
@@ -1431,6 +1444,9 @@ class MercurialDownloadStrategy < VCSDownloadStrategy # rubocop:todo Style/OneCl
     Time.parse(silent_command("hg", args: ["tip", "--template", "{date|isodate}", "-R", cached_location]).stdout)
   end
 
+  sig { override.returns(T.nilable(String)) }
+  def source_revision = current_revision.presence
+
   # Return last commit's unique identifier for the repository.
   #
   # @api public
@@ -1522,6 +1538,9 @@ class BazaarDownloadStrategy < VCSDownloadStrategy # rubocop:todo Style/OneClass
     Time.parse(timestamp)
   end
 
+  sig { override.returns(T.nilable(String)) }
+  def source_revision = last_commit.presence
+
   # Return last commit's unique identifier for the repository.
   #
   # @api public
@@ -1585,6 +1604,9 @@ class FossilDownloadStrategy < VCSDownloadStrategy # rubocop:todo Style/OneClass
     out = silent_command("fossil", args: ["info", "tip", "-R", cached_location]).stdout
     Time.parse(T.must(out[/^(hash|uuid): +\h+ (.+)$/, 1]))
   end
+
+  sig { override.returns(T.nilable(String)) }
+  def source_revision = last_commit.presence
 
   # Return last commit's unique identifier for the repository.
   #

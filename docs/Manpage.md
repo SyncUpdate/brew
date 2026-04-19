@@ -261,6 +261,11 @@ flags which will help with finding keg-only dependencies like `openssl`,
 
 : Run `install` before continuing to other operations, e.g. `exec`.
 
+`--jobs`
+
+: `install` runs up to this many formula installations in parallel. Defaults to
+  1 (sequential). Use `auto` for the number of CPU cores (max 4).
+
 `--services`
 
 : Temporarily start services while running the `exec` or `sh` command. Enabled
@@ -957,13 +962,11 @@ upgrade *`formula`* if it is already installed but outdated.
 
 `--[no-]binaries`
 
-: Disable/enable linking of helper executables (default: enabled). Enabled by
-  default if `$HOMEBREW_CASK_OPTS_BINARIES` is set.
+: Disable/enable linking of helper executables (default: enabled).
 
 `--require-sha`
 
-: Require all casks to have a checksum. Enabled by default if
-  `$HOMEBREW_CASK_OPTS_REQUIRE_SHA` is set.
+: Require all casks to have a checksum.
 
 `--adopt`
 
@@ -1371,13 +1374,11 @@ for the reinstalled formulae or, every 30 days, for all formulae.
 
 `--[no-]binaries`
 
-: Disable/enable linking of helper executables (default: enabled). Enabled by
-  default if `$HOMEBREW_CASK_OPTS_BINARIES` is set.
+: Disable/enable linking of helper executables (default: enabled).
 
 `--require-sha`
 
-: Require all casks to have a checksum. Enabled by default if
-  `$HOMEBREW_CASK_OPTS_REQUIRE_SHA` is set.
+: Require all casks to have a checksum.
 
 `--adopt`
 
@@ -1846,13 +1847,11 @@ for the upgraded formulae or, every 30 days, for all formulae.
 
 `--[no-]binaries`
 
-: Disable/enable linking of helper executables (default: enabled). Enabled by
-  default if `$HOMEBREW_CASK_OPTS_BINARIES` is set.
+: Disable/enable linking of helper executables (default: enabled).
 
 `--require-sha`
 
-: Require all casks to have a checksum. Enabled by default if
-  `$HOMEBREW_CASK_OPTS_REQUIRE_SHA` is set.
+: Require all casks to have a checksum.
 
 ### `uses` \[*`options`*\] *`formula`* \[...\]
 
