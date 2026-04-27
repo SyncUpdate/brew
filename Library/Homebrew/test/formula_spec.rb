@@ -319,6 +319,22 @@ RSpec.describe Formula do
     end
   end
 
+  describe "#link_overwrite_formulae" do
+    it "deduplicates formulae shared by an alias and canonical name" do
+      f = formula "foo@2.0" do
+        url "foo-2.0"
+      end
+      other_formula = formula "foo@1.0" do
+        url "foo-1.0"
+      end
+      allow(f).to receive(:link_overwrite_formulae_names).and_return(["foo", "foo@1.0"])
+      allow(Formulary).to receive(:factory).with("foo").and_return(other_formula)
+      allow(Formulary).to receive(:factory).with("foo@1.0").and_return(other_formula)
+
+      expect(f.link_overwrite_formulae).to eq([other_formula])
+    end
+  end
+
   describe "#link_overwrite_formulae_names" do
     let(:f) do
       formula "foo" do
@@ -2550,6 +2566,29 @@ RSpec.describe Formula do
       allow(Time).to receive(:now).and_return(Time.utc(2026, 4, 4, 12, 0, 0))
 
       expect(f.std_pip_args).to include("--uploaded-prior-to=2026-04-03T12:00:00Z")
+    end
+  end
+
+  describe ".no_autobump!" do
+    it "raises an error when used in an unofficial tap" do
+      unofficial_tap = Tap.fetch("someone", "repo")
+      allow(Tap).to receive(:from_path).and_return(unofficial_tap)
+
+      expect do
+        Class.new(Formula) do
+          no_autobump! because: "some reason"
+        end
+      end.to raise_error(ArgumentError, /official Homebrew taps/)
+    end
+
+    it "allows usage when tap is official" do
+      official_tap = Tap.fetch("Homebrew", "core")
+      allow(Tap).to receive(:from_path).and_return(official_tap)
+
+      klass = Class.new(Formula) do
+        no_autobump! because: "some reason"
+      end
+      expect(klass.autobump?).to be(false)
     end
   end
 end

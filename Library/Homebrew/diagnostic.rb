@@ -277,6 +277,7 @@ module Homebrew
         # with a short description of the software they come with.
         allow_list = [
           "libfuse-t*.a", # FUSE-T
+          "libfuse3.a", # FUSE-T
           "libntfs-3g.a", # NTFS-3G
           "libntfs.a", # NTFS-3G
           "libublio.a", # NTFS-3G
@@ -578,6 +579,29 @@ module Homebrew
           If you are not routinely dealing with Windows-based projects,
           consider removing these by running:
             git config --global core.autocrlf input
+        EOS
+      end
+
+      sig { returns(T.nilable(String)) }
+      def check_homebrew_repository_git_hooks
+        found = T.let([], T::Array[Pathname])
+
+        hooks_dir = HOMEBREW_REPOSITORY/".git/hooks"
+        if hooks_dir.directory?
+          found += hooks_dir.children.reject { |path| path.basename.to_s.end_with?(".sample") }.sort_by(&:to_s)
+        end
+
+        gitconfig = HOMEBREW_REPOSITORY/".gitconfig"
+        found << gitconfig if gitconfig.exist?
+        return if found.empty?
+
+        inject_file_list found, <<~EOS
+          Git hooks or a repository-local `.gitconfig` were found in your Homebrew repository.
+          Homebrew does not use these, and they can break Homebrew operations.
+          Remove them with:
+            rm -rf "#{HOMEBREW_REPOSITORY}/.git/hooks" "#{HOMEBREW_REPOSITORY}/.gitconfig"
+
+          Paths found:
         EOS
       end
 

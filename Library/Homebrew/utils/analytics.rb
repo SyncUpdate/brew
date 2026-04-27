@@ -16,7 +16,13 @@ module Utils
     INFLUX_ORG = "d81a3e6d582d485f"
 
     extend Utils::Output::Mixin
+    extend T::Generic
     extend Cachable
+
+    # Sorbet type members are mutable by design and cannot be frozen.
+    # rubocop:disable Style/MutableConstant
+    Cache = type_template { { fixed: T::Hash[Symbol, T.untyped] } }
+    # rubocop:enable Style/MutableConstant
 
     class << self
       include Context
@@ -268,7 +274,7 @@ module Utils
 
               table_output(category, days.to_s, results)
             else
-              total_count = results.values.inject("+")
+              total_count = results.values.sum
               analytics << "#{Formatter.number_readable(total_count)} (#{days} days)"
             end
           end
@@ -411,7 +417,7 @@ module Utils
       }
       def table_output(category, days, results, os_version: false, cask_install: false)
         oh1 "#{category} (#{days} days)"
-        total_count = results.values.inject("+")
+        total_count = results.values.sum
         formatted_total_count = format_count(total_count)
         formatted_total_percent = format_percent(100)
 

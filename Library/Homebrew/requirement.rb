@@ -13,8 +13,14 @@ require "utils/output"
 class Requirement
   include Dependable
   include Utils::Output::Mixin
+  extend T::Generic
   extend Cachable
   extend T::Helpers
+
+  # Sorbet type members are mutable by design and cannot be frozen.
+  # rubocop:disable Style/MutableConstant
+  Cache = type_template { { fixed: T::Hash[String, T.untyped] } }
+  # rubocop:enable Style/MutableConstant
 
   # This base class enforces no constraints on its own.
   # Individual subclasses use the `satisfy` DSL to define those constraints.
@@ -140,7 +146,7 @@ class Requirement
     # PATH.
     parent = satisfied_result_parent
     return unless parent
-    return if ["#{HOMEBREW_PREFIX}/bin", "#{HOMEBREW_PREFIX}/bin"].include?(parent.to_s)
+    return if ["#{HOMEBREW_PREFIX}/bin", "#{HOMEBREW_PREFIX}/sbin"].include?(parent.to_s)
     return if PATH.new(ENV.fetch("PATH")).include?(parent.to_s)
 
     ENV.prepend_path("PATH", parent)
@@ -310,6 +316,8 @@ class Requirement
   private_constant :Satisfier
 
   class << self
+    require "cask_dependent"
+
     # Expand the requirements of dependent recursively, optionally yielding
     # `[dependent, req]` pairs to allow callers to apply arbitrary filters to
     # the list.

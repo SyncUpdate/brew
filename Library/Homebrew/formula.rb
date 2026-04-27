@@ -84,10 +84,16 @@ class Formula
   include OnSystem::MacOSAndLinux
   include Homebrew::Livecheck::Constants
   extend Forwardable
+  extend T::Generic
   extend Cachable
   extend APIHashable
   extend T::Helpers
   extend Utils::Output::Mixin
+
+  # Sorbet type members are mutable by design and cannot be frozen.
+  # rubocop:disable Style/MutableConstant
+  Cache = type_template { { fixed: T::Hash[Symbol, T.untyped] } }
+  # rubocop:enable Style/MutableConstant
 
   abstract!
 
@@ -779,7 +785,7 @@ class Formula
       Formula[formula_name]
     rescue FormulaUnavailableError
       nil
-    end
+    end.uniq(&:full_name)
   end
 
   sig { params(path: Pathname).returns(T.nilable(T.any(String, Symbol))) }
@@ -4675,12 +4681,15 @@ class Formula
 
     # Exclude the formula from the autobump list.
     #
-    # TODO: limit this method to the official taps only
-    #       (e.g. raise an error if `!tap.official?`)
-    #
     # @api public
     sig { params(because: T.any(String, Symbol)).void }
     def no_autobump!(because:)
+      caller_path = caller_locations(1, 1)&.first&.path
+      if caller_path
+        tap = Tap.from_path(caller_path)
+        raise ArgumentError, "no_autobump! can only be used in official Homebrew taps." if tap && !tap.official?
+      end
+
       if because.is_a?(Symbol) && !NO_AUTOBUMP_REASONS_LIST.key?(because)
         raise ArgumentError, "'because' argument should use valid symbol or a string!"
       end

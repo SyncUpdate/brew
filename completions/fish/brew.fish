@@ -1153,7 +1153,7 @@ __fish_brew_complete_arg 'leaves' -l quiet -d 'Make some output more quiet'
 __fish_brew_complete_arg 'leaves' -l verbose -d 'Make some output more verbose'
 
 
-__fish_brew_complete_cmd 'lgtm' 'Run `brew typecheck`, `brew style --changed` and `brew tests --changed` in one go'
+__fish_brew_complete_cmd 'lgtm' 'Run `brew typecheck`, `brew style --changed` and the relevant `brew tests`, `brew audit` and `brew test` checks in one go'
 __fish_brew_complete_arg 'lgtm' -l debug -d 'Display any debugging information'
 __fish_brew_complete_arg 'lgtm' -l help -d 'Show this message'
 __fish_brew_complete_arg 'lgtm' -l online -d 'Run additional, slower checks that require a network connection'
@@ -1970,6 +1970,15 @@ __fish_brew_complete_arg 'update-perl-resources' -l quiet -d 'Make some output m
 __fish_brew_complete_arg 'update-perl-resources' -l silent -d 'Suppress any output'
 __fish_brew_complete_arg 'update-perl-resources' -l verbose -d 'Make some output more verbose'
 __fish_brew_complete_arg 'update-perl-resources' -a '(__fish_brew_suggest_formulae_all)'
+
+
+__fish_brew_complete_cmd 'update-portable-ruby' 'Update the vendored portable Ruby version files, bottle checksums, `utils/ruby.sh` and `Gemfile.lock` entries from the current `portable-ruby` formula'
+__fish_brew_complete_arg 'update-portable-ruby' -l debug -d 'Display any debugging information'
+__fish_brew_complete_arg 'update-portable-ruby' -l dry-run -d 'Print what would be done rather than doing it'
+__fish_brew_complete_arg 'update-portable-ruby' -l help -d 'Show this message'
+__fish_brew_complete_arg 'update-portable-ruby' -l quiet -d 'Make some output more quiet'
+__fish_brew_complete_arg 'update-portable-ruby' -l skip-vendor-install -d 'Do not run `brew vendor-install ruby`; skip the `utils/ruby.sh` and `Gemfile.lock` updates'
+__fish_brew_complete_arg 'update-portable-ruby' -l verbose -d 'Make some output more verbose'
 
 
 __fish_brew_complete_cmd 'update-python-resources' 'Update versions for PyPI resource blocks in formula'

@@ -482,6 +482,12 @@ module Homebrew
         description: "If set, use Pry for the `brew irb` command.",
         boolean:     true,
       },
+      HOMEBREW_SBOM:                             {
+        # odeprecated: edit in 5.2.0
+        description: "If set, Homebrew will write SBOM files and run SBOM-related installation logic. " \
+                     "This is a no-op until Homebrew 5.2.0, when it will become required for that behaviour.",
+        boolean:     true,
+      },
       HOMEBREW_SIMULATE_MACOS_ON_LINUX:          {
         description: "If set, running Homebrew on Linux will simulate certain macOS code paths. This is useful " \
                      "when auditing macOS formulae while on Linux.",
@@ -751,10 +757,10 @@ module Homebrew
 
     sig { returns(T::Boolean) }
     def use_internal_api?
-      return true if ENV["HOMEBREW_REALLY_USE_INTERNAL_API"].present?
+      return false if Homebrew::EnvConfig.no_install_from_api?
 
-      # TODO: re-enable this when the internal API is ready again.
-      false
+      use_internal_api = ENV.fetch("HOMEBREW_USE_INTERNAL_API", nil)
+      use_internal_api.present? && FALSY_VALUES.exclude?(use_internal_api.downcase)
     end
   end
 end

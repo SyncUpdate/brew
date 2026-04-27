@@ -1824,7 +1824,7 @@ Show several examples\.
 \fB\-\-pry\fP
 Use Pry instead of IRB\. Enabled by default if \fB$HOMEBREW_PRY\fP is set\.
 .SS "\fBlgtm\fP \fR[\fB\-\-online\fP]"
-Run \fBbrew typecheck\fP, \fBbrew style \-\-changed\fP and \fBbrew tests \-\-changed\fP in one go\.
+Run \fBbrew typecheck\fP, \fBbrew style \-\-changed\fP and the relevant \fBbrew tests\fP, \fBbrew audit\fP and \fBbrew test\fP checks in one go\.
 .TP
 \fB\-\-online\fP
 Run additional, slower checks that require a network connection\.
@@ -2376,6 +2376,14 @@ Suppress any output\.
 .TP
 \fB\-\-ignore\-errors\fP
 Continue processing even if some resources can\[u2019]t be resolved\.
+.SS "\fBupdate\-portable\-ruby\fP \fR[\fB\-\-dry\-run\fP] \fR[\fB\-\-skip\-vendor\-install\fP]"
+Update the vendored portable Ruby version files, bottle checksums, \fButils/ruby\.sh\fP and \fBGemfile\.lock\fP entries from the current \fBportable\-ruby\fP formula\.
+.TP
+\fB\-n\fP, \fB\-\-dry\-run\fP
+Print what would be done rather than doing it\.
+.TP
+\fB\-\-skip\-vendor\-install\fP
+Do not run \fBbrew vendor\-install ruby\fP; skip the \fButils/ruby\.sh\fP and \fBGemfile\.lock\fP updates\.
 .SS "\fBupdate\-python\-resources\fP \fR[\fIoptions\fP] \fIformula\fP \fR[\.\.\.]"
 Update versions for PyPI resource blocks in \fIformula\fP\&\.
 .TP
@@ -2968,6 +2976,9 @@ If set, \fBbrew install\fP \fIformula\fP will use this URL to download PyPI pack
 .TP
 \fBHOMEBREW_PRY\fP
 If set, use Pry for the \fBbrew irb\fP command\.
+.TP
+\fBHOMEBREW_SBOM\fP
+If set, Homebrew will write SBOM files and run SBOM\-related installation logic\. This is a no\-op until Homebrew 5\.2\.0, when it will become required for that behaviour\.
 .TP
 \fBHOMEBREW_SIMULATE_MACOS_ON_LINUX\fP
 If set, running Homebrew on Linux will simulate certain macOS code paths\. This is useful when auditing macOS formulae while on Linux\.

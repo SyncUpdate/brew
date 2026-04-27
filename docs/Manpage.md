@@ -2887,8 +2887,8 @@ Enter the interactive Homebrew Ruby shell.
 
 ### `lgtm` \[`--online`\]
 
-Run `brew typecheck`, `brew style --changed` and `brew tests --changed` in one
-go.
+Run `brew typecheck`, `brew style --changed` and the relevant `brew tests`,
+`brew audit` and `brew test` checks in one go.
 
 `--online`
 
@@ -3728,6 +3728,21 @@ Update versions for CPAN resource blocks in *`formula`*.
 
 : Continue processing even if some resources can't be resolved.
 
+### `update-portable-ruby` \[`--dry-run`\] \[`--skip-vendor-install`\]
+
+Update the vendored portable Ruby version files, bottle checksums,
+`utils/ruby.sh` and `Gemfile.lock` entries from the current `portable-ruby`
+formula.
+
+`-n`, `--dry-run`
+
+: Print what would be done rather than doing it.
+
+`--skip-vendor-install`
+
+: Do not run `brew vendor-install ruby`; skip the `utils/ruby.sh` and
+  `Gemfile.lock` updates.
+
 ### `update-python-resources` \[*`options`*\] *`formula`* \[...\]
 
 Update versions for PyPI resource blocks in *`formula`*.
@@ -4562,6 +4577,12 @@ command execution (e.g. `$(cat file)`).
 `HOMEBREW_PRY`
 
 : If set, use Pry for the `brew irb` command.
+
+`HOMEBREW_SBOM`
+
+: If set, Homebrew will write SBOM files and run SBOM-related installation
+  logic. This is a no-op until Homebrew 5.2.0, when it will become required for
+  that behaviour.
 
 `HOMEBREW_SIMULATE_MACOS_ON_LINUX`
 

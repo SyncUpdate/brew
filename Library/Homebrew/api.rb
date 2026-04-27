@@ -16,7 +16,13 @@ module Homebrew
   module API
     extend Utils::Output::Mixin
 
+    extend T::Generic
     extend Cachable
+
+    # Sorbet type members are mutable by design and cannot be frozen.
+    # rubocop:disable Style/MutableConstant
+    Cache = type_template { { fixed: T::Hash[String, T.untyped] } }
+    # rubocop:enable Style/MutableConstant
 
     HOMEBREW_CACHE_API = T.let((HOMEBREW_CACHE/"api").freeze, Pathname)
     HOMEBREW_CACHE_API_SOURCE = T.let((HOMEBREW_CACHE/"api-source").freeze, Pathname)
@@ -93,6 +99,7 @@ module Homebrew
       end
 
       json_data = begin
+        download_succeeded = T.let(false, T::Boolean)
         begin
           args = curl_args.dup
           args.prepend("--time-cond", target.to_s) if target.exist? && !target.empty?
@@ -104,6 +111,7 @@ module Homebrew
             ohai "Downloading #{url}" if $stdout.tty? && !Context.current.quiet?
             # Disable retries here, we handle them ourselves below.
             Utils::Curl.curl_download(*args, url, to: target, retries: 0, show_error: false)
+            download_succeeded = true
           end
         rescue ErrorDuringExecution
           if url == default_url
@@ -122,8 +130,13 @@ module Homebrew
           opoo "#{target.basename}: update failed, falling back to cached version."
         end
 
-        mtime = insecure_download ? Time.new(1970, 1, 1) : Time.now
-        FileUtils.touch(target, mtime:) unless skip_download
+        # Only refresh the cache mtime after a successful curl revalidation/download.
+        # Touching after a failed download would mark a stale cache as fresh and
+        # cause `skip_download?` to short-circuit subsequent retries until cleanup.
+        if download_succeeded
+          mtime = insecure_download ? Time.new(1970, 1, 1) : Time.now
+          FileUtils.touch(target, mtime:)
+        end
         # Can use `target.read` again when/if https://github.com/sorbet/sorbet/pull/8999 is merged/released.
         JSON.parse(File.read(target, encoding: Encoding::UTF_8), freeze: true)
       rescue JSON::ParserError
