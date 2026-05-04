@@ -177,8 +177,11 @@ module Homebrew
 
       sig { params(installed_count: Integer, total_count: Integer).returns(String) }
       def self.dependency_status_counts(installed_count, total_count)
-        "#{installed_count} #{Formatter.success("✔")}, " \
-          "#{total_count - installed_count} #{Formatter.error("✘")}"
+        missing_count = total_count - installed_count
+        return "all installed #{Formatter.success("✔")}" if missing_count.zero?
+
+        "#{installed_count} installed #{Formatter.success("✔")}, " \
+          "#{missing_count} missing #{Formatter.error("✘")}"
       end
 
       sig { params(full_name: String, name: String).returns(Integer) }
@@ -464,7 +467,7 @@ module Homebrew
 
       sig { params(formula: Formula).void }
       def info_formula(formula)
-        specs = []
+        specs = T.let([], T::Array[String])
 
         if (stable = formula.stable)
           string = "stable #{stable.version}"
@@ -480,6 +483,13 @@ module Homebrew
         kegs = formula.installed_kegs
         name_with_status = if kegs.empty?
           pretty_uninstalled(formula.full_name)
+        elsif formula.outdated?
+          if (upgrade_version = specs.first.presence)
+            installed_version = formula.linked_version ||
+                                kegs.max_by(&:scheme_and_version)&.version
+            specs[0] = "#{installed_version} → #{upgrade_version}"
+          end
+          pretty_upgradable(formula.full_name)
         else
           pretty_installed(formula.full_name)
         end
