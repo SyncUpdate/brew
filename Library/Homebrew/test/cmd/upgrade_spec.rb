@@ -132,6 +132,36 @@ RSpec.describe Homebrew::Cmd::UpgradeCmd do
     EOS
   end
 
+  it "prints a dependencies metadata heading before formula prefetches" do
+    cmd = described_class.new([])
+    formula = formula("deno") do
+      url "https://brew.sh/deno-2.7.11.tar.gz"
+
+      bottle do
+        root_url HOMEBREW_BOTTLE_DEFAULT_DOMAIN
+        sha256 cellar: :any_skip_relocation,
+               Utils::Bottles.tag.to_sym => "d7b9f4e8bf83608b71fe958a99f19f2e5e68bb2582965d32e41759c24f1aef97"
+      end
+    end
+    formula_installer = FormulaInstaller.new(formula)
+    download_queue = instance_double(Homebrew::DownloadQueue)
+
+    allow(cmd).to receive(:formulae_upgrade_context).and_return(
+      described_class::FormulaeUpgradeContext.new(
+        formulae_to_install: [formula],
+        formulae_installer:  [formula_installer],
+        dependants:          Homebrew::Upgrade::Dependents.new(upgradeable: [], pinned: [], skipped: []),
+      ),
+    )
+    allow(Homebrew::Install).to receive(:enqueue_formulae)
+      .with([formula_installer], download_queue:)
+      .and_return([formula_installer])
+
+    expect do
+      cmd.send(:upgrade_outdated_formulae!, [], prefetch_only: true, download_queue:, show_downloads_heading: false)
+    end.to output("==> Fetching dependencies metadata\n").to_stdout
+  end
+
   it "does not trust failed shared prefetches" do
     cmd = described_class.new([])
     download_queue = instance_double(Homebrew::DownloadQueue, fetch: nil, fetch_failed: true, shutdown: nil)
@@ -202,6 +232,104 @@ RSpec.describe Homebrew::Cmd::UpgradeCmd do
 
     expect { cmd.send(:upgrade_outdated_casks!, []) }
       .to not_to_output(/Unexpected method 'discontinued' called during caveats on Cask local-caffeine\./).to_stderr
+  end
+
+  it "prints a narrow final upgrade summary" do
+    cmd = described_class.new([])
+    summary = described_class::FinalUpgradeSummary.new(
+      version_changes:       ["testball 0.1 -> 0.2"],
+      pinned_formulae:       ["pinnedball 1.0"],
+      deprecated:            ["oldball"],
+      disabled:              ["disabledball"],
+      source_build_formulae: ["sourceball"],
+    )
+
+    allow(cmd).to receive(:final_upgrade_summary).and_return(summary)
+
+    expect { cmd.send(:show_final_upgrade_summary) }.to output(<<~EOS).to_stdout
+      ==> Upgraded 1 outdated package
+      testball 0.1 -> 0.2
+      ==> 1 Pinned formula
+      pinnedball 1.0
+      ==> 2 Deprecated or disabled packages
+      oldball (deprecated)
+      disabledball (disabled)
+      ==> 1 homebrew/core formula built from source
+      sourceball
+    EOS
+  end
+
+  it "records final formula upgrade summary details" do
+    formula = formula("testball") do
+      url "https://brew.sh/testball-0.2"
+    end
+    pinned = formula("pinnedball") do
+      url "https://brew.sh/pinnedball-1.0"
+    end
+    deprecated = formula("oldball") do
+      url "https://brew.sh/oldball-1.0"
+      deprecate! date: "2020-01-01", because: :unmaintained
+    end
+    disabled = formula("disabledball") do
+      url "https://brew.sh/disabledball-1.0"
+      disable! date: "2020-01-01", because: :unsupported
+    end
+    source_build = formula("sourceball") do
+      url "https://brew.sh/sourceball-1.0"
+    end
+    old_keg = HOMEBREW_CELLAR/"testball/0.1"
+    old_keg.mkpath
+    allow(formula).to receive_messages(optlinked?: true, opt_prefix: old_keg)
+
+    cmd = described_class.new([])
+    context = described_class::FormulaeUpgradeContext.new(
+      formulae_to_install: [formula, deprecated, disabled, source_build],
+      formulae_installer:  [
+        FormulaInstaller.new(formula),
+        FormulaInstaller.new(deprecated),
+        FormulaInstaller.new(disabled),
+        FormulaInstaller.new(source_build, build_from_source_formulae: [source_build.full_name]),
+      ],
+      dependants:          Homebrew::Upgrade::Dependents.new(upgradeable: [], pinned: [], skipped: []),
+      pinned_formulae:     [pinned],
+    )
+
+    cmd.send(:record_formula_upgrade_summary, context)
+    summary = cmd.send(:final_upgrade_summary)
+
+    expect(summary.version_changes).to include("testball 0.1 -> 0.2")
+    expect(summary.pinned_formulae).to include("pinnedball 1.0")
+    expect(summary.deprecated).to include("oldball")
+    expect(summary.disabled).to include("disabledball")
+    expect(summary.source_build_formulae).to include("sourceball")
+  end
+
+  it "records formula upgrade versions before upgrading" do
+    formula = formula("testball") do
+      url "https://brew.sh/testball-0.2"
+    end
+    old_keg = HOMEBREW_CELLAR/"testball/0.1"
+    new_keg = HOMEBREW_CELLAR/"testball/0.2"
+    old_keg.mkpath
+    new_keg.mkpath
+    allow(formula).to receive_messages(optlinked?: true, opt_prefix: old_keg)
+    cmd = described_class.new([])
+
+    allow(cmd).to receive(:formulae_upgrade_context).and_return(
+      described_class::FormulaeUpgradeContext.new(
+        formulae_to_install: [formula],
+        formulae_installer:  [FormulaInstaller.new(formula)],
+        dependants:          Homebrew::Upgrade::Dependents.new(upgradeable: [], pinned: [], skipped: []),
+      ),
+    )
+    allow(Homebrew::Upgrade).to receive(:upgrade_formulae) do
+      allow(formula).to receive(:opt_prefix).and_return(new_keg)
+    end
+    allow(Homebrew::Upgrade).to receive(:upgrade_dependents)
+
+    cmd.send(:upgrade_outdated_formulae!, [])
+
+    expect(cmd.send(:final_upgrade_summary).version_changes).to include("testball 0.1 -> 0.2")
   end
 
   it_behaves_like "reinstall_pkgconf_if_needed"
