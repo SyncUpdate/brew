@@ -138,11 +138,8 @@ RSpec.describe Formula do
       end
     end
 
-    it "returns true for @-versioned formulae" do
+    specify do
       expect(f2.versioned_formula?).to be true
-    end
-
-    it "returns false for non-@-versioned formulae" do # rubocop:todo RSpec/AggregateExamples
       expect(f.versioned_formula?).to be false
     end
   end
@@ -2089,6 +2086,95 @@ RSpec.describe Formula do
     it "returns package version when installed" do
       f.brew { f.install }
       expect(f.any_installed_version).to eq(PkgVersion.parse("1.0_1"))
+    end
+  end
+
+  describe "OS support" do
+    it "returns false for Linux when macOS is required at the top level" do
+      f = formula do
+        url "foo"
+        version "1.0"
+        depends_on macos: :catalina
+      end
+
+      expect(f.supports_linux?).to be false
+    end
+
+    it "returns true for Linux when macOS is required in an on_macos block" do
+      f = formula do
+        url "foo"
+        version "1.0"
+        on_macos do
+          depends_on macos: :catalina
+        end
+      end
+
+      expect(f.supports_linux?).to be true
+    end
+
+    it "returns false for macOS when Linux is required at the top level" do
+      f = formula do
+        url "foo"
+        version "1.0"
+        depends_on :linux
+      end
+
+      expect(f.supports_macos?).to be false
+      expect(f.supports_linux?).to be true
+    end
+
+    it "allows bare and versioned macOS requirements for now" do
+      f = formula do
+        url "foo"
+        version "1.0"
+        depends_on :macos
+        depends_on macos: :catalina
+      end
+
+      expect(f.requirements.grep(MacOSRequirement).count).to eq(2)
+    end
+
+    it "does not allow duplicate bare macOS requirements" do
+      expect do
+        formula do
+          url "foo"
+          version "1.0"
+          depends_on :macos
+          depends_on :macos
+        end
+      end.to raise_error(ArgumentError, "`depends_on :macos` cannot be combined with another macOS `depends_on`")
+    end
+
+    it "returns false for Linux when maximum macOS is required at the top level" do
+      f = formula do
+        url "foo"
+        version "1.0"
+        depends_on maximum_macos: :tahoe
+      end
+
+      expect(f.supports_linux?).to be false
+    end
+
+    it "does not allow Linux then macOS requirements" do
+      expect do
+        formula do
+          url "foo"
+          version "1.0"
+          depends_on :linux
+          depends_on macos: :catalina
+        end
+      end.to raise_error(ArgumentError, "`depends_on :linux` cannot be combined with `depends_on macos:`")
+    end
+
+    it "does not allow macOS then Linux requirements" do
+      expect do
+        formula do
+          url "foo"
+          version "1.0"
+          depends_on macos: :catalina
+          depends_on :linux
+        end
+      end.to raise_error(ArgumentError, "`depends_on :linux` cannot be combined with `depends_on macos:`")
     end
   end
 

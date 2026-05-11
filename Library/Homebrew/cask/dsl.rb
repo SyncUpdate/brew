@@ -579,14 +579,20 @@ module Cask
     def depends_on(arg = nil, **kwargs)
       @depends_on_set_in_block = true if @called_in_on_system_block
       if arg == :macos
+        if kwargs.key?(:macos) || kwargs.key?(:maximum_macos)
+          raise CaskInvalidError.new(cask, "`depends_on :macos` cannot be combined with another macOS `depends_on`")
+        end
+
         kwargs[:macos] = :any
+      elsif arg == :linux
+        kwargs[:linux] = :any
       elsif arg
         raise CaskInvalidError.new(cask, "invalid 'depends_on' value: #{arg.inspect}")
       end
       return @depends_on if kwargs.empty?
 
       begin
-        @depends_on.load(**kwargs)
+        @depends_on.load(kwargs, set_in_block: @called_in_on_system_block)
       rescue RuntimeError => e
         raise CaskInvalidError.new(cask, e)
       end
@@ -596,7 +602,7 @@ module Cask
     # @api private
     sig { void }
     def add_implicit_macos_dependency
-      return if (cask_depends_on = @depends_on).present? && cask_depends_on.macos.present?
+      return if @depends_on.os_support_specified?
       return if @cask.supports_linux?
 
       depends_on macos: ">= #{MacOSVersion.new(HOMEBREW_MACOS_OLDEST_ALLOWED).to_sym.inspect}"

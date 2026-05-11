@@ -470,6 +470,7 @@ class Resource
     def initialize(&block)
       @patch_files = T.let([], T::Array[T.any(String, Pathname)])
       @directory = T.let(nil, T.nilable(T.any(String, Pathname)))
+      @file = T.let(nil, T.nilable(T.any(String, Pathname)))
       super "patch", &block
     end
 
@@ -486,6 +487,18 @@ class Resource
       @directory = val
     end
 
+    sig { params(val: T.nilable(T.any(String, Pathname))).returns(T.nilable(T.any(String, Pathname))) }
+    def file(val = nil)
+      return @file if val.nil?
+
+      path_string = val.to_s
+      unless LocalPatch.valid_path?(path_string)
+        raise ArgumentError, "Patch file must be a relative path within the repository."
+      end
+
+      @file = val
+    end
+
     sig { override.returns(String) }
     def download_queue_type = "Patch"
 
@@ -499,32 +512,4 @@ class Resource
     end
   end
 end
-
-# The context in which a {Resource#stage} occurs. Supports access to both
-# the {Resource} and associated {Mktemp} in a single block argument. The interface
-# is back-compatible with {Resource} itself as used in that context.
-class ResourceStageContext # rubocop:todo Style/OneClassPerFile
-  extend Forwardable
-
-  # The {Resource} that is being staged.
-  sig { returns(Resource) }
-  attr_reader :resource
-
-  # The {Mktemp} in which {#resource} is staged.
-  sig { returns(Mktemp) }
-  attr_reader :staging
-
-  def_delegators :@resource, :version, :url, :mirrors, :specs, :using, :source_modified_time
-  def_delegators :@staging, :retain!
-
-  sig { params(resource: Resource, staging: Mktemp).void }
-  def initialize(resource, staging)
-    @resource = T.let(resource, Resource)
-    @staging = T.let(staging, Mktemp)
-  end
-
-  sig { returns(String) }
-  def to_s
-    "<#{self.class}: resource=#{resource} staging=#{staging}>"
-  end
-end
+require "resource/resource_stage_context"

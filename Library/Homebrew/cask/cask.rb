@@ -209,10 +209,16 @@ module Cask
 
     sig { returns(T::Boolean) }
     def supports_linux?
-      return true if font?
+      return true if depends_on.requires_linux?
+      return false if depends_on.requires_macos?
 
-      # Bare `depends_on :macos` explicitly marks a cask as macOS-only
-      return false if (macos_requirement = depends_on.macos) && !macos_requirement.version_specified?
+      if depends_on.macos_set_in_block?
+        return false if contains_os_specific_artifacts?
+
+        return true
+      end
+
+      return true if font?
 
       # Cache the os value before contains_os_specific_artifacts? refreshes the cask
       # (the refresh clears @dsl.os in generic/non-OS-specific contexts)
@@ -228,6 +234,13 @@ module Cask
         Artifact::MACOS_ONLY_ARTIFACTS.include?(a.class) ||
           (a.is_a?(Artifact::Installer) && a.manual_install)
       end
+    end
+
+    sig { returns(T::Boolean) }
+    def supports_macos?
+      return false if depends_on.requires_linux?
+
+      true
     end
 
     sig { returns(T::Boolean) }
@@ -577,10 +590,12 @@ module Cask
         begin
           OnSystem::VALID_OS_ARCH_TAGS.each do |bottle_tag|
             next if bottle_tag.linux? && dsl!.os.nil?
+
+            macos_requirements = [depends_on.macos, depends_on.maximum_macos].compact
             next if bottle_tag.macos? &&
-                    depends_on.macos &&
+                    macos_requirements.present? &&
                     !dsl!.depends_on_set_in_block? &&
-                    !depends_on.macos.allows?(bottle_tag.to_macos_version)
+                    macos_requirements.any? { |requirement| !requirement.allows?(bottle_tag.to_macos_version) }
 
             Homebrew::SimulateSystem.with_tag(bottle_tag) do
               refresh

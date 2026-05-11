@@ -77,7 +77,9 @@ class CaskDependent
         dsl_reqs.cask.each do |cask_ref|
           requirements << CaskDependent::Requirement.new([{ cask: cask_ref }])
         end
+        requirements << dsl_reqs.linux if dsl_reqs.linux
         requirements << dsl_reqs.macos if dsl_reqs.macos
+        requirements << dsl_reqs.maximum_macos if dsl_reqs.maximum_macos
 
         requirements
       end,

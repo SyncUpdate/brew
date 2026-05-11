@@ -369,29 +369,48 @@ depends_on formula: "unar"
 
 #### `depends_on` *macos*
 
-##### Requiring an exact macOS release
+##### Setting a minimum macOS release
 
-The value for `depends_on macos:` may be a symbol or an array of symbols, listing the exact compatible macOS releases. The values for supported macOS releases can be found in the [`MacOSVersion` class](/rubydoc/MacOSVersion.html) documentation.
+Top-level `depends_on :macos` marks a cask as macOS-only. Top-level `depends_on macos:` marks a cask as macOS-only and declares the minimum compatible macOS release. The values for supported macOS releases can be found in the [`MacOSVersion` class](/rubydoc/MacOSVersion.html) documentation.
 
-Only major releases are covered (10.x numbers containing a single dot or whole numbers since macOS 11). The symbol form is used for readability. The following are all valid ways to enumerate the exact macOS release requirements for a cask:
+Only major releases are covered (10.x numbers containing a single dot or whole numbers since macOS 11). The symbol form is used for readability:
 
 ```ruby
 depends_on macos: :big_sur
+```
+
+`depends_on macos:` still accepts a string starting with a comparison operator such as `>=`, followed by a macOS release in the form above. The following is a valid expression meaning “at least macOS Big Sur (11.0)”:
+
+```ruby
+depends_on macos: ">= :big_sur"
+```
+
+Use `==` in the string form only when a cask must run on one exact macOS release. An array of symbols is also accepted when a cask must run on one of an exact set of macOS releases:
+
+```ruby
 depends_on macos: [
   :catalina,
   :big_sur,
 ]
 ```
 
-##### Setting a minimum macOS release
-
-`depends_on macos:` can also accept a string starting with a comparison operator such as `>=`, followed by a macOS release in the form above. The following is a valid expression meaning “at least macOS Big Sur (11.0)”:
+Top-level `depends_on maximum_macos:` marks a cask as macOS-only and declares the newest compatible macOS release:
 
 ```ruby
-depends_on macos: ">= :big_sur"
+depends_on maximum_macos: :ventura
 ```
 
-A comparison expression cannot be combined with any other form of `depends_on macos:`.
+For a cask that supports both macOS and Linux but needs a specific macOS version, put the macOS version requirement inside `on_macos`:
+
+```ruby
+on_macos do
+  depends_on macos: :big_sur
+end
+```
+
+#### `depends_on` *linux*
+
+Top-level `depends_on :linux` marks a cask as Linux-only.
 
 #### `depends_on` *arch*
 
@@ -1273,7 +1292,7 @@ cask "calibre" do
 end
 ```
 
-Such `on_<system>` blocks can be nested and contain other stanzas not listed here. However, they should not contain `depends_on macos:` stanzas, which should occur once below the `on_<system>` blocks and encompass all releases listed in the cask. Examples: [calhash.rb](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/c/calhash.rb), [r.rb](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/r/r.rb), [wireshark.rb](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/wireshark.rb)
+Such `on_<system>` blocks can be nested and contain other stanzas not listed here. However, version-specific macOS requirements should be placed in `on_macos` blocks rather than individual macOS release blocks. Examples: [calhash.rb](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/c/calhash.rb), [r.rb](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/r/r.rb), [wireshark.rb](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/wireshark.rb)
 
 ### Switch between languages or regions
 

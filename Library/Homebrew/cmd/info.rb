@@ -208,28 +208,29 @@ module Homebrew
           "#{missing_count} missing #{Formatter.error("✘")}"
       end
 
-      sig { params(full_name: String, name: String).returns(Integer) }
-      def self.count_installed_dependents(full_name, name)
-        Formula.racks.count do |rack|
+      sig { params(full_name: String, name: String).returns(T::Array[String]) }
+      def self.installed_dependent_names(full_name, name)
+        Formula.racks.filter_map do |rack|
           keg = Keg.from_rack(rack)
-          next false unless keg
+          next unless keg
 
           tab_path = keg/AbstractTab::FILENAME
-          next false unless tab_path.file?
+          next unless tab_path.file?
 
           # Fast path: skip JSON parsing when the formula name
           # does not appear anywhere in the raw receipt.
           content = File.read(tab_path)
-          next false unless content.include?(name)
+          next unless content.include?(name)
 
           tab_deps = Tab.from_file_content(content, tab_path).runtime_dependencies
-          next false unless tab_deps
+          next unless tab_deps
 
-          tab_deps.any? do |dep|
+          dependent = tab_deps.any? do |dep|
             dep_full_name = T.cast(dep, T::Hash[String, T.untyped])["full_name"]
-            dep_full_name == full_name || dep_full_name&.split("/")&.last == name
+            dep_full_name == full_name || dep_full_name&.then { Utils.name_from_full_name(it) } == name
           end
-        end
+          keg.name if dependent
+        end.sort.uniq
       end
 
       sig { params(formula: T.untyped).returns(T::Array[String]) }
@@ -253,14 +254,14 @@ module Homebrew
 
       sig { params(cask: T.untyped).returns(T::Array[String]) }
       def self.cask_requirements_lines(cask)
-        requirement = if (macos = cask.depends_on.macos)
-          requirement = macos.display_s
-          if cask.supports_linux?
-            requirement.sub(" (or Linux)",
-                            " or Linux")
-          else
-            requirement.delete_suffix(" (or Linux)")
+        macos_requirements = [cask.depends_on.macos, cask.depends_on.maximum_macos].compact
+        requirement = if macos_requirements.present?
+          requirement = macos_requirements.filter_map do |macos_requirement|
+            macos_requirement.display_s.delete_suffix(" (or Linux)").delete_prefix("macOS").strip.presence
           end
+          requirement = requirement.present? ? "macOS #{requirement.join(", ")}" : "macOS"
+          requirement += " or Linux" if cask.supports_linux?
+          requirement
         elsif cask.supports_macos? && cask.supports_linux?
           "macOS or Linux"
         elsif cask.supports_macos?
@@ -303,7 +304,7 @@ module Homebrew
         cask.depends_on.formula.each do |name|
           dep_name = name.to_s
           formula_dependencies << dep_name
-          rack = HOMEBREW_CELLAR/dep_name.split("/").last
+          rack = HOMEBREW_CELLAR/Utils.name_from_full_name(dep_name)
           next unless rack.directory?
 
           keg = Keg.from_rack(rack)
@@ -545,18 +546,14 @@ module Homebrew
         attrs << "keg-only" if formula.keg_only?
 
         kegs = formula.installed_kegs
-        name_with_status = if kegs.empty?
-          pretty_uninstalled(formula.full_name)
-        elsif formula.outdated?
-          if (upgrade_version = specs.first.presence)
-            installed_version = formula.linked_version ||
-                                kegs.max_by(&:scheme_and_version)&.version
-            specs[0] = "#{installed_version} → #{upgrade_version}"
-          end
-          pretty_upgradable(formula.full_name)
-        else
-          pretty_installed(formula.full_name)
+        installed = kegs.any?
+        outdated = installed && formula.outdated?
+        if outdated && (upgrade_version = specs.first.presence)
+          installed_version = formula.linked_version ||
+                              kegs.max_by(&:scheme_and_version)&.version
+          specs[0] = "#{installed_version} → #{upgrade_version}"
         end
+        name_with_status = pretty_install_status(formula.full_name, installed:, outdated:)
 
         puts "#{oh1_title(name_with_status)}: #{specs * ", "}#{" [#{attrs * ", "}]" unless attrs.empty?}"
         puts formula.desc if formula.desc
@@ -614,9 +611,9 @@ module Homebrew
 
         tab_runtime_deps = kegs.last&.runtime_dependencies
         installed_dependents = if $stdout.tty? && kegs.any?
-          self.class.count_installed_dependents(formula.full_name, formula.name)
+          self.class.installed_dependent_names(formula.full_name, formula.name)
         else
-          0
+          [].freeze
         end
         dependency_lines = %w[build required recommended optional].filter_map do |type|
           next if type == "build" &&
@@ -626,14 +623,17 @@ module Homebrew
                      (stable.present? ? stable.bottled? && formula.pour_bottle? : formula.head.blank?))))
 
           deps = formula.deps.send(type).uniq
-          "#{type.capitalize} (#{deps.count}): #{decorate_dependencies deps}" unless deps.empty?
+          next if deps.empty?
+
+          tab_deps = (kegs.any? && type != "build") ? tab_runtime_deps : nil
+          "#{type.capitalize} (#{deps.count}): #{decorate_dependencies(deps, tab_runtime_deps: tab_deps)}"
         end
-        if dependency_lines.present? || tab_runtime_deps.present? || installed_dependents.positive?
+        if dependency_lines.present? || tab_runtime_deps.present? || installed_dependents.any?
           ohai "Dependencies"
           puts dependency_lines
           if tab_runtime_deps.present?
             installed_count = tab_runtime_deps.count do |dep|
-              dep_name = dep["full_name"]&.split("/")&.last
+              dep_name = dep["full_name"]&.then { Utils.name_from_full_name(it) }
               next false unless dep_name
 
               rack = HOMEBREW_CELLAR/dep_name
@@ -642,7 +642,13 @@ module Homebrew
             puts "Recursive Runtime (#{tab_runtime_deps.count}): " \
                  "#{self.class.dependency_status_counts(installed_count, tab_runtime_deps.count)}"
           end
-          puts "Dependents: #{installed_dependents}" if installed_dependents.positive?
+          if installed_dependents.any?
+            if args.verbose?
+              puts "Dependents (#{installed_dependents.count}): #{installed_dependents.join(", ")}"
+            else
+              puts "Dependents: #{installed_dependents.count}"
+            end
+          end
         end
 
         unless formula.requirements.to_a.empty?
@@ -686,16 +692,26 @@ module Homebrew
         Utils::Analytics.formula_output(formula, args:)
       end
 
-      sig { params(dependencies: T::Array[Dependency]).returns(String) }
-      def decorate_dependencies(dependencies)
-        deps_status = dependencies.map do |dep|
-          if dep.satisfied?
-            pretty_installed(dep_display_s(dep))
+      sig {
+        params(dependencies:     T::Array[Dependency],
+               tab_runtime_deps: T.nilable(T::Array[T::Hash[String, T.untyped]])).returns(String)
+      }
+      def decorate_dependencies(dependencies, tab_runtime_deps: nil)
+        dependencies.map do |dep|
+          display = dep_display_s(dep)
+          full_name = if tab_runtime_deps
+            tab_runtime_deps.find do |d|
+              name = d["full_name"]
+              name == dep.name || name&.then { Utils.name_from_full_name(it) } == dep.name
+            end&.fetch("full_name")
           else
-            pretty_uninstalled(dep_display_s(dep))
+            dep.name
           end
-        end
-        deps_status.join(", ")
+          rack = HOMEBREW_CELLAR/Utils.name_from_full_name(full_name) if full_name
+          installed = !rack.nil? && rack.directory? && !rack.subdirs.empty?
+          outdated = installed ? dep.to_formula.outdated? : false
+          pretty_install_status(display, installed:, outdated:)
+        end.join(", ")
       end
 
       sig { params(requirements: T::Array[Requirement]).returns(String) }

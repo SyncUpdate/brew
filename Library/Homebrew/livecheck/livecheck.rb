@@ -1162,6 +1162,8 @@ module Homebrew
       found_current_version = T.let(false, T::Boolean)
 
       formula_versions = FormulaVersions.new(formula)
+      current_version = origin_stable_version(formula, formula_versions) || current_version
+
       formula_versions.rev_list("HEAD") do |revision, path|
         formula_versions.formula_at_revision(revision, path) do |historical_formula|
           historical_stable = historical_formula.stable
@@ -1179,6 +1181,27 @@ module Homebrew
       end
 
       version_update_revision
+    end
+
+    sig { params(formula: Formula, formula_versions: FormulaVersions).returns(T.nilable(Version)) }
+    private_class_method def self.origin_stable_version(formula, formula_versions)
+      tap = formula.tap
+      return if tap.nil?
+
+      revision = Utils.popen_read(
+        Utils::Git.git, "rev-parse", "origin/HEAD",
+        chdir: tap.path
+      ).chomp.presence
+      return if revision.nil?
+
+      relative_path = formula.path.relative_path_from(tap.path).to_s
+      version = T.let(nil, T.nilable(Version))
+      formula_versions.formula_at_revision(revision, relative_path) do |historical_formula|
+        version = historical_formula.stable&.version
+      end
+      version
+    rescue MacOSVersion::Error, LegacyDSLError
+      nil
     end
 
     sig {

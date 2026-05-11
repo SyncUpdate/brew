@@ -19,6 +19,9 @@ module Cask
     extend ::Utils::Output::Mixin
     include ::Utils::Output::Mixin
 
+    sig { returns(::Cask::Cask) }
+    attr_reader :cask
+
     sig {
       params(
         cask: ::Cask::Cask, command: T.class_of(SystemCommand), force: T::Boolean, adopt: T::Boolean,
@@ -376,15 +379,18 @@ on_request: true)
 
     sig { void }
     def check_stanza_os_requirements
-      nil
+      return if @cask.supports_macos?
+
+      raise CaskError, "Linux is required for this software."
     end
 
     sig { void }
     def check_macos_requirements
-      return unless @cask.depends_on.macos
-      return if @cask.depends_on.macos.satisfied?
+      macos_requirements = [@cask.depends_on.macos, @cask.depends_on.maximum_macos].compact
+      return if macos_requirements.empty?
+      return if macos_requirements.all?(&:satisfied?)
 
-      raise CaskError, @cask.depends_on.macos.message(type: :cask)
+      raise CaskError, macos_requirements.find { |requirement| !requirement.satisfied? }&.message(type: :cask)
     end
 
     sig { void }
