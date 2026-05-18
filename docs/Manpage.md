@@ -121,9 +121,17 @@ Control Homebrew's anonymous aggregate user behaviour analytics. Read more at
 
 : Display the current state of Homebrew's analytics.
 
-`brew analytics` (`on`\|`off`)
+`brew analytics regenerate-uuid`
 
-: Turn Homebrew's analytics on or off respectively.
+: Delete Homebrew's legacy analytics UUID.
+
+`brew analytics on`
+
+: Turn Homebrew's analytics on.
+
+`brew analytics off`
+
+: Turn Homebrew's analytics off.
 
 ### `autoremove` \[`--dry-run`\]
 
@@ -142,9 +150,179 @@ packages, uv tools, Flatpak packages, Krew plugins and npm packages.
 
 Note: Flatpak support is only available on Linux.
 
+`--file`
+
+: Read from or write to the `Brewfile` from this location. Use `--file=-` to
+  pipe to stdin/stdout.
+
+`-g`, `--global`
+
+: Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if
+  set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set),
+  `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise.
+
+`brew bundle upgrade`
+
+: Shorthand for `brew bundle install --upgrade`.
+
+`--upgrade`
+
+: Run `brew upgrade` on outdated dependencies, even if
+  `$HOMEBREW_BUNDLE_NO_UPGRADE` is set.
+
+`--upgrade-formulae`
+
+: Run `brew upgrade` on any of these comma-separated formulae, even if
+  `$HOMEBREW_BUNDLE_NO_UPGRADE` is set.
+
+`--jobs`
+
+: Run up to this many formula installations in parallel. Defaults to 1
+  (sequential). Use `auto` for the number of CPU cores (max 4).
+
+`brew bundle sh` \[`--check`\] \[`--no-secrets`\]
+
+: Run your shell in a `brew bundle exec` environment.
+
+`--install`
+
+: Run `install` before starting the shell.
+
+`--services`
+
+: Temporarily start services while running the shell. Enabled by default if
+  `$HOMEBREW_BUNDLE_SERVICES` is set.
+
+`--check`
+
+: Check that all dependencies in the Brewfile are installed before starting the
+  shell. Enabled by default if `$HOMEBREW_BUNDLE_CHECK` is set.
+
+`--no-secrets`
+
+: Attempt to remove secrets from the environment before starting the shell.
+  Enabled by default if `$HOMEBREW_BUNDLE_NO_SECRETS` is set.
+
+`brew bundle remove` *`name`* \[...\]
+
+: Remove entries that match `name` from your `Brewfile`. Use `--formula`,
+  `--cask`, `--tap`, `--mas`, `--vscode`, `--go`, `--cargo`, `--uv`,
+  `--flatpak`, `--krew` and `--npm` to remove only entries of the corresponding
+  type. Passing `--formula` also removes matches against formula aliases and old
+  formula names.
+
+`--install`
+
+: Run `install` before removing entries.
+
+`--formula`
+
+: Remove Homebrew formula entries, including matches against formula aliases and
+  old names.
+
+`--cask`
+
+: Remove Homebrew cask entries.
+
+`--tap`
+
+: Remove Homebrew tap entries.
+
+`--mas`
+
+: Remove entries for Mac App Store dependencies.
+
+`--vscode`
+
+: Remove entries for VSCode (and forks/variants) extensions.
+
+`--go`
+
+: Remove entries for Go packages.
+
+`--cargo`
+
+: Remove entries for Cargo packages.
+
+`--uv`
+
+: Remove entries for uv tools.
+
+`--flatpak`
+
+: Remove entries for Flatpak packages. Note: Linux only.
+
+`--krew`
+
+: Remove entries for Krew plugins.
+
+`--npm`
+
+: Remove entries for npm packages.
+
+`brew bundle list`
+
+: List all dependencies present in the `Brewfile`.
+
+By default, only Homebrew formula dependencies are listed.
+
+`--install`
+
+: Run `install` before listing dependencies.
+
+`--all`
+
+: List all dependencies.
+
+`--formula`
+
+: List Homebrew formula dependencies.
+
+`--cask`
+
+: List Homebrew cask dependencies.
+
+`--tap`
+
+: List Homebrew tap dependencies.
+
+`--mas`
+
+: List Mac App Store dependencies.
+
+`--vscode`
+
+: List VSCode (and forks/variants) extensions.
+
+`--go`
+
+: List Go packages.
+
+`--cargo`
+
+: List Cargo packages.
+
+`--uv`
+
+: List uv tools.
+
+`--flatpak`
+
+: List Flatpak packages. Note: Linux only.
+
+`--krew`
+
+: List Krew plugins.
+
+`--npm`
+
+: List npm packages.
+
 `brew bundle` \[`install`\]
 
 : Install and upgrade (by default) all dependencies from the `Brewfile`.
+
+Use this to restore a recorded installed state from a `Brewfile`.
 
 You can specify the `Brewfile` location using `--file` or by setting the
 `$HOMEBREW_BUNDLE_FILE` environment variable.
@@ -154,55 +332,45 @@ to one or more of the following environment variables:
 `$HOMEBREW_BUNDLE_BREW_SKIP`, `$HOMEBREW_BUNDLE_CASK_SKIP`,
 `$HOMEBREW_BUNDLE_MAS_SKIP`, `$HOMEBREW_BUNDLE_TAP_SKIP`.
 
-`brew bundle upgrade`
+`-v`, `--verbose`
 
-: Shorthand for `brew bundle install --upgrade`.
+: Print output from commands as they are run.
 
-`brew bundle dump`
+`--no-upgrade`
 
-: Write all installed casks/formulae/images/taps into a `Brewfile` in the
-  current directory or to a custom file specified with the `--file` option.
+: Do not run `brew upgrade` on outdated dependencies. Note they may still be
+  upgraded by `brew install` if needed. Enabled by default if
+  `$HOMEBREW_BUNDLE_NO_UPGRADE` is set.
 
-`brew bundle cleanup`
+`--upgrade`
 
-: Uninstall all dependencies not present in the `Brewfile`.
+: Run `brew upgrade` on outdated dependencies, even if
+  `$HOMEBREW_BUNDLE_NO_UPGRADE` is set.
 
-This workflow is useful for maintainers or testers who regularly install lots of
-formulae.
+`--upgrade-formulae`
 
-Unless `--force` is passed, this returns a 1 exit code if anything would be
-removed.
+: Run `brew upgrade` on any of these comma-separated formulae, even if
+  `$HOMEBREW_BUNDLE_NO_UPGRADE` is set.
 
-`brew bundle check`
+`--jobs`
 
-: Check if all dependencies present in the `Brewfile` are installed.
+: Run up to this many formula installations in parallel. Defaults to 1
+  (sequential). Use `auto` for the number of CPU cores (max 4).
 
-This provides a successful exit code if everything is up-to-date, making it
-useful for scripting.
+`-f`, `--force`
 
-`brew bundle list`
+: Run with `--force`/`--overwrite`.
 
-: List all dependencies present in the `Brewfile`.
+`--cleanup`
 
-By default, only Homebrew formula dependencies are listed.
+: Perform cleanup after installing dependencies, same as running `cleanup
+  --force`. Enabled by default if `$HOMEBREW_BUNDLE_INSTALL_CLEANUP` is set and
+  `--global` is passed.
 
-`brew bundle edit`
+`--zap`
 
-: Edit the `Brewfile` in your editor.
-
-`brew bundle add` *`name`* \[...\]
-
-: Add entries to your `Brewfile`. Adds formulae by default. Use `--cask`,
-  `--tap`, `--vscode`, `--go`, `--cargo`, `--uv`, `--flatpak`, `--krew` and
-  `--npm` to add the corresponding entry instead.
-
-`brew bundle remove` *`name`* \[...\]
-
-: Remove entries that match `name` from your `Brewfile`. Use `--formula`,
-  `--cask`, `--tap`, `--mas`, `--vscode`, `--go`, `--cargo`, `--uv`,
-  `--flatpak`, `--krew` and `--npm` to remove only entries of the corresponding
-  type. Passing `--formula` also removes matches against formula aliases and old
-  formula names.
+: Use `zap` instead of `uninstall` when cleaning up casks after installing
+  dependencies.
 
 `brew bundle exec` \[`--check`\] \[`--no-secrets`\] *`command`*
 
@@ -215,120 +383,110 @@ commands like `bundle install`, `npm install`, etc. It will also add compiler
 flags which will help with finding keg-only dependencies like `openssl`,
 `icu4c`, etc.
 
-`brew bundle sh` \[`--check`\] \[`--no-secrets`\]
+`--install`
 
-: Run your shell in a `brew bundle exec` environment.
+: Run `install` before executing the command.
+
+`--services`
+
+: Temporarily start services while executing the command. Enabled by default if
+  `$HOMEBREW_BUNDLE_SERVICES` is set.
+
+`--check`
+
+: Check that all dependencies in the Brewfile are installed before executing the
+  command. Enabled by default if `$HOMEBREW_BUNDLE_CHECK` is set.
+
+`--no-secrets`
+
+: Attempt to remove secrets from the environment before executing the command.
+  Enabled by default if `$HOMEBREW_BUNDLE_NO_SECRETS` is set.
 
 `brew bundle env` \[`--check`\] \[`--no-secrets`\]
 
 : Print the environment variables that would be set in a `brew bundle exec`
   environment.
 
-`--file`
+`--install`
 
-: Read from or write to the `Brewfile` from this location. Use `--file=-` to
-  pipe to stdin/stdout.
+: Run `install` before printing the environment.
 
-`-g`, `--global`
+`--check`
 
-: Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if
-  set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set),
-  `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise.
+: Check that all dependencies in the Brewfile are installed before printing the
+  environment. Enabled by default if `$HOMEBREW_BUNDLE_CHECK` is set.
 
-`-v`, `--verbose`
+`--no-secrets`
 
-: `install` prints output from commands as they are run. `check` lists all
-  missing dependencies.
+: Attempt to remove secrets from the environment before printing it. Enabled by
+  default if `$HOMEBREW_BUNDLE_NO_SECRETS` is set.
 
-`--no-upgrade`
+`brew bundle edit`
 
-: `install` does not run `brew upgrade` on outdated dependencies. `check` does
-  not check for outdated dependencies. Note they may still be upgraded by `brew
-  install` if needed. Enabled by default if `$HOMEBREW_BUNDLE_NO_UPGRADE` is
-  set.
-
-`--upgrade`
-
-: `install` runs `brew upgrade` on outdated dependencies, even if
-  `$HOMEBREW_BUNDLE_NO_UPGRADE` is set.
-
-`--upgrade-formulae`
-
-: `install` runs `brew upgrade` on any of these comma-separated formulae, even
-  if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set.
+: Edit the `Brewfile` in your editor.
 
 `--install`
 
-: Run `install` before continuing to other operations, e.g. `exec`.
+: Run `install` before editing the `Brewfile`.
 
-`--jobs`
+`brew bundle dump`
 
-: `install` runs up to this many formula installations in parallel. Defaults to
-  1 (sequential). Use `auto` for the number of CPU cores (max 4).
+: Write all installed casks/formulae/images/taps into a `Brewfile` in the
+  current directory or to a custom file specified with the `--file` option. This
+  is useful as an installed-state snapshot and can be kept in version control
+  and diffed.
 
-`--services`
+`--install`
 
-: Temporarily start services while running the `exec` or `sh` command. Enabled
-  by default if `$HOMEBREW_BUNDLE_SERVICES` is set.
+: Run `install` before dumping dependencies.
 
 `-f`, `--force`
 
-: `install` runs with `--force`/`--overwrite`. `dump` overwrites an existing
-  `Brewfile`. `cleanup` actually performs its cleanup operations.
-
-`--cleanup`
-
-: `install` performs cleanup operation, same as running `cleanup --force`.
-  Enabled by default if `$HOMEBREW_BUNDLE_INSTALL_CLEANUP` is set and `--global`
-  is passed.
-
-`--all`
-
-: `list` all dependencies.
+: Overwrite an existing `Brewfile`.
 
 `--formula`
 
-: `list`, `dump` or `cleanup` Homebrew formula dependencies.
+: Dump Homebrew formula dependencies.
 
 `--cask`
 
-: `list`, `dump` or `cleanup` Homebrew cask dependencies.
+: Dump Homebrew cask dependencies.
 
 `--tap`
 
-: `list`, `dump` or `cleanup` Homebrew tap dependencies.
+: Dump Homebrew tap dependencies.
 
 `--mas`
 
-: `list` or `dump` Mac App Store dependencies.
+: Dump Mac App Store dependencies.
 
 `--vscode`
 
-: `list`, `dump` or `cleanup` VSCode (and forks/variants) extensions.
+: Dump VSCode (and forks/variants) extensions.
 
 `--go`
 
-: `list`, `dump` or `cleanup` Go packages.
+: Dump Go packages.
 
 `--cargo`
 
-: `list`, `dump` or `cleanup` Cargo packages.
+: Dump Cargo packages.
 
 `--uv`
 
-: `list`, `dump` or `cleanup` uv tools.
+: Dump uv tools.
 
 `--flatpak`
 
-: `list`, `dump` or `cleanup` Flatpak packages. Note: Linux only.
+: Dump Flatpak packages. Note: Linux only.
 
 `--krew`
 
-: `list` or `dump` Krew plugins.
+: Dump Krew plugins.
 
 `--npm`
 
-: `list`, `dump` or `cleanup` npm packages.
+: Dump npm packages.
 
 `--no-vscode`
 
@@ -367,27 +525,146 @@ flags which will help with finding keg-only dependencies like `openssl`,
 
 `--describe`
 
-: `dump` and `add` add a description comment above each line, unless the
-  dependency does not have a description. Enabled by default if
-  `$HOMEBREW_BUNDLE_DESCRIBE` is set.
+: Add a description comment above each line, unless the dependency does not have
+  a description. Enabled by default if `$HOMEBREW_BUNDLE_DESCRIBE` is set.
 
 `--no-restart`
 
-: `dump` does not add `restart_service` to formula lines.
+: Do not add `restart_service` to formula lines.
+
+`brew bundle cleanup`
+
+: Uninstall all dependencies not present in the `Brewfile`.
+
+This workflow is useful for maintainers or testers who regularly install lots of
+formulae.
+
+Unless `--force` is passed, this returns a 1 exit code if anything would be
+removed.
+
+`--install`
+
+: Run `install` before cleaning up dependencies.
+
+`-f`, `--force`
+
+: Actually perform cleanup operations.
+
+`--formula`
+
+: Clean up Homebrew formula dependencies.
+
+`--cask`
+
+: Clean up Homebrew cask dependencies.
+
+`--tap`
+
+: Clean up Homebrew tap dependencies.
+
+`--vscode`
+
+: Clean up VSCode (and forks/variants) extensions.
+
+`--go`
+
+: Clean up Go packages.
+
+`--cargo`
+
+: Clean up Cargo packages.
+
+`--uv`
+
+: Clean up uv tools.
+
+`--flatpak`
+
+: Clean up Flatpak packages. Note: Linux only.
+
+`--npm`
+
+: Clean up npm packages.
 
 `--zap`
 
-: `cleanup` casks using the `zap` command instead of `uninstall`.
+: Clean up casks using the `zap` command instead of `uninstall`.
 
-`--check`
+`brew bundle check`
 
-: Check that all dependencies in the Brewfile are installed before running
-  `exec`, `sh`, or `env`. Enabled by default if `$HOMEBREW_BUNDLE_CHECK` is set.
+: Check if all dependencies present in the `Brewfile` are installed.
 
-`--no-secrets`
+This provides a successful exit code if everything is up-to-date, making it
+useful for scripting. Use `--verbose` to list unmet dependencies.
 
-: Attempt to remove secrets from the environment before `exec`, `sh`, or `env`.
-  Enabled by default if `$HOMEBREW_BUNDLE_NO_SECRETS` is set.
+`-v`, `--verbose`
+
+: List all missing dependencies.
+
+`--no-upgrade`
+
+: Do not check for outdated dependencies. Note they may still be upgraded by
+  `brew install` if needed. Enabled by default if `$HOMEBREW_BUNDLE_NO_UPGRADE`
+  is set.
+
+`--install`
+
+: Run `install` before checking dependencies.
+
+`brew bundle add` *`name`* \[...\]
+
+: Add entries to your `Brewfile`. Adds formulae by default. Use `--cask`,
+  `--tap`, `--vscode`, `--go`, `--cargo`, `--uv`, `--flatpak`, `--krew` and
+  `--npm` to add the corresponding entry instead.
+
+`--install`
+
+: Run `install` before adding entries.
+
+`--formula`
+
+: Add Homebrew formula entries.
+
+`--cask`
+
+: Add Homebrew cask entries.
+
+`--tap`
+
+: Add Homebrew tap entries.
+
+`--vscode`
+
+: Add entries for VSCode (and forks/variants) extensions.
+
+`--go`
+
+: Add entries for Go packages.
+
+`--cargo`
+
+: Add entries for Cargo packages.
+
+`--uv`
+
+: Add entries for uv tools.
+
+`--flatpak`
+
+: Add entries for Flatpak packages. Note: Linux only.
+
+`--krew`
+
+: Add entries for Krew plugins.
+
+`--npm`
+
+: Add entries for npm packages.
+
+`--describe`
+
+: Add a description comment above each line, unless the dependency does not have
+  a description. Enabled by default if `$HOMEBREW_BUNDLE_DESCRIBE` is set.
 
 ### `casks`
 
@@ -448,13 +725,17 @@ Show lists of built-in and external commands.
 Control whether Homebrew automatically links external tap shell completion
 files. Read more at <https://docs.brew.sh/Shell-Completion>.
 
+`brew completions unlink`
+
+: Unlink Homebrew's completions.
+
 `brew completions` \[`state`\]
 
 : Display the current state of Homebrew's completions.
 
-`brew completions` (`link`\|`unlink`)
+`brew completions link`
 
-: Link or unlink Homebrew's completions.
+: Link Homebrew's completions.
 
 ### `config`, `--config`
 
@@ -620,9 +901,13 @@ latest stable version along with some other behaviour changes.
 
 : Display the current state of Homebrew's developer mode.
 
-`brew developer` (`on`\|`off`)
+`brew developer on`
 
-: Turn Homebrew's developer mode on or off respectively.
+: Turn Homebrew's developer mode on.
+
+`brew developer off`
+
+: Turn Homebrew's developer mode off.
 
 ### `docs`
 
@@ -645,6 +930,28 @@ working fine: please don't worry or file an issue; just ignore this.
 `-D`, `--audit-debug`
 
 : Enable debugging and profiling of audit methods.
+
+### `exec`, `x` \[`--formulae=`*`formulae`*\] \[`--`\] *`command`* \[*`args`* ...\]
+
+Run *`command`* in an environment populated by Homebrew formulae.
+
+If `--formulae` is passed, Homebrew installs those comma-separated formulae if
+needed, prepends their executable directories and those of their dependencies to
+`PATH` and runs *`command`*. This allows *`command`* to be a script path such as
+`./script.sh`.
+
+If `--formulae` is omitted, Homebrew finds a formula that provides *`command`*,
+installs it if needed and runs that executable.
+
+Example: `brew exec --formulae=jq,yq -- ./script.sh`
+
+Scripts can also use a shebang on systems with `env -S`: `#!/usr/bin/env -S brew
+exec --formulae=jq,yq --`
+
+`--formulae`
+
+: Comma-separated formulae to install and add to `PATH` before running
+  *`command`*.
 
 ### `fetch` \[*`options`*\] *`formula`*\|*`cask`* \[...\]
 
@@ -861,8 +1168,9 @@ upgrade *`formula`* if it is already installed but outdated.
 
 `--ask`
 
-: Ask for confirmation before downloading and installing formulae. Print
-  download and install sizes of bottles and dependencies. Enabled by default if
+: Ask for confirmation before downloading and installing. Print a dependency
+  plan, including added, changed and removed packages and dependencies, with
+  download and install sizes of formula bottles. Enabled by default if
   `$HOMEBREW_ASK` is set.
 
 `--formula`
@@ -1051,8 +1359,8 @@ paths within its current keg. If *`cask`* is provided, list its artifacts.
 
 `--pinned`
 
-: List only pinned formulae, or only the specified (pinned) formulae if
-  *`formula`* are provided. See also `pin`, `unpin`.
+: List only pinned packages, or only the specified (pinned) packages if
+  *`formula`* or *`cask`* are provided. See also `pin`, `unpin`.
 
 `--installed-on-request`
 
@@ -1242,13 +1550,22 @@ otherwise.
 : Also include outdated `auto_updates true` casks that would otherwise be
   skipped.
 
-### `pin` *`installed_formula`* \[...\]
+### `pin` \[`--formula`\] \[`--cask`\] *`installed_formula`*\|*`installed_cask`* \[...\]
 
-Pin the specified *`formula`*, preventing them from being upgraded when issuing
-the `brew upgrade` *`formula`* command. See also `unpin`.
+Pin the specified package, preventing it from being upgraded when issuing the
+`brew upgrade` *`formula`* or *`cask`* command. See also `unpin`.
 
 *Note:* Other packages which depend on newer versions of a pinned formula might
-not install or run correctly.
+not install or run correctly. Pinned casks with `auto_updates true` may update
+themselves outside Homebrew.
+
+`--formula`
+
+: Treat all named arguments as formulae.
+
+`--cask`
+
+: Treat all named arguments as casks.
 
 ### `postinstall`, `post_install` *`installed_formula`* \[...\]
 
@@ -1336,9 +1653,10 @@ for the reinstalled formulae or, every 30 days, for all formulae.
 
 `--ask`
 
-: Ask for confirmation before downloading and upgrading formulae. Print
-  download, install and net install sizes of bottles and dependencies. Enabled
-  by default if `$HOMEBREW_ASK` is set.
+: Ask for confirmation before downloading and reinstalling. Print a dependency
+  plan, including added, changed and removed packages and dependencies, with
+  download and install sizes of formula bottles. Enabled by default if
+  `$HOMEBREW_ASK` is set.
 
 `--formula`
 
@@ -1477,51 +1795,14 @@ If `sudo` is passed, operate on `/Library/LaunchDaemons` or
 `/usr/lib/systemd/system` (started at boot). Otherwise, operate on
 `~/Library/LaunchAgents` or `~/.config/systemd/user` (started at login).
 
-\[`sudo`\] `brew services` \[`list`\] \[`--json`\] \[`--debug`\]
+`--sudo-service-user`
 
-: List information about all managed services for the current user (or root).
-  Provides more output from Homebrew and `launchctl`(1) or `systemctl`(1) if run
-  with `--debug`.
-
-\[`sudo`\] `brew services info` (*`formula`*\|`--all`) \[`--json`\]
-
-: List all managed services for the current user (or root).
-
-\[`sudo`\] `brew services run` (*`formula`*\|`--all`) \[`--file=`\]
-
-: Run the service *`formula`* without registering to launch at login (or boot).
-
-\[`sudo`\] `brew services start` (*`formula`*\|`--all`) \[`--file=`\]
-
-: Start the service *`formula`* immediately and register it to launch at login
-  (or boot).
+: When run as root on macOS, run the service(s) as this user.
 
 \[`sudo`\] `brew services stop` \[`--keep`\] \[`--no-wait`\|`--max-wait=`\] (*`formula`*\|`--all`)
 
 : Stop the service *`formula`* immediately and unregister it from launching at
   login (or boot), unless `--keep` is specified.
-
-\[`sudo`\] `brew services kill` (*`formula`*\|`--all`)
-
-: Stop the service *`formula`* immediately but keep it registered to launch at
-  login (or boot).
-
-\[`sudo`\] `brew services restart` (*`formula`*\|`--all`) \[`--file=`\]
-
-: Stop (if necessary) and start the service *`formula`* immediately and register
-  it to launch at login (or boot).
-
-\[`sudo`\] `brew services cleanup`
-
-: Remove all unused services.
-
-`--file`
-
-: Use the service file from this location to `start` the service.
-
-`--sudo-service-user`
-
-: When run as root on macOS, run the service(s) as this user.
 
 `--max-wait`
 
@@ -1538,11 +1819,82 @@ If `sudo` is passed, operate on `/Library/LaunchDaemons` or
 
 `--all`
 
-: Run *`subcommand`* on all services.
+: Stop all services and unregister them from launching at login (or boot),
+  unless `--keep` is specified.
+
+\[`sudo`\] `brew services start` (*`formula`*\|`--all`) \[`--file=`\]
+
+: Start the service *`formula`* immediately and register it to launch at login
+  (or boot).
+
+`--file`
+
+: Use the service file from this location to `start` the service.
+
+`--all`
+
+: Start all services and register them to launch at login (or boot).
+
+\[`sudo`\] `brew services run` (*`formula`*\|`--all`) \[`--file=`\]
+
+: Run the service *`formula`* without registering to launch at login (or boot).
+
+`--file`
+
+: Use the service file from this location to `run` the service.
+
+`--all`
+
+: Run all services without registering them to launch at login (or boot).
+
+\[`sudo`\] `brew services restart` (*`formula`*\|`--all`) \[`--file=`\]
+
+: Stop (if necessary) and start the service *`formula`* immediately and register
+  it to launch at login (or boot).
+
+`--file`
+
+: Use the service file from this location to `start` the service.
+
+`--all`
+
+: Restart all services.
+
+\[`sudo`\] `brew services` \[`list`\] \[`--json`\] \[`--debug`\]
+
+: List information about all managed services for the current user (or root).
+  Provides more output from Homebrew and `launchctl`(1) or `systemctl`(1) if run
+  with `--debug`.
 
 `--json`
 
 : Output as JSON.
+
+\[`sudo`\] `brew services kill` (*`formula`*\|`--all`)
+
+: Stop the service *`formula`* immediately but keep it registered to launch at
+  login (or boot).
+
+`--all`
+
+: Stop all services immediately but keep them registered to launch at login (or
+  boot).
+
+\[`sudo`\] `brew services info` (*`formula`*\|`--all`) \[`--json`\]
+
+: List all managed services for the current user (or root).
+
+`--all`
+
+: List all managed services.
+
+`--json`
+
+: Output as JSON.
+
+\[`sudo`\] `brew services cleanup`
+
+: Remove all unused services.
 
 ### `setup-ruby` \[*`command`* ...\]
 
@@ -1692,10 +2044,18 @@ brew link` *`formula`*
 : List files which would be unlinked without actually unlinking or deleting any
   files.
 
-### `unpin` *`installed_formula`* \[...\]
+### `unpin` \[`--formula`\] \[`--cask`\] *`installed_formula`*\|*`installed_cask`* \[...\]
 
-Unpin *`formula`*, allowing them to be upgraded by `brew upgrade` *`formula`*.
-See also `pin`.
+Unpin the specified package, allowing it to be upgraded by `brew upgrade`
+*`formula`* or *`cask`*. See also `pin`.
+
+`--formula`
+
+: Treat all named arguments as formulae.
+
+`--cask`
+
+: Treat all named arguments as casks.
 
 ### `untap` \[`--force`\] *`tap`* \[...\]
 
@@ -1745,10 +2105,10 @@ Fetch and reset Homebrew and all tap repositories (or any specified
 
 ### `upgrade` \[*`options`*\] \[*`installed_formula`*\|*`installed_cask`* ...\]
 
-Upgrade outdated casks and outdated, unpinned formulae using the same options
-they were originally installed with, plus any appended brew formula options. If
-*`cask`* or *`formula`* are specified, upgrade only the given *`cask`* or
-*`formula`* kegs (unless they are pinned; see `pin`, `unpin`).
+Upgrade outdated, unpinned packages using the same options they were originally
+installed with, plus any appended brew formula options. If *`cask`* or
+*`formula`* are specified, upgrade only the given *`cask`* or *`formula`*
+(unless they are pinned; see `pin`, `unpin`).
 
 Unless `$HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK` is set, `brew upgrade` or `brew
 reinstall` will be run for outdated dependents and dependents with broken
@@ -1783,9 +2143,9 @@ for the upgraded formulae or, every 30 days, for all formulae.
 
 `--ask`
 
-: Ask for confirmation before downloading and upgrading formulae. Print
-  download, install and net install sizes of bottles and dependencies. Enabled
-  by default if `$HOMEBREW_ASK` is set.
+: Ask for confirmation before downloading and upgrading. Print the same plan as
+  `--dry-run`, including available download sizes. Enabled by default if
+  `$HOMEBREW_ASK` is set.
 
 `--formula`
 
@@ -1918,7 +2278,7 @@ Extract a specific *`version`* of *`formula`* into a personal tap and install
 it. The default tap is *`user`*/versions. *`user`* uses the GitHub username if
 available and the local username otherwise.
 
-### `which-formula` \[`--explain`\] \[`--skip-update`\] *`command`* \[...\]
+### `which-formula` \[`--explain`\] *`command`* \[...\]
 
 Show which formula(e) provides the given command.
 
@@ -1926,11 +2286,6 @@ Show which formula(e) provides the given command.
 
 : Output explanation of how to get *`command`* by installing one of the
   providing formulae.
-
-`--skip-update`
-
-: Skip updating the executables database if any version exists on disk, no
-  matter how old.
 
 ### `--cache` \[*`options`*\] \[*`formula`*\|*`cask`* ...\]
 
@@ -3743,8 +4098,8 @@ formula.
 
 `--skip-vendor-install`
 
-: Do not run `brew vendor-install ruby`; skip the `utils/ruby.sh` and
-  `Gemfile.lock` updates.
+: Do not run `brew vendor-install ruby`; skip the `utils/ruby.sh`,
+  `Gemfile.lock` and RBI updates.
 
 ### `update-python-resources` \[*`options`*\] *`formula`* \[...\]
 
@@ -3864,31 +4219,22 @@ Note that this command depends on the GitHub CLI. Run `brew install gh`.
 
 Database update for `brew which-formula`.
 
-`--stats`
+`--bottle-json-dir`
 
-: Print statistics about the database contents (number of commands and formulae,
-  list of missing formulae).
+: Use generated bottle JSON files in the given directory to update formula
+  entries.
 
-`--commit`
+`--removed-formulae-file`
 
-: Commit the changes using `git`.
+: Remove database entries for formulae listed in the given file.
 
-`--update-existing`
+`--pull-request`
 
-: Update database entries with outdated formula versions.
+: Update entries for formula changes in the given pull request number.
 
-`--install-missing`
+`--repository`
 
-: Install and update formulae that are missing from the database and don't have
-  bottles.
-
-`--eval-all`
-
-: Evaluate all installed taps, rather than just the core tap.
-
-`--max-downloads`
-
-: Specify a maximum number of formulae to download and update.
+: GitHub repository for `--pull-request` (default: `$GITHUB_REPOSITORY`).
 
 `--summary-file`
 
@@ -3902,6 +4248,10 @@ subcommands with the `--cask` switch.
 `--appdir`
 
 : Target location for Applications (default: `/Applications`).
+
+`--appimagedir`
+
+: Target location for AppImages (default: `~/Applications`).
 
 `--keyboard-layoutdir`
 
@@ -4085,8 +4435,8 @@ command execution (e.g. `$(cat file)`).
 
 `HOMEBREW_ASK`
 
-: If set, pass `--ask` to all formulae `brew install`, `brew upgrade` and `brew
-  reinstall` commands.
+: If set, pass `--ask` to `brew install`, `brew upgrade` and `brew reinstall`
+  commands.
 
 `HOMEBREW_AUTO_UPDATE_SECS`
 
@@ -4478,6 +4828,12 @@ command execution (e.g. `$(cat file)`).
 : If set, do not send analytics. Google Analytics were destroyed. For more
   information, see: <https://docs.brew.sh/Analytics>
 
+`HOMEBREW_NO_ASK`
+
+: If set, do not ask for confirmation before downloading and installing,
+  upgrading or reinstalling formulae and casks. This is a no-op until ask mode
+  becomes the default behaviour in a later release.
+
 `HOMEBREW_NO_AUTOREMOVE`
 
 : If set, calls to `brew cleanup` and `brew uninstall` will not automatically
@@ -4566,6 +4922,10 @@ command execution (e.g. `$(cat file)`).
 : If set, `brew info` and `brew install` will not warn when a formula's
   executables are shadowed by other commands earlier on `$PATH`.
 
+`HOMEBREW_NO_SANDBOX_LINUX`
+
+: If set, disable the Linux sandbox.
+
 `HOMEBREW_NO_UPDATE_REPORT_NEW`
 
 : If set, `brew update` will not show the list of newly added formulae/casks.
@@ -4585,6 +4945,11 @@ command execution (e.g. `$(cat file)`).
 `HOMEBREW_PRY`
 
 : If set, use Pry for the `brew irb` command.
+
+`HOMEBREW_SANDBOX_LINUX`
+
+: If set, use the `bwrap`(1) sandbox for formula installation and testing on
+  Linux.
 
 `HOMEBREW_SBOM`
 

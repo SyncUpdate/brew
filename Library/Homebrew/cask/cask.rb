@@ -152,14 +152,12 @@ module Cask
       refresh
     end
 
-    sig { params(skip_implicit_dependency: T::Boolean).void }
-    def refresh(skip_implicit_dependency: false)
+    sig { void }
+    def refresh
       @dsl = T.let(DSL.new(self), T.nilable(DSL))
-      @contains_os_specific_artifacts = nil
       return unless @block
 
       dsl!.instance_eval(&@block)
-      dsl!.add_implicit_macos_dependency unless skip_implicit_dependency
       dsl!.language_eval
     rescue NoMethodError => e
       raise CaskInvalidError.new(token, e.message), e.backtrace
@@ -210,64 +208,13 @@ module Cask
     sig { returns(T::Boolean) }
     def supports_linux?
       return true if depends_on.requires_linux?
-      return false if depends_on.requires_macos?
 
-      if depends_on.macos_set_in_block?
-        return false if contains_os_specific_artifacts?
-
-        return true
-      end
-
-      return true if font?
-
-      # Cache the os value before contains_os_specific_artifacts? refreshes the cask
-      # (the refresh clears @dsl.os in generic/non-OS-specific contexts)
-      os_value = dsl!.os
-
-      return false if contains_os_specific_artifacts?
-
-      # Casks with OS-specific blocks rely on the os stanza for Linux support
-      return os_value.present? if dsl!.on_os_blocks_exist?
-
-      # Platform-agnostic casks: reject macOS-only artifacts and manual installers
-      artifacts.none? do |a|
-        Artifact::MACOS_ONLY_ARTIFACTS.include?(a.class) ||
-          (a.is_a?(Artifact::Installer) && a.manual_install)
-      end
+      !depends_on.requires_macos?
     end
 
     sig { returns(T::Boolean) }
     def supports_macos?
-      return false if depends_on.requires_linux?
-
-      true
-    end
-
-    sig { returns(T::Boolean) }
-    def contains_os_specific_artifacts?
-      return false unless @dsl&.on_system_blocks_exist?
-
-      return @contains_os_specific_artifacts unless @contains_os_specific_artifacts.nil?
-
-      any_loaded = T.let(false, T::Boolean)
-      OnSystem::VALID_OS_ARCH_TAGS.each do |bottle_tag|
-        Homebrew::SimulateSystem.with_tag(bottle_tag) do
-          refresh(skip_implicit_dependency: true)
-
-          any_loaded = true if artifacts.any? do |artifact|
-            (bottle_tag.linux? && ::Cask::Artifact::MACOS_ONLY_ARTIFACTS.include?(artifact.class)) ||
-            (bottle_tag.macos? && ::Cask::Artifact::LINUX_ONLY_ARTIFACTS.include?(artifact.class))
-          end
-        end
-      rescue CaskInvalidError
-        # Invalid for this OS/arch tag; treat as having no OS-specific artifacts.
-        next
-      ensure
-        refresh(skip_implicit_dependency: true)
-      end
-
-      @contains_os_specific_artifacts = T.let(any_loaded, T.nilable(T::Boolean))
-      any_loaded
+      !depends_on.requires_linux?
     end
 
     # The caskfile is needed during installation when there are
@@ -328,6 +275,48 @@ module Cask
 
       # <caskroom_path>/.metadata/<version>/<timestamp>/Casks/<token>.{rb,json} -> <version>
       installed_caskfile.dirname.dirname.dirname.basename.to_s
+    end
+
+    sig { void }
+    def pin
+      return unless (installed_version = self.installed_version)
+
+      versioned_path = caskroom_path/installed_version
+      return unless versioned_path.exist?
+
+      HOMEBREW_PINNED_CASKS.mkpath
+      return if pinned?
+
+      pin_path.unlink if pin_path.file? || pin_path.symlink?
+      pin_path.make_relative_symlink(versioned_path)
+    end
+
+    sig { void }
+    def unpin
+      pin_path.unlink if pin_path.symlink?
+      HOMEBREW_PINNED_CASKS.rmdir_if_possible
+    end
+
+    sig { returns(T::Boolean) }
+    def pinned?
+      pin_path.symlink? && pin_path.exist?
+    end
+
+    sig { returns(T::Boolean) }
+    def pinnable?
+      return false unless (installed_version = self.installed_version)
+
+      (caskroom_path/installed_version).exist?
+    end
+
+    sig { returns(T.nilable(String)) }
+    def pinned_version
+      pin_path.resolved_path.basename.to_s if pinned?
+    end
+
+    sig { returns(Pathname) }
+    def pin_path
+      HOMEBREW_PINNED_CASKS/token
     end
 
     sig { returns(T.nilable(String)) }
@@ -445,9 +434,13 @@ module Cask
           name:               token,
           installed_versions: [installed_version],
           current_version:    version,
+          pinned:             pinned?,
+          pinned_version:,
         }
       else
-        "#{token} (#{installed_version}) != #{version}"
+        pinned = " [pinned at #{pinned_version}]" if pinned?
+
+        "#{token} (#{installed_version}) != #{version}#{pinned}"
       end
     end
 
@@ -538,6 +531,8 @@ module Cask
         "installed_time"                  => install_time&.to_i,
         "bundle_version"                  => bundle_long_version,
         "bundle_short_version"            => bundle_short_version,
+        "pinned"                          => pinned?,
+        "pinned_version"                  => pinned_version,
         "outdated"                        => outdated?,
         "sha256"                          => sha256,
         "artifacts"                       => artifacts_list,
@@ -567,7 +562,7 @@ module Cask
       }
     end
 
-    HASH_KEYS_TO_SKIP = T.let(%w[outdated installed versions].freeze, T::Array[String])
+    HASH_KEYS_TO_SKIP = T.let(%w[outdated installed pinned pinned_version versions].freeze, T::Array[String])
     private_constant :HASH_KEYS_TO_SKIP
 
     AUTO_UPDATES_BAD_BUNDLE_VERSIONS = %w[0 0.0].freeze
@@ -739,6 +734,8 @@ module Cask
     def api_to_local_hash(hash)
       hash["token"] = token
       hash["installed"] = installed_version
+      hash["pinned"] = pinned?
+      hash["pinned_version"] = pinned_version
       hash["outdated"] = outdated?
       hash
     end

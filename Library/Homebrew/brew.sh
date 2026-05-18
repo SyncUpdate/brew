@@ -229,7 +229,7 @@ esac
 ##### Next, define all other helper functions.
 #####
 
-source "${HOMEBREW_LIBRARY}/Homebrew/utils/helpers.sh"
+source "${HOMEBREW_LIBRARY}/Homebrew/utils.sh"
 
 check-run-command-as-root() {
   [[ "${EUID}" == 0 || "${UID}" == 0 ]] || return
@@ -926,6 +926,7 @@ case "${HOMEBREW_COMMAND}" in
   -v) HOMEBREW_COMMAND="--version" ;;
   lc) HOMEBREW_COMMAND="livecheck" ;;
   tc) HOMEBREW_COMMAND="typecheck" ;;
+  x) HOMEBREW_COMMAND="exec" ;;
 esac
 if [[ ("${HOMEBREW_COMMAND}" == "audit" || "${HOMEBREW_COMMAND}" == "lgtm" ||
       "${HOMEBREW_COMMAND}" == "style" || "${HOMEBREW_COMMAND}" == "tests") &&
@@ -1046,6 +1047,11 @@ EOS
 
   git config --file="${HOMEBREW_GIT_CONFIG_FILE}" --replace-all homebrew.devcmdrun true 2>/dev/null
   export HOMEBREW_DEV_CMD_RUN="1"
+fi
+
+if [[ -n "${HOMEBREW_DEVELOPER}" ]]
+then
+  export HOMEBREW_USE_INTERNAL_API="1"
 fi
 
 if [[ -n "${HOMEBREW_DEVELOPER}" || -n "${HOMEBREW_DEV_CMD_RUN}" ]]

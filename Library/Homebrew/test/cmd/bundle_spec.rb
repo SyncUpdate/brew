@@ -3,9 +3,83 @@
 
 require "cmd/bundle"
 require "cmd/shared_examples/args_parse"
+require "commands"
 
 RSpec.describe Homebrew::Cmd::Bundle do
   it_behaves_like "parseable arguments"
+
+  it "handles default install subcommand options", :aggregate_failures do
+    with_env("HOMEBREW_BUNDLE_INSTALL_CLEANUP" => nil) do
+      expect(described_class.new([]).args.subcommand).to eq("install")
+      expect(described_class.new(%w[--cleanup --zap]).args.subcommand).to eq("install")
+      expect { described_class.new(%w[--zap]) }
+        .to raise_error(UsageError, /`--zap` cannot be passed without `--cleanup`/)
+    end
+  end
+
+  it "rejects install-only options for exec" do
+    expect { described_class.new(%w[exec --jobs=1 true]) }
+      .to raise_error(UsageError, /`exec` subcommand does not accept the `--jobs` flag/)
+  end
+
+  it "uses subcommand-specific option descriptions", :aggregate_failures do
+    subcommand_options = ->(subcommand) { Commands.command_options("bundle", subcommand:).to_h }
+
+    expect(subcommand_options.call("list")["--vscode"]).to eq("List VSCode (and forks/variants) extensions.")
+    expect(subcommand_options.call("dump")["--vscode"]).to eq("Dump VSCode (and forks/variants) extensions.")
+    expect(subcommand_options.call("cleanup")["--vscode"]).to eq("Clean up VSCode (and forks/variants) extensions.")
+    expect(subcommand_options.call("add")["--vscode"])
+      .to eq("Add entries for VSCode (and forks/variants) extensions.")
+    expect(subcommand_options.call("remove")["--vscode"])
+      .to eq("Remove entries for VSCode (and forks/variants) extensions.")
+  end
+
+  it "uses subcommand-specific descriptions in help output", :aggregate_failures do
+    help_text = described_class.parser.generate_help_text(remaining_args: ["list"])
+
+    expect(help_text).to include("List VSCode (and forks/variants) extensions.")
+    expect(help_text).not_to include("Clean up VSCode (and forks/variants) extensions.")
+  end
+
+  [
+    ["exec", ["exec", "--check", "/usr/bin/true"], "/usr/bin/true"],
+    ["sh", ["sh", "--check"], "sh"],
+    ["env", ["env", "--check"], "env"],
+  ].each do |subcommand, args, command|
+    it "passes --check through to #{subcommand}" do
+      with_env("HOMEBREW_BUNDLE_NO_SECRETS" => nil) do
+        expect(Homebrew::Cmd::Bundle::ExecSubcommand).to receive(:run_external_command)
+          .with(
+            command,
+            global:     false,
+            file:       nil,
+            subcommand:,
+            services:   false,
+            check:      true,
+            no_secrets: false,
+          )
+
+        described_class.new(args).run
+      end
+    end
+  end
+
+  it "passes HOMEBREW_BUNDLE_CHECK through to exec" do
+    with_env("HOMEBREW_BUNDLE_CHECK" => "1", "HOMEBREW_BUNDLE_NO_SECRETS" => nil) do
+      expect(Homebrew::Cmd::Bundle::ExecSubcommand).to receive(:run_external_command)
+        .with(
+          "/usr/bin/true",
+          global:     false,
+          file:       nil,
+          subcommand: "exec",
+          services:   false,
+          check:      true,
+          no_secrets: false,
+        )
+
+      described_class.new(["exec", "/usr/bin/true"]).run
+    end
+  end
 
   it "checks if a Brewfile's dependencies are satisfied", :integration_test do
     HOMEBREW_REPOSITORY.cd do

@@ -53,6 +53,7 @@ require "test/support/helper/files"
 require "test/support/helper/fixtures"
 require "test/support/helper/formula"
 require "test/support/helper/mktmpdir"
+require "test/support/helper/subcommand"
 
 require "test/support/helper/spec/shared_context/homebrew_cask" if OS.mac?
 require "test/support/helper/spec/shared_context/integration_test"
@@ -147,6 +148,7 @@ RSpec.configure do |config|
   config.include(Test::Helper::Fixtures)
   config.include(Test::Helper::Formula)
   config.include(Test::Helper::MkTmpDir)
+  config.include(Test::Helper::Subcommand)
 
   # Enable aggregate failures by default
   config.define_derived_metadata do |metadata|
@@ -305,6 +307,7 @@ RSpec.configure do |config|
         *Keg.must_exist_subdirectories,
         HOMEBREW_LINKED_KEGS,
         HOMEBREW_PINNED_KEGS,
+        HOMEBREW_PINNED_CASKS,
         HOMEBREW_PREFIX/"Caskroom",
         HOMEBREW_PREFIX/"Frameworks",
         HOMEBREW_LIBRARY/"Taps/homebrew/homebrew-cask",

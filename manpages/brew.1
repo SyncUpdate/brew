@@ -75,8 +75,14 @@ Control Homebrew\[u2019]s anonymous aggregate user behaviour analytics\. Read mo
 \fBbrew analytics\fP [\fBstate\fP]
 Display the current state of Homebrew\[u2019]s analytics\.
 .TP
-\fBbrew analytics\fP (\fBon\fP|\fBoff\fP)
-Turn Homebrew\[u2019]s analytics on or off respectively\.
+\fBbrew analytics regenerate\-uuid\fP
+Delete Homebrew\[u2019]s legacy analytics UUID\.
+.TP
+\fBbrew analytics on\fP
+Turn Homebrew\[u2019]s analytics on\.
+.TP
+\fBbrew analytics off\fP
+Turn Homebrew\[u2019]s analytics off\.
 .SS "\fBautoremove\fP \fR[\fB\-\-dry\-run\fP]"
 Uninstall formulae that were only installed as a dependency of another formula and are now no longer needed\.
 .TP
@@ -87,124 +93,231 @@ Bundler for non\-Ruby dependencies from Homebrew, Homebrew Cask, Mac App Store d
 .P
 Note: Flatpak support is only available on Linux\.
 .TP
-\fBbrew bundle\fP [\fBinstall\fP]
-Install and upgrade (by default) all dependencies from the \fBBrewfile\fP\&\.
-.P
-You can specify the \fBBrewfile\fP location using \fB\-\-file\fP or by setting the \fB$HOMEBREW_BUNDLE_FILE\fP environment variable\.
-.P
-You can skip the installation of dependencies by adding space\-separated values to one or more of the following environment variables: \fB$HOMEBREW_BUNDLE_BREW_SKIP\fP, \fB$HOMEBREW_BUNDLE_CASK_SKIP\fP, \fB$HOMEBREW_BUNDLE_MAS_SKIP\fP, \fB$HOMEBREW_BUNDLE_TAP_SKIP\fP\&\.
-.TP
-\fBbrew bundle upgrade\fP
-Shorthand for \fBbrew bundle install \-\-upgrade\fP\&\.
-.TP
-\fBbrew bundle dump\fP
-Write all installed casks/formulae/images/taps into a \fBBrewfile\fP in the current directory or to a custom file specified with the \fB\-\-file\fP option\.
-.TP
-\fBbrew bundle cleanup\fP
-Uninstall all dependencies not present in the \fBBrewfile\fP\&\.
-.P
-This workflow is useful for maintainers or testers who regularly install lots of formulae\.
-.P
-Unless \fB\-\-force\fP is passed, this returns a 1 exit code if anything would be removed\.
-.TP
-\fBbrew bundle check\fP
-Check if all dependencies present in the \fBBrewfile\fP are installed\.
-.P
-This provides a successful exit code if everything is up\-to\-date, making it useful for scripting\.
-.TP
-\fBbrew bundle list\fP
-List all dependencies present in the \fBBrewfile\fP\&\.
-.P
-By default, only Homebrew formula dependencies are listed\.
-.TP
-\fBbrew bundle edit\fP
-Edit the \fBBrewfile\fP in your editor\.
-.TP
-\fBbrew bundle add\fP \fIname\fP [\.\.\.]
-Add entries to your \fBBrewfile\fP\&\. Adds formulae by default\. Use \fB\-\-cask\fP, \fB\-\-tap\fP, \fB\-\-vscode\fP, \fB\-\-go\fP, \fB\-\-cargo\fP, \fB\-\-uv\fP, \fB\-\-flatpak\fP, \fB\-\-krew\fP and \fB\-\-npm\fP to add the corresponding entry instead\.
-.TP
-\fBbrew bundle remove\fP \fIname\fP [\.\.\.]
-Remove entries that match \fBname\fP from your \fBBrewfile\fP\&\. Use \fB\-\-formula\fP, \fB\-\-cask\fP, \fB\-\-tap\fP, \fB\-\-mas\fP, \fB\-\-vscode\fP, \fB\-\-go\fP, \fB\-\-cargo\fP, \fB\-\-uv\fP, \fB\-\-flatpak\fP, \fB\-\-krew\fP and \fB\-\-npm\fP to remove only entries of the corresponding type\. Passing \fB\-\-formula\fP also removes matches against formula aliases and old formula names\.
-.TP
-\fBbrew bundle exec\fP [\fB\-\-check\fP] [\fB\-\-no\-secrets\fP] \fIcommand\fP
-Run an external command in an isolated build environment based on the \fBBrewfile\fP dependencies\.
-.P
-This sanitized build environment ignores unrequested dependencies, which makes sure that things you didn\[u2019]t specify in your \fBBrewfile\fP won\[u2019]t get picked up by commands like \fBbundle install\fP, \fBnpm install\fP, etc\. It will also add compiler flags which will help with finding keg\-only dependencies like \fBopenssl\fP, \fBicu4c\fP, etc\.
-.TP
-\fBbrew bundle sh\fP [\fB\-\-check\fP] [\fB\-\-no\-secrets\fP]
-Run your shell in a \fBbrew bundle exec\fP environment\.
-.TP
-\fBbrew bundle env\fP [\fB\-\-check\fP] [\fB\-\-no\-secrets\fP]
-Print the environment variables that would be set in a \fBbrew bundle exec\fP environment\.
-.TP
 \fB\-\-file\fP
 Read from or write to the \fBBrewfile\fP from this location\. Use \fB\-\-file=\-\fP to pipe to stdin/stdout\.
 .TP
 \fB\-g\fP, \fB\-\-global\fP
 Read from or write to the \fBBrewfile\fP from \fB$HOMEBREW_BUNDLE_FILE_GLOBAL\fP (if set), \fB${XDG_CONFIG_HOME}/homebrew/Brewfile\fP (if \fB$XDG_CONFIG_HOME\fP is set), \fB~/\.homebrew/Brewfile\fP or \fB~/\.Brewfile\fP otherwise\.
 .TP
-\fB\-v\fP, \fB\-\-verbose\fP
-\fBinstall\fP prints output from commands as they are run\. \fBcheck\fP lists all missing dependencies\.
-.TP
-\fB\-\-no\-upgrade\fP
-\fBinstall\fP does not run \fBbrew upgrade\fP on outdated dependencies\. \fBcheck\fP does not check for outdated dependencies\. Note they may still be upgraded by \fBbrew install\fP if needed\. Enabled by default if \fB$HOMEBREW_BUNDLE_NO_UPGRADE\fP is set\.
+\fBbrew bundle upgrade\fP
+Shorthand for \fBbrew bundle install \-\-upgrade\fP\&\.
 .TP
 \fB\-\-upgrade\fP
-\fBinstall\fP runs \fBbrew upgrade\fP on outdated dependencies, even if \fB$HOMEBREW_BUNDLE_NO_UPGRADE\fP is set\.
+Run \fBbrew upgrade\fP on outdated dependencies, even if \fB$HOMEBREW_BUNDLE_NO_UPGRADE\fP is set\.
 .TP
 \fB\-\-upgrade\-formulae\fP
-\fBinstall\fP runs \fBbrew upgrade\fP on any of these comma\-separated formulae, even if \fB$HOMEBREW_BUNDLE_NO_UPGRADE\fP is set\.
-.TP
-\fB\-\-install\fP
-Run \fBinstall\fP before continuing to other operations, e\.g\. \fBexec\fP\&\.
+Run \fBbrew upgrade\fP on any of these comma\-separated formulae, even if \fB$HOMEBREW_BUNDLE_NO_UPGRADE\fP is set\.
 .TP
 \fB\-\-jobs\fP
-\fBinstall\fP runs up to this many formula installations in parallel\. Defaults to 1 (sequential)\. Use \fBauto\fP for the number of CPU cores (max 4)\.
+Run up to this many formula installations in parallel\. Defaults to 1 (sequential)\. Use \fBauto\fP for the number of CPU cores (max 4)\.
+.TP
+\fBbrew bundle sh\fP [\fB\-\-check\fP] [\fB\-\-no\-secrets\fP]
+Run your shell in a \fBbrew bundle exec\fP environment\.
+.TP
+\fB\-\-install\fP
+Run \fBinstall\fP before starting the shell\.
 .TP
 \fB\-\-services\fP
-Temporarily start services while running the \fBexec\fP or \fBsh\fP command\. Enabled by default if \fB$HOMEBREW_BUNDLE_SERVICES\fP is set\.
+Temporarily start services while running the shell\. Enabled by default if \fB$HOMEBREW_BUNDLE_SERVICES\fP is set\.
 .TP
-\fB\-f\fP, \fB\-\-force\fP
-\fBinstall\fP runs with \fB\-\-force\fP/\fB\-\-overwrite\fP\&\. \fBdump\fP overwrites an existing \fBBrewfile\fP\&\. \fBcleanup\fP actually performs its cleanup operations\.
+\fB\-\-check\fP
+Check that all dependencies in the Brewfile are installed before starting the shell\. Enabled by default if \fB$HOMEBREW_BUNDLE_CHECK\fP is set\.
 .TP
-\fB\-\-cleanup\fP
-\fBinstall\fP performs cleanup operation, same as running \fBcleanup \-\-force\fP\&\. Enabled by default if \fB$HOMEBREW_BUNDLE_INSTALL_CLEANUP\fP is set and \fB\-\-global\fP is passed\.
+\fB\-\-no\-secrets\fP
+Attempt to remove secrets from the environment before starting the shell\. Enabled by default if \fB$HOMEBREW_BUNDLE_NO_SECRETS\fP is set\.
 .TP
-\fB\-\-all\fP
-\fBlist\fP all dependencies\.
+\fBbrew bundle remove\fP \fIname\fP [\.\.\.]
+Remove entries that match \fBname\fP from your \fBBrewfile\fP\&\. Use \fB\-\-formula\fP, \fB\-\-cask\fP, \fB\-\-tap\fP, \fB\-\-mas\fP, \fB\-\-vscode\fP, \fB\-\-go\fP, \fB\-\-cargo\fP, \fB\-\-uv\fP, \fB\-\-flatpak\fP, \fB\-\-krew\fP and \fB\-\-npm\fP to remove only entries of the corresponding type\. Passing \fB\-\-formula\fP also removes matches against formula aliases and old formula names\.
+.TP
+\fB\-\-install\fP
+Run \fBinstall\fP before removing entries\.
 .TP
 \fB\-\-formula\fP
-\fBlist\fP, \fBdump\fP or \fBcleanup\fP Homebrew formula dependencies\.
+Remove Homebrew formula entries, including matches against formula aliases and old names\.
 .TP
 \fB\-\-cask\fP
-\fBlist\fP, \fBdump\fP or \fBcleanup\fP Homebrew cask dependencies\.
+Remove Homebrew cask entries\.
 .TP
 \fB\-\-tap\fP
-\fBlist\fP, \fBdump\fP or \fBcleanup\fP Homebrew tap dependencies\.
+Remove Homebrew tap entries\.
 .TP
 \fB\-\-mas\fP
-\fBlist\fP or \fBdump\fP Mac App Store dependencies\.
+Remove entries for Mac App Store dependencies\.
 .TP
 \fB\-\-vscode\fP
-\fBlist\fP, \fBdump\fP or \fBcleanup\fP VSCode (and forks/variants) extensions\.
+Remove entries for VSCode (and forks/variants) extensions\.
 .TP
 \fB\-\-go\fP
-\fBlist\fP, \fBdump\fP or \fBcleanup\fP Go packages\.
+Remove entries for Go packages\.
 .TP
 \fB\-\-cargo\fP
-\fBlist\fP, \fBdump\fP or \fBcleanup\fP Cargo packages\.
+Remove entries for Cargo packages\.
 .TP
 \fB\-\-uv\fP
-\fBlist\fP, \fBdump\fP or \fBcleanup\fP uv tools\.
+Remove entries for uv tools\.
 .TP
 \fB\-\-flatpak\fP
-\fBlist\fP, \fBdump\fP or \fBcleanup\fP Flatpak packages\. Note: Linux only\.
+Remove entries for Flatpak packages\. Note: Linux only\.
 .TP
 \fB\-\-krew\fP
-\fBlist\fP or \fBdump\fP Krew plugins\.
+Remove entries for Krew plugins\.
 .TP
 \fB\-\-npm\fP
-\fBlist\fP, \fBdump\fP or \fBcleanup\fP npm packages\.
+Remove entries for npm packages\.
+.TP
+\fBbrew bundle list\fP
+List all dependencies present in the \fBBrewfile\fP\&\.
+.P
+By default, only Homebrew formula dependencies are listed\.
+.TP
+\fB\-\-install\fP
+Run \fBinstall\fP before listing dependencies\.
+.TP
+\fB\-\-all\fP
+List all dependencies\.
+.TP
+\fB\-\-formula\fP
+List Homebrew formula dependencies\.
+.TP
+\fB\-\-cask\fP
+List Homebrew cask dependencies\.
+.TP
+\fB\-\-tap\fP
+List Homebrew tap dependencies\.
+.TP
+\fB\-\-mas\fP
+List Mac App Store dependencies\.
+.TP
+\fB\-\-vscode\fP
+List VSCode (and forks/variants) extensions\.
+.TP
+\fB\-\-go\fP
+List Go packages\.
+.TP
+\fB\-\-cargo\fP
+List Cargo packages\.
+.TP
+\fB\-\-uv\fP
+List uv tools\.
+.TP
+\fB\-\-flatpak\fP
+List Flatpak packages\. Note: Linux only\.
+.TP
+\fB\-\-krew\fP
+List Krew plugins\.
+.TP
+\fB\-\-npm\fP
+List npm packages\.
+.TP
+\fBbrew bundle\fP [\fBinstall\fP]
+Install and upgrade (by default) all dependencies from the \fBBrewfile\fP\&\.
+.P
+Use this to restore a recorded installed state from a \fBBrewfile\fP\&\.
+.P
+You can specify the \fBBrewfile\fP location using \fB\-\-file\fP or by setting the \fB$HOMEBREW_BUNDLE_FILE\fP environment variable\.
+.P
+You can skip the installation of dependencies by adding space\-separated values to one or more of the following environment variables: \fB$HOMEBREW_BUNDLE_BREW_SKIP\fP, \fB$HOMEBREW_BUNDLE_CASK_SKIP\fP, \fB$HOMEBREW_BUNDLE_MAS_SKIP\fP, \fB$HOMEBREW_BUNDLE_TAP_SKIP\fP\&\.
+.TP
+\fB\-v\fP, \fB\-\-verbose\fP
+Print output from commands as they are run\.
+.TP
+\fB\-\-no\-upgrade\fP
+Do not run \fBbrew upgrade\fP on outdated dependencies\. Note they may still be upgraded by \fBbrew install\fP if needed\. Enabled by default if \fB$HOMEBREW_BUNDLE_NO_UPGRADE\fP is set\.
+.TP
+\fB\-\-upgrade\fP
+Run \fBbrew upgrade\fP on outdated dependencies, even if \fB$HOMEBREW_BUNDLE_NO_UPGRADE\fP is set\.
+.TP
+\fB\-\-upgrade\-formulae\fP
+Run \fBbrew upgrade\fP on any of these comma\-separated formulae, even if \fB$HOMEBREW_BUNDLE_NO_UPGRADE\fP is set\.
+.TP
+\fB\-\-jobs\fP
+Run up to this many formula installations in parallel\. Defaults to 1 (sequential)\. Use \fBauto\fP for the number of CPU cores (max 4)\.
+.TP
+\fB\-f\fP, \fB\-\-force\fP
+Run with \fB\-\-force\fP/\fB\-\-overwrite\fP\&\.
+.TP
+\fB\-\-cleanup\fP
+Perform cleanup after installing dependencies, same as running \fBcleanup \-\-force\fP\&\. Enabled by default if \fB$HOMEBREW_BUNDLE_INSTALL_CLEANUP\fP is set and \fB\-\-global\fP is passed\.
+.TP
+\fB\-\-zap\fP
+Use \fBzap\fP instead of \fBuninstall\fP when cleaning up casks after installing dependencies\.
+.TP
+\fBbrew bundle exec\fP [\fB\-\-check\fP] [\fB\-\-no\-secrets\fP] \fIcommand\fP
+Run an external command in an isolated build environment based on the \fBBrewfile\fP dependencies\.
+.P
+This sanitized build environment ignores unrequested dependencies, which makes sure that things you didn\[u2019]t specify in your \fBBrewfile\fP won\[u2019]t get picked up by commands like \fBbundle install\fP, \fBnpm install\fP, etc\. It will also add compiler flags which will help with finding keg\-only dependencies like \fBopenssl\fP, \fBicu4c\fP, etc\.
+.TP
+\fB\-\-install\fP
+Run \fBinstall\fP before executing the command\.
+.TP
+\fB\-\-services\fP
+Temporarily start services while executing the command\. Enabled by default if \fB$HOMEBREW_BUNDLE_SERVICES\fP is set\.
+.TP
+\fB\-\-check\fP
+Check that all dependencies in the Brewfile are installed before executing the command\. Enabled by default if \fB$HOMEBREW_BUNDLE_CHECK\fP is set\.
+.TP
+\fB\-\-no\-secrets\fP
+Attempt to remove secrets from the environment before executing the command\. Enabled by default if \fB$HOMEBREW_BUNDLE_NO_SECRETS\fP is set\.
+.TP
+\fBbrew bundle env\fP [\fB\-\-check\fP] [\fB\-\-no\-secrets\fP]
+Print the environment variables that would be set in a \fBbrew bundle exec\fP environment\.
+.TP
+\fB\-\-install\fP
+Run \fBinstall\fP before printing the environment\.
+.TP
+\fB\-\-check\fP
+Check that all dependencies in the Brewfile are installed before printing the environment\. Enabled by default if \fB$HOMEBREW_BUNDLE_CHECK\fP is set\.
+.TP
+\fB\-\-no\-secrets\fP
+Attempt to remove secrets from the environment before printing it\. Enabled by default if \fB$HOMEBREW_BUNDLE_NO_SECRETS\fP is set\.
+.TP
+\fBbrew bundle edit\fP
+Edit the \fBBrewfile\fP in your editor\.
+.TP
+\fB\-\-install\fP
+Run \fBinstall\fP before editing the \fBBrewfile\fP\&\.
+.TP
+\fBbrew bundle dump\fP
+Write all installed casks/formulae/images/taps into a \fBBrewfile\fP in the current directory or to a custom file specified with the \fB\-\-file\fP option\. This is useful as an installed\-state snapshot and can be kept in version control and diffed\.
+.TP
+\fB\-\-install\fP
+Run \fBinstall\fP before dumping dependencies\.
+.TP
+\fB\-f\fP, \fB\-\-force\fP
+Overwrite an existing \fBBrewfile\fP\&\.
+.TP
+\fB\-\-formula\fP
+Dump Homebrew formula dependencies\.
+.TP
+\fB\-\-cask\fP
+Dump Homebrew cask dependencies\.
+.TP
+\fB\-\-tap\fP
+Dump Homebrew tap dependencies\.
+.TP
+\fB\-\-mas\fP
+Dump Mac App Store dependencies\.
+.TP
+\fB\-\-vscode\fP
+Dump VSCode (and forks/variants) extensions\.
+.TP
+\fB\-\-go\fP
+Dump Go packages\.
+.TP
+\fB\-\-cargo\fP
+Dump Cargo packages\.
+.TP
+\fB\-\-uv\fP
+Dump uv tools\.
+.TP
+\fB\-\-flatpak\fP
+Dump Flatpak packages\. Note: Linux only\.
+.TP
+\fB\-\-krew\fP
+Dump Krew plugins\.
+.TP
+\fB\-\-npm\fP
+Dump npm packages\.
 .TP
 \fB\-\-no\-vscode\fP
 \fBdump\fP without VSCode (and forks/variants) extensions\. Enabled by default if \fB$HOMEBREW_BUNDLE_DUMP_NO_VSCODE\fP is set\.
@@ -228,19 +341,106 @@ Temporarily start services while running the \fBexec\fP or \fBsh\fP command\. En
 \fBdump\fP without npm packages\. Enabled by default if \fB$HOMEBREW_BUNDLE_DUMP_NO_NPM\fP is set\.
 .TP
 \fB\-\-describe\fP
-\fBdump\fP and \fBadd\fP add a description comment above each line, unless the dependency does not have a description\. Enabled by default if \fB$HOMEBREW_BUNDLE_DESCRIBE\fP is set\.
+Add a description comment above each line, unless the dependency does not have a description\. Enabled by default if \fB$HOMEBREW_BUNDLE_DESCRIBE\fP is set\.
 .TP
 \fB\-\-no\-restart\fP
-\fBdump\fP does not add \fBrestart_service\fP to formula lines\.
+Do not add \fBrestart_service\fP to formula lines\.
+.TP
+\fBbrew bundle cleanup\fP
+Uninstall all dependencies not present in the \fBBrewfile\fP\&\.
+.P
+This workflow is useful for maintainers or testers who regularly install lots of formulae\.
+.P
+Unless \fB\-\-force\fP is passed, this returns a 1 exit code if anything would be removed\.
+.TP
+\fB\-\-install\fP
+Run \fBinstall\fP before cleaning up dependencies\.
+.TP
+\fB\-f\fP, \fB\-\-force\fP
+Actually perform cleanup operations\.
+.TP
+\fB\-\-formula\fP
+Clean up Homebrew formula dependencies\.
+.TP
+\fB\-\-cask\fP
+Clean up Homebrew cask dependencies\.
+.TP
+\fB\-\-tap\fP
+Clean up Homebrew tap dependencies\.
+.TP
+\fB\-\-vscode\fP
+Clean up VSCode (and forks/variants) extensions\.
+.TP
+\fB\-\-go\fP
+Clean up Go packages\.
+.TP
+\fB\-\-cargo\fP
+Clean up Cargo packages\.
+.TP
+\fB\-\-uv\fP
+Clean up uv tools\.
+.TP
+\fB\-\-flatpak\fP
+Clean up Flatpak packages\. Note: Linux only\.
+.TP
+\fB\-\-npm\fP
+Clean up npm packages\.
 .TP
 \fB\-\-zap\fP
-\fBcleanup\fP casks using the \fBzap\fP command instead of \fBuninstall\fP\&\.
+Clean up casks using the \fBzap\fP command instead of \fBuninstall\fP\&\.
 .TP
-\fB\-\-check\fP
-Check that all dependencies in the Brewfile are installed before running \fBexec\fP, \fBsh\fP, or \fBenv\fP\&\. Enabled by default if \fB$HOMEBREW_BUNDLE_CHECK\fP is set\.
+\fBbrew bundle check\fP
+Check if all dependencies present in the \fBBrewfile\fP are installed\.
+.P
+This provides a successful exit code if everything is up\-to\-date, making it useful for scripting\. Use \fB\-\-verbose\fP to list unmet dependencies\.
 .TP
-\fB\-\-no\-secrets\fP
-Attempt to remove secrets from the environment before \fBexec\fP, \fBsh\fP, or \fBenv\fP\&\. Enabled by default if \fB$HOMEBREW_BUNDLE_NO_SECRETS\fP is set\.
+\fB\-v\fP, \fB\-\-verbose\fP
+List all missing dependencies\.
+.TP
+\fB\-\-no\-upgrade\fP
+Do not check for outdated dependencies\. Note they may still be upgraded by \fBbrew install\fP if needed\. Enabled by default if \fB$HOMEBREW_BUNDLE_NO_UPGRADE\fP is set\.
+.TP
+\fB\-\-install\fP
+Run \fBinstall\fP before checking dependencies\.
+.TP
+\fBbrew bundle add\fP \fIname\fP [\.\.\.]
+Add entries to your \fBBrewfile\fP\&\. Adds formulae by default\. Use \fB\-\-cask\fP, \fB\-\-tap\fP, \fB\-\-vscode\fP, \fB\-\-go\fP, \fB\-\-cargo\fP, \fB\-\-uv\fP, \fB\-\-flatpak\fP, \fB\-\-krew\fP and \fB\-\-npm\fP to add the corresponding entry instead\.
+.TP
+\fB\-\-install\fP
+Run \fBinstall\fP before adding entries\.
+.TP
+\fB\-\-formula\fP
+Add Homebrew formula entries\.
+.TP
+\fB\-\-cask\fP
+Add Homebrew cask entries\.
+.TP
+\fB\-\-tap\fP
+Add Homebrew tap entries\.
+.TP
+\fB\-\-vscode\fP
+Add entries for VSCode (and forks/variants) extensions\.
+.TP
+\fB\-\-go\fP
+Add entries for Go packages\.
+.TP
+\fB\-\-cargo\fP
+Add entries for Cargo packages\.
+.TP
+\fB\-\-uv\fP
+Add entries for uv tools\.
+.TP
+\fB\-\-flatpak\fP
+Add entries for Flatpak packages\. Note: Linux only\.
+.TP
+\fB\-\-krew\fP
+Add entries for Krew plugins\.
+.TP
+\fB\-\-npm\fP
+Add entries for npm packages\.
+.TP
+\fB\-\-describe\fP
+Add a description comment above each line, unless the dependency does not have a description\. Enabled by default if \fB$HOMEBREW_BUNDLE_DESCRIBE\fP is set\.
 .SS "\fBcasks\fP"
 List all locally installable casks including short names\.
 .SS "\fBcleanup\fP \fR[\fIoptions\fP] \fR[\fIformula\fP|\fIcask\fP \.\.\.]"
@@ -276,11 +476,14 @@ Control whether Homebrew automatically links external tap shell completion files
 .UR https://docs\.brew\.sh/Shell\-Completion
 .UE \&\.
 .TP
+\fBbrew completions unlink\fP
+Unlink Homebrew\[u2019]s completions\.
+.TP
 \fBbrew completions\fP [\fBstate\fP]
 Display the current state of Homebrew\[u2019]s completions\.
 .TP
-\fBbrew completions\fP (\fBlink\fP|\fBunlink\fP)
-Link or unlink Homebrew\[u2019]s completions\.
+\fBbrew completions link\fP
+Link Homebrew\[u2019]s completions\.
 .SS "\fBconfig\fP, \fB\-\-config\fP"
 Show Homebrew and system configuration info useful for debugging\. If you file a bug report, you will be required to provide this information\.
 .SS "\fBdeps\fP \fR[\fIoptions\fP] \fR[\fIformula\fP|\fIcask\fP \.\.\.]"
@@ -387,8 +590,11 @@ Control Homebrew\[u2019]s developer mode\. When developer mode is enabled, \fBbr
 \fBbrew developer\fP [\fBstate\fP]
 Display the current state of Homebrew\[u2019]s developer mode\.
 .TP
-\fBbrew developer\fP (\fBon\fP|\fBoff\fP)
-Turn Homebrew\[u2019]s developer mode on or off respectively\.
+\fBbrew developer on\fP
+Turn Homebrew\[u2019]s developer mode on\.
+.TP
+\fBbrew developer off\fP
+Turn Homebrew\[u2019]s developer mode off\.
 .SS "\fBdocs\fP"
 Open Homebrew\[u2019]s online documentation at 
 .UR https://docs\.brew\.sh
@@ -404,6 +610,19 @@ List all audit methods, which can be run individually if provided as arguments\.
 .TP
 \fB\-D\fP, \fB\-\-audit\-debug\fP
 Enable debugging and profiling of audit methods\.
+.SS "\fBexec\fP, \fBx\fP \fR[\fB\-\-formulae=\fP\fIformulae\fP] \fR[\fB\-\-\fP] \fIcommand\fP \fR[\fIargs\fP \.\.\.]"
+Run \fIcommand\fP in an environment populated by Homebrew formulae\.
+.P
+If \fB\-\-formulae\fP is passed, Homebrew installs those comma\-separated formulae if needed, prepends their executable directories and those of their dependencies to \fBPATH\fP and runs \fIcommand\fP\&\. This allows \fIcommand\fP to be a script path such as \fB\&\./script\.sh\fP\&\.
+.P
+If \fB\-\-formulae\fP is omitted, Homebrew finds a formula that provides \fIcommand\fP, installs it if needed and runs that executable\.
+.P
+Example: \fBbrew exec \-\-formulae=jq,yq \-\- \./script\.sh\fP
+.P
+Scripts can also use a shebang on systems with \fBenv \-S\fP: \fB#!/usr/bin/env \-S brew exec \-\-formulae=jq,yq \-\-\fP
+.TP
+\fB\-\-formulae\fP
+Comma\-separated formulae to install and add to \fBPATH\fP before running \fIcommand\fP\&\.
 .SS "\fBfetch\fP \fR[\fIoptions\fP] \fIformula\fP|\fIcask\fP \fR[\.\.\.]"
 Download a bottle (if available) or source packages for \fIformula\fPe and binaries for \fIcask\fPs\. For files, also print SHA\-256 checksums\.
 .TP
@@ -536,7 +755,7 @@ Print the verification and post\-install steps\.
 Show what would be installed, but do not actually install anything\.
 .TP
 \fB\-\-ask\fP
-Ask for confirmation before downloading and installing formulae\. Print download and install sizes of bottles and dependencies\. Enabled by default if \fB$HOMEBREW_ASK\fP is set\.
+Ask for confirmation before downloading and installing\. Print a dependency plan, including added, changed and removed packages and dependencies, with download and install sizes of formula bottles\. Enabled by default if \fB$HOMEBREW_ASK\fP is set\.
 .TP
 \fB\-\-formula\fP
 Treat all named arguments as formulae\.
@@ -653,7 +872,7 @@ Show the version number for installed formulae, or only the specified formulae i
 Only show formulae with multiple versions installed\. Implies \fB\-\-versions\fP\&\.
 .TP
 \fB\-\-pinned\fP
-List only pinned formulae, or only the specified (pinned) formulae if \fIformula\fP are provided\. See also \fBpin\fP, \fBunpin\fP\&\.
+List only pinned packages, or only the specified (pinned) packages if \fIformula\fP or \fIcask\fP are provided\. See also \fBpin\fP, \fBunpin\fP\&\.
 .TP
 \fB\-\-installed\-on\-request\fP
 List the formulae installed on request\.
@@ -772,10 +991,16 @@ Also include outdated casks including those with \fBversion :latest\fP\&\.
 .TP
 \fB\-\-greedy\-auto\-updates\fP
 Also include outdated \fBauto_updates true\fP casks that would otherwise be skipped\.
-.SS "\fBpin\fP \fIinstalled_formula\fP \fR[\.\.\.]"
-Pin the specified \fIformula\fP, preventing them from being upgraded when issuing the \fBbrew upgrade\fP \fIformula\fP command\. See also \fBunpin\fP\&\.
+.SS "\fBpin\fP \fR[\fB\-\-formula\fP] \fR[\fB\-\-cask\fP] \fIinstalled_formula\fP|\fIinstalled_cask\fP \fR[\.\.\.]"
+Pin the specified package, preventing it from being upgraded when issuing the \fBbrew upgrade\fP \fIformula\fP or \fIcask\fP command\. See also \fBunpin\fP\&\.
 .P
-\fINote:\fP Other packages which depend on newer versions of a pinned formula might not install or run correctly\.
+\fINote:\fP Other packages which depend on newer versions of a pinned formula might not install or run correctly\. Pinned casks with \fBauto_updates true\fP may update themselves outside Homebrew\.
+.TP
+\fB\-\-formula\fP
+Treat all named arguments as formulae\.
+.TP
+\fB\-\-cask\fP
+Treat all named arguments as casks\.
 .SS "\fBpostinstall\fP, \fBpost_install\fP \fIinstalled_formula\fP \fR[\.\.\.]"
 Rerun the post\-install steps for \fIformula\fP\&\.
 .SS "\fBpyenv\-sync\fP"
@@ -826,7 +1051,7 @@ Install without checking for previously installed keg\-only or non\-migrated ver
 Print the verification and post\-install steps\.
 .TP
 \fB\-\-ask\fP
-Ask for confirmation before downloading and upgrading formulae\. Print download, install and net install sizes of bottles and dependencies\. Enabled by default if \fB$HOMEBREW_ASK\fP is set\.
+Ask for confirmation before downloading and reinstalling\. Print a dependency plan, including added, changed and removed packages and dependencies, with download and install sizes of formula bottles\. Enabled by default if \fB$HOMEBREW_ASK\fP is set\.
 .TP
 \fB\-\-formula\fP
 Treat all named arguments as formulae\.
@@ -921,35 +1146,11 @@ Manage background services with macOS\[u2019] \fBlaunchctl\fP(1) daemon manager 
 .P
 If \fBsudo\fP is passed, operate on \fB/Library/LaunchDaemons\fP or \fB/usr/lib/systemd/system\fP (started at boot)\. Otherwise, operate on \fB~/Library/LaunchAgents\fP or \fB~/\.config/systemd/user\fP (started at login)\.
 .TP
-[\fBsudo\fP] \fBbrew services\fP [\fBlist\fP] [\fB\-\-json\fP] [\fB\-\-debug\fP]
-List information about all managed services for the current user (or root)\. Provides more output from Homebrew and \fBlaunchctl\fP(1) or \fBsystemctl\fP(1) if run with \fB\-\-debug\fP\&\.
-.TP
-[\fBsudo\fP] \fBbrew services info\fP (\fIformula\fP|\fB\-\-all\fP) [\fB\-\-json\fP]
-List all managed services for the current user (or root)\.
-.TP
-[\fBsudo\fP] \fBbrew services run\fP (\fIformula\fP|\fB\-\-all\fP) [\fB\-\-file=\fP]
-Run the service \fIformula\fP without registering to launch at login (or boot)\.
-.TP
-[\fBsudo\fP] \fBbrew services start\fP (\fIformula\fP|\fB\-\-all\fP) [\fB\-\-file=\fP]
-Start the service \fIformula\fP immediately and register it to launch at login (or boot)\.
+\fB\-\-sudo\-service\-user\fP
+When run as root on macOS, run the service(s) as this user\.
 .TP
 [\fBsudo\fP] \fBbrew services stop\fP [\fB\-\-keep\fP] [\fB\-\-no\-wait\fP|\fB\-\-max\-wait=\fP] (\fIformula\fP|\fB\-\-all\fP)
 Stop the service \fIformula\fP immediately and unregister it from launching at login (or boot), unless \fB\-\-keep\fP is specified\.
-.TP
-[\fBsudo\fP] \fBbrew services kill\fP (\fIformula\fP|\fB\-\-all\fP)
-Stop the service \fIformula\fP immediately but keep it registered to launch at login (or boot)\.
-.TP
-[\fBsudo\fP] \fBbrew services restart\fP (\fIformula\fP|\fB\-\-all\fP) [\fB\-\-file=\fP]
-Stop (if necessary) and start the service \fIformula\fP immediately and register it to launch at login (or boot)\.
-.TP
-[\fBsudo\fP] \fBbrew services cleanup\fP
-Remove all unused services\.
-.TP
-\fB\-\-file\fP
-Use the service file from this location to \fBstart\fP the service\.
-.TP
-\fB\-\-sudo\-service\-user\fP
-When run as root on macOS, run the service(s) as this user\.
 .TP
 \fB\-\-max\-wait\fP
 Wait at most this many seconds for \fBstop\fP to finish stopping a service\. Defaults to 60\. Set this to zero (0) seconds to wait indefinitely\.
@@ -961,10 +1162,58 @@ Don\[u2019]t wait for \fBstop\fP to finish stopping the service\.
 When stopped, don\[u2019]t unregister the service from launching at login (or boot)\.
 .TP
 \fB\-\-all\fP
-Run \fIsubcommand\fP on all services\.
+Stop all services and unregister them from launching at login (or boot), unless \fB\-\-keep\fP is specified\.
+.TP
+[\fBsudo\fP] \fBbrew services start\fP (\fIformula\fP|\fB\-\-all\fP) [\fB\-\-file=\fP]
+Start the service \fIformula\fP immediately and register it to launch at login (or boot)\.
+.TP
+\fB\-\-file\fP
+Use the service file from this location to \fBstart\fP the service\.
+.TP
+\fB\-\-all\fP
+Start all services and register them to launch at login (or boot)\.
+.TP
+[\fBsudo\fP] \fBbrew services run\fP (\fIformula\fP|\fB\-\-all\fP) [\fB\-\-file=\fP]
+Run the service \fIformula\fP without registering to launch at login (or boot)\.
+.TP
+\fB\-\-file\fP
+Use the service file from this location to \fBrun\fP the service\.
+.TP
+\fB\-\-all\fP
+Run all services without registering them to launch at login (or boot)\.
+.TP
+[\fBsudo\fP] \fBbrew services restart\fP (\fIformula\fP|\fB\-\-all\fP) [\fB\-\-file=\fP]
+Stop (if necessary) and start the service \fIformula\fP immediately and register it to launch at login (or boot)\.
+.TP
+\fB\-\-file\fP
+Use the service file from this location to \fBstart\fP the service\.
+.TP
+\fB\-\-all\fP
+Restart all services\.
+.TP
+[\fBsudo\fP] \fBbrew services\fP [\fBlist\fP] [\fB\-\-json\fP] [\fB\-\-debug\fP]
+List information about all managed services for the current user (or root)\. Provides more output from Homebrew and \fBlaunchctl\fP(1) or \fBsystemctl\fP(1) if run with \fB\-\-debug\fP\&\.
 .TP
 \fB\-\-json\fP
 Output as JSON\.
+.TP
+[\fBsudo\fP] \fBbrew services kill\fP (\fIformula\fP|\fB\-\-all\fP)
+Stop the service \fIformula\fP immediately but keep it registered to launch at login (or boot)\.
+.TP
+\fB\-\-all\fP
+Stop all services immediately but keep them registered to launch at login (or boot)\.
+.TP
+[\fBsudo\fP] \fBbrew services info\fP (\fIformula\fP|\fB\-\-all\fP) [\fB\-\-json\fP]
+List all managed services for the current user (or root)\.
+.TP
+\fB\-\-all\fP
+List all managed services\.
+.TP
+\fB\-\-json\fP
+Output as JSON\.
+.TP
+[\fBsudo\fP] \fBbrew services cleanup\fP
+Remove all unused services\.
 .SS "\fBsetup\-ruby\fP \fR[\fIcommand\fP \.\.\.]"
 Installs and configures Homebrew\[u2019]s Ruby\. If \fBcommand\fP is passed, it will only run Bundler if necessary for that command\.
 .SS "\fBshellenv\fP \fR[\fIshell\fP \.\.\.]"
@@ -1047,8 +1296,14 @@ Remove symlinks for \fIformula\fP from Homebrew\[u2019]s prefix\. This can be us
 .TP
 \fB\-n\fP, \fB\-\-dry\-run\fP
 List files which would be unlinked without actually unlinking or deleting any files\.
-.SS "\fBunpin\fP \fIinstalled_formula\fP \fR[\.\.\.]"
-Unpin \fIformula\fP, allowing them to be upgraded by \fBbrew upgrade\fP \fIformula\fP\&\. See also \fBpin\fP\&\.
+.SS "\fBunpin\fP \fR[\fB\-\-formula\fP] \fR[\fB\-\-cask\fP] \fIinstalled_formula\fP|\fIinstalled_cask\fP \fR[\.\.\.]"
+Unpin the specified package, allowing it to be upgraded by \fBbrew upgrade\fP \fIformula\fP or \fIcask\fP\&\. See also \fBpin\fP\&\.
+.TP
+\fB\-\-formula\fP
+Treat all named arguments as formulae\.
+.TP
+\fB\-\-cask\fP
+Treat all named arguments as casks\.
 .SS "\fBuntap\fP \fR[\fB\-\-force\fP] \fItap\fP \fR[\.\.\.]"
 Remove a tapped formula repository\.
 .TP
@@ -1078,7 +1333,7 @@ Fetch and reset Homebrew and all tap repositories (or any specified \fIrepositor
 .P
 \fINote:\fP this will destroy all your uncommitted or committed changes\.
 .SS "\fBupgrade\fP \fR[\fIoptions\fP] \fR[\fIinstalled_formula\fP|\fIinstalled_cask\fP \.\.\.]"
-Upgrade outdated casks and outdated, unpinned formulae using the same options they were originally installed with, plus any appended brew formula options\. If \fIcask\fP or \fIformula\fP are specified, upgrade only the given \fIcask\fP or \fIformula\fP kegs (unless they are pinned; see \fBpin\fP, \fBunpin\fP)\.
+Upgrade outdated, unpinned packages using the same options they were originally installed with, plus any appended brew formula options\. If \fIcask\fP or \fIformula\fP are specified, upgrade only the given \fIcask\fP or \fIformula\fP (unless they are pinned; see \fBpin\fP, \fBunpin\fP)\.
 .P
 Unless \fB$HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK\fP is set, \fBbrew upgrade\fP or \fBbrew reinstall\fP will be run for outdated dependents and dependents with broken linkage, respectively\.
 .P
@@ -1100,7 +1355,7 @@ Print the verification and post\-install steps\.
 Show what would be upgraded, but do not actually upgrade anything\.
 .TP
 \fB\-\-ask\fP
-Ask for confirmation before downloading and upgrading formulae\. Print download, install and net install sizes of bottles and dependencies\. Enabled by default if \fB$HOMEBREW_ASK\fP is set\.
+Ask for confirmation before downloading and upgrading\. Print the same plan as \fB\-\-dry\-run\fP, including available download sizes\. Enabled by default if \fB$HOMEBREW_ASK\fP is set\.
 .TP
 \fB\-\-formula\fP
 Treat all named arguments as formulae\. If no named arguments are specified, upgrade only outdated formulae\.
@@ -1185,14 +1440,11 @@ Include only formulae\.
 Include only casks\.
 .SS "\fBversion\-install\fP \fIformula\fP[@\fIversion\fP] \fR[\fIversion\fP]"
 Extract a specific \fIversion\fP of \fIformula\fP into a personal tap and install it\. The default tap is \fIuser\fP/versions\. \fIuser\fP uses the GitHub username if available and the local username otherwise\.
-.SS "\fBwhich\-formula\fP \fR[\fB\-\-explain\fP] \fR[\fB\-\-skip\-update\fP] \fIcommand\fP \fR[\.\.\.]"
+.SS "\fBwhich\-formula\fP \fR[\fB\-\-explain\fP] \fIcommand\fP \fR[\.\.\.]"
 Show which formula(e) provides the given command\.
 .TP
 \fB\-\-explain\fP
 Output explanation of how to get \fIcommand\fP by installing one of the providing formulae\.
-.TP
-\fB\-\-skip\-update\fP
-Skip updating the executables database if any version exists on disk, no matter how old\.
 .SS "\fB\-\-cache\fP \fR[\fIoptions\fP] \fR[\fIformula\fP|\fIcask\fP \.\.\.]"
 Display Homebrew\[u2019]s download cache\. See also \fB$HOMEBREW_CACHE\fP\&\.
 .P
@@ -2383,7 +2635,7 @@ Update the vendored portable Ruby version files, bottle checksums, \fButils/ruby
 Print what would be done rather than doing it\.
 .TP
 \fB\-\-skip\-vendor\-install\fP
-Do not run \fBbrew vendor\-install ruby\fP; skip the \fButils/ruby\.sh\fP and \fBGemfile\.lock\fP updates\.
+Do not run \fBbrew vendor\-install ruby\fP; skip the \fButils/ruby\.sh\fP, \fBGemfile\.lock\fP and RBI updates\.
 .SS "\fBupdate\-python\-resources\fP \fR[\fIoptions\fP] \fIformula\fP \fR[\.\.\.]"
 Update versions for PyPI resource blocks in \fIformula\fP\&\.
 .TP
@@ -2462,23 +2714,17 @@ Return JSON for the attestation data for each bottle\.
 .SS "\fBwhich\-update\fP \fR[\fIoptions\fP] \fIdatabase\fP"
 Database update for \fBbrew which\-formula\fP\&\.
 .TP
-\fB\-\-stats\fP
-Print statistics about the database contents (number of commands and formulae, list of missing formulae)\.
+\fB\-\-bottle\-json\-dir\fP
+Use generated bottle JSON files in the given directory to update formula entries\.
 .TP
-\fB\-\-commit\fP
-Commit the changes using \fBgit\fP\&\.
+\fB\-\-removed\-formulae\-file\fP
+Remove database entries for formulae listed in the given file\.
 .TP
-\fB\-\-update\-existing\fP
-Update database entries with outdated formula versions\.
+\fB\-\-pull\-request\fP
+Update entries for formula changes in the given pull request number\.
 .TP
-\fB\-\-install\-missing\fP
-Install and update formulae that are missing from the database and don\[u2019]t have bottles\.
-.TP
-\fB\-\-eval\-all\fP
-Evaluate all installed taps, rather than just the core tap\.
-.TP
-\fB\-\-max\-downloads\fP
-Specify a maximum number of formulae to download and update\.
+\fB\-\-repository\fP
+GitHub repository for \fB\-\-pull\-request\fP (default: \fB$GITHUB_REPOSITORY\fP)\.
 .TP
 \fB\-\-summary\-file\fP
 Output a summary of the changes to a file\.
@@ -2487,6 +2733,9 @@ These options are applicable to the \fBinstall\fP, \fBreinstall\fP and \fBupgrad
 .TP
 \fB\-\-appdir\fP
 Target location for Applications (default: \fB/Applications\fP)\.
+.TP
+\fB\-\-appimagedir\fP
+Target location for AppImages (default: \fB~/Applications\fP)\.
 .TP
 \fB\-\-keyboard\-layoutdir\fP
 Target location for Keyboard Layouts (default: \fB/Library/Keyboard Layouts\fP)\.
@@ -2606,7 +2855,7 @@ Prefix all download URLs, including those for bottles, with this value\. For exa
 When \fB$HOMEBREW_ARTIFACT_DOMAIN\fP and \fB$HOMEBREW_ARTIFACT_DOMAIN_NO_FALLBACK\fP are both set, if the request to \fB$HOMEBREW_ARTIFACT_DOMAIN\fP fails then Homebrew will error rather than trying any other/default URLs\.
 .TP
 \fBHOMEBREW_ASK\fP
-If set, pass \fB\-\-ask\fP to all formulae \fBbrew install\fP, \fBbrew upgrade\fP and \fBbrew reinstall\fP commands\.
+If set, pass \fB\-\-ask\fP to \fBbrew install\fP, \fBbrew upgrade\fP and \fBbrew reinstall\fP commands\.
 .TP
 \fBHOMEBREW_AUTO_UPDATE_SECS\fP
 Run \fBbrew update\fP once every \fB$HOMEBREW_AUTO_UPDATE_SECS\fP seconds before some commands, e\.g\. \fBbrew install\fP, \fBbrew upgrade\fP or \fBbrew tap\fP\&\. Alternatively, disable auto\-update entirely with \fB$HOMEBREW_NO_AUTO_UPDATE\fP\&\.
@@ -2911,6 +3160,9 @@ If set, do not send analytics\. Google Analytics were destroyed\. For more infor
 .UR https://docs\.brew\.sh/Analytics
 .UE
 .TP
+\fBHOMEBREW_NO_ASK\fP
+If set, do not ask for confirmation before downloading and installing, upgrading or reinstalling formulae and casks\. This is a no\-op until ask mode becomes the default behaviour in a later release\.
+.TP
 \fBHOMEBREW_NO_AUTOREMOVE\fP
 If set, calls to \fBbrew cleanup\fP and \fBbrew uninstall\fP will not automatically remove unused formula dependents\.
 .TP
@@ -2964,6 +3216,9 @@ If set, \fBbrew install\fP \fIformula|cask\fP will not upgrade \fIformula|cask\f
 \fBHOMEBREW_NO_PATH_SHADOW_CHECK\fP
 If set, \fBbrew info\fP and \fBbrew install\fP will not warn when a formula\[u2019]s executables are shadowed by other commands earlier on \fB$PATH\fP\&\.
 .TP
+\fBHOMEBREW_NO_SANDBOX_LINUX\fP
+If set, disable the Linux sandbox\.
+.TP
 \fBHOMEBREW_NO_UPDATE_REPORT_NEW\fP
 If set, \fBbrew update\fP will not show the list of newly added formulae/casks\.
 .TP
@@ -2979,6 +3234,9 @@ If set, \fBbrew install\fP \fIformula\fP will use this URL to download PyPI pack
 .TP
 \fBHOMEBREW_PRY\fP
 If set, use Pry for the \fBbrew irb\fP command\.
+.TP
+\fBHOMEBREW_SANDBOX_LINUX\fP
+If set, use the \fBbwrap\fP(1) sandbox for formula installation and testing on Linux\.
 .TP
 \fBHOMEBREW_SBOM\fP
 If set, Homebrew will write SBOM files and run SBOM\-related installation logic\. This is a no\-op until Homebrew 5\.2\.0, when it will become required for that behaviour\.

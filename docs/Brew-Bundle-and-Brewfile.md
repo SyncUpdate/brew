@@ -54,6 +54,8 @@ You can use this behaviour in scripts like so:
 brew bundle check || brew bundle install
 ```
 
+If this fails without `--verbose`, run `brew bundle check --verbose` to list unmet dependencies.
+
 ### Types
 
 As well as supporting formulae (`brew "..."`), you can also use `brew bundle` with casks, taps, Mac App Store apps, VSCode extensions, Go packages, Cargo packages, uv tools, Flatpak packages and krew kubectl plugins and to start background services with `brew services`.
@@ -103,7 +105,7 @@ for how you might use a `Brewfile` and `brew bundle` to install project dependen
 
 ### `brew bundle dump`
 
-`Brewfile`s can also be used as a way of saving all supported packages into a single file.
+`Brewfile`s can also be used as a way of saving all supported packages into a single file. `brew bundle dump` is Homebrew's installed-state snapshot command: it records supported installed formulae, casks, taps and other package types as a `Brewfile`.
 
 You can do this with `brew bundle dump --global --force` to write to e.g. `~/.Brewfile` (check `man brew` for the exact path used in your configuration):
 
@@ -124,11 +126,13 @@ might add something like the following:
 brew "ruby"
 ```
 
-You can then reinstall (and, by default, upgrade) all of these with:
+You can then restore (and, by default, upgrade) all of these with:
 
 ```console
 brew bundle --global
 ````
+
+You can keep multiple snapshots by writing to different `Brewfile`s with `--file`, commit them to version control and compare them with standard diff tools. To make the active installed state match a snapshot more closely, run `brew bundle cleanup --force --file=/path/to/Brewfile` after installing it to remove supported dependencies not listed in that `Brewfile`.
 
 ## Advanced Usage
 
@@ -321,6 +325,15 @@ cask "google-cloud-sdk", postinstall: "${HOMEBREW_PREFIX}/bin/gcloud components 
 # Sets an environment variable to be used e.g. inside `brew bundle exec` or `system` commands in the `Brewfile`.
 # Note: HOMEBREW_PREFIX/bin is _not_ in the `PATH` by default so you can set it this way.
 ENV["SOME_ENV_VAR"] = "some_value"
+```
+
+### `version_file`
+
+Formula entries support `version_file:` to write the installed formula version to a file after `brew bundle install` processes that formula.
+This is useful when a project wants Homebrew to install a runtime and keep a conventional version file such as `.ruby-version` in sync.
+
+```ruby
+brew "ruby", version_file: ".ruby-version"
 ```
 
 ## Versions

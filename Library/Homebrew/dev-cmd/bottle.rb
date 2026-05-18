@@ -9,7 +9,6 @@ require "tab"
 require "sbom"
 require "keg"
 require "formula_versions"
-require "utils/inreplace"
 require "erb"
 require "utils/gzip"
 require "api"
@@ -358,6 +357,7 @@ module Homebrew
         return if gnu_tar_formula.blank?
 
         gnu_tar_formula.ensure_installed!(reason: "bottling")
+        gnu_tar_formula
       end
 
       sig { params(mtime: String, default_tar: T::Boolean).returns([String, T::Array[String]]) }

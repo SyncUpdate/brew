@@ -54,8 +54,7 @@ module Homebrew
         boolean:     true,
       },
       HOMEBREW_ASK:                              {
-        description: "If set, pass `--ask` to all formulae `brew install`, `brew upgrade` and `brew reinstall` " \
-                     "commands.",
+        description: "If set, pass `--ask` to `brew install`, `brew upgrade` and `brew reinstall` commands.",
         boolean:     true,
       },
       HOMEBREW_AUTO_UPDATE_SECS:                 {
@@ -386,6 +385,12 @@ module Homebrew
                      "For more information, see: <https://docs.brew.sh/Analytics>",
         boolean:     true,
       },
+      HOMEBREW_NO_ASK:                           {
+        description: "If set, do not ask for confirmation before downloading and installing, upgrading or " \
+                     "reinstalling formulae and casks. This is a no-op until ask mode becomes the default " \
+                     "behaviour in a later release.",
+        boolean:     true,
+      },
       HOMEBREW_NO_AUTOREMOVE:                    {
         description: "If set, calls to `brew cleanup` and `brew uninstall` will not automatically " \
                      "remove unused formula dependents.",
@@ -464,6 +469,10 @@ module Homebrew
                      "shadowed by other commands earlier on `$PATH`.",
         boolean:     true,
       },
+      HOMEBREW_NO_SANDBOX_LINUX:                 {
+        description: "If set, disable the Linux sandbox.",
+        boolean:     true,
+      },
       HOMEBREW_NO_UPDATE_REPORT_NEW:             {
         description: "If set, `brew update` will not show the list of newly added formulae/casks.",
         boolean:     true,
@@ -485,6 +494,10 @@ module Homebrew
       },
       HOMEBREW_PRY:                              {
         description: "If set, use Pry for the `brew irb` command.",
+        boolean:     true,
+      },
+      HOMEBREW_SANDBOX_LINUX:                    {
+        description: "If set, use the `bwrap`(1) sandbox for formula installation and testing on Linux.",
         boolean:     true,
       },
       HOMEBREW_SBOM:                             {
@@ -617,6 +630,7 @@ module Homebrew
       :HOMEBREW_CASK_OPTS_REQUIRE_SHA,
       :HOMEBREW_FORBID_PACKAGES_FROM_PATHS,
       :HOMEBREW_DOWNLOAD_CONCURRENCY,
+      :HOMEBREW_SANDBOX_LINUX,
       :HOMEBREW_UPGRADE_AUTO_UPDATES_CASKS,
       :HOMEBREW_USE_INTERNAL_API,
     ]).freeze, T::Set[Symbol])
@@ -758,6 +772,14 @@ module Homebrew
       end
 
       [concurrency, 1].max
+    end
+
+    sig { returns(T::Boolean) }
+    def sandbox_linux?
+      return false if Homebrew::EnvConfig.no_sandbox_linux?
+
+      sandbox_linux = ENV.fetch("HOMEBREW_SANDBOX_LINUX", nil)
+      sandbox_linux.present? && FALSY_VALUES.exclude?(sandbox_linux.downcase)
     end
 
     sig { returns(T::Boolean) }

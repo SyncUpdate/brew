@@ -946,6 +946,54 @@ RSpec.describe Formula do
     expect(f.head).to be_nil
   end
 
+  describe "#ensure_installed!" do
+    let(:f) do
+      formula do
+        url "foo-1.2.3"
+      end
+    end
+
+    let(:executable) { Pathname.new("/usr/bin/foo") }
+
+    it "uses a system executable without checking the version by default" do
+      allow(f).to receive(:which).with("foo", ORIGINAL_PATHS).and_return(executable)
+
+      expect(SystemCommand).not_to receive(:run)
+      expect(f).not_to receive(:any_version_installed?)
+
+      expect(f.ensure_installed!(executable: "foo", output_to_stderr: false)).to eq(executable)
+    end
+
+    it "uses a matching system executable when latest is requested" do
+      allow(f).to receive(:which).with("foo", ORIGINAL_PATHS).and_return(executable)
+      allow(SystemCommand).to receive(:run)
+        .with(executable, args: ["--version"], print_stderr: false)
+        .and_return(instance_double(SystemCommand::Result, success?: true, stdout: "foo 1.2.3\n"))
+
+      expect(f.ensure_installed!(executable: "foo", latest: true, output_to_stderr: false)).to eq(executable)
+    end
+
+    it "passes custom version arguments to the version check" do
+      allow(f).to receive(:which).with("foo", ORIGINAL_PATHS).and_return(executable)
+      allow(SystemCommand).to receive(:run)
+        .with(executable, args: ["-version"], print_stderr: false)
+        .and_return(instance_double(SystemCommand::Result, success?: true, stdout: "1.2.3\n"))
+
+      expect(f.ensure_installed!(executable: "foo", latest: true, output_to_stderr: false,
+                                 version_args: ["-version"])).to eq(executable)
+    end
+
+    it "returns the brewed executable path when the system version does not match latest" do
+      allow(f).to receive(:which).with("foo", ORIGINAL_PATHS).and_return(executable)
+      allow(SystemCommand).to receive(:run)
+        .with(executable, args: ["--version"], print_stderr: false)
+        .and_return(instance_double(SystemCommand::Result, success?: true, stdout: "foo 1.2.2\n"))
+      allow(f).to receive_messages(any_version_installed?: true, latest_version_installed?: true)
+
+      expect(f.ensure_installed!(executable: "foo", latest: true, output_to_stderr: false)).to eq(f.opt_bin/"foo")
+    end
+  end
+
   it "honors attributes declared before specs" do
     f = formula do
       url "foo-1.0"
@@ -1032,6 +1080,47 @@ RSpec.describe Formula do
 
     expect(f1).to have_post_install_defined
     expect(f2).not_to have_post_install_defined
+  end
+
+  describe "#install_etc_var" do
+    let(:f) do
+      formula "config-upgrade" do
+        url "foo-2.0"
+        version "2.0"
+      end
+    end
+    let(:config_file) { HOMEBREW_PREFIX/"etc/config-upgrade.conf" }
+    let(:default_config_file) { Pathname("#{config_file}.default") }
+    let(:old_default_file) { f.rack/"1.0/.bottle/etc/config-upgrade.conf" }
+    let(:new_default_file) { f.bottle_prefix/"etc/config-upgrade.conf" }
+
+    before do
+      FileUtils.rm_rf f.rack
+      FileUtils.rm_f config_file
+      FileUtils.rm_f default_config_file
+
+      old_default_file.dirname.mkpath
+      old_default_file.write "old\n"
+      new_default_file.dirname.mkpath
+      new_default_file.write "new\n"
+      config_file.dirname.mkpath
+    end
+
+    it "replaces config that matches the previous default" do
+      config_file.write "old\n"
+
+      f.install_etc_var
+
+      expect([config_file.read, default_config_file.exist?]).to eq(["new\n", false])
+    end
+
+    it "writes a default file when the config was modified" do
+      config_file.write "custom\n"
+
+      f.install_etc_var
+
+      expect([config_file.read, default_config_file.read]).to eq(["custom\n", "new\n"])
+    end
   end
 
   specify "test fixtures" do

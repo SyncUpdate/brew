@@ -76,6 +76,35 @@ RSpec.describe Cask::Cask, :cask do
     end
   end
 
+  describe "#pinned?" do
+    it "ignores and replaces a dangling pin" do
+      HOMEBREW_PINNED_CASKS.mkpath
+      cask.pin_path.make_relative_symlink(cask.caskroom_path/"missing")
+
+      expect(cask).not_to be_pinned
+      expect(cask.pinned_version).to be_nil
+
+      allow(cask).to receive(:installed_version).and_return("1.0")
+      (cask.caskroom_path/"1.0").mkpath
+      cask.pin
+
+      expect(cask).to be_pinned
+      expect(cask.pinned_version).to eq("1.0")
+    end
+
+    it "replaces a regular file pin record" do
+      HOMEBREW_PINNED_CASKS.mkpath
+      cask.pin_path.write("not a symlink")
+      allow(cask).to receive(:installed_version).and_return("1.0")
+      (cask.caskroom_path/"1.0").mkpath
+
+      cask.pin
+
+      expect(cask).to be_pinned
+      expect(cask.pin_path).to be_a_symlink
+    end
+  end
+
   describe "load" do
     let(:tap_path) { CoreCaskTap.instance.path }
     let(:file_dirname) { Pathname.new(__FILE__).dirname }
@@ -500,134 +529,36 @@ RSpec.describe Cask::Cask, :cask do
     end
   end
 
-  describe "#contains_os_specific_artifacts?" do
-    it "returns false when there are no OSes defined" do
-      cask = described_class.new("test-no-os") do
-        version "0.0.1,2"
-
-        url "https://brew.sh/test-0.0.1.dmg"
-        name "Test"
-        desc "Test cask"
-        homepage "https://brew.sh"
-      end
-
-      expect(cask.contains_os_specific_artifacts?).to be false
-    end
-
-    it "returns false when there are no artifacts" do
-      cask = described_class.new("test-os-no-artifacts") do
-        os macos: "mac", linux: "Linux"
-        version "0.0.1,2"
-
-        url "https://brew.sh/test-0.0.1.dmg"
-        name "Test"
-        desc "Test cask"
-        homepage "https://brew.sh"
-      end
-
-      expect(cask.contains_os_specific_artifacts?).to be false
-    end
-
-    it "returns false when there are scoped app" do
-      cask = described_class.new("test-macos-app-artifact") do
-        version "0.0.1,2"
-
-        url "https://brew.sh/test-0.0.1.dmg"
-        name "Test"
-        desc "Test cask"
-        homepage "https://brew.sh"
-
-        on_macos do
-          app "Test.app"
-        end
-      end
-
-      expect(cask.contains_os_specific_artifacts?).to be false
-    end
-
-    it "returns false when version is only defined in on_* blocks and referenced at top level" do
-      cask = described_class.new("test-version-in-on-blocks") do
-        on_monterey :or_newer do
-          version "2.0"
-        end
-        on_big_sur :or_older do
-          version "1.0"
-        end
-
-        url "https://brew.sh/test-#{version.major}.dmg"
-        name "Test"
-        desc "Test cask"
-        homepage "https://brew.sh"
-      end
-
-      expect(cask.contains_os_specific_artifacts?).to be false
-    end
-
-    it "returns true when there are unscoped app artifacts" do
-      cask = described_class.new("test-os-app-artifact") do
-        os macos: "mac", linux: "Linux"
-        version "0.0.1,2"
-
-        url "https://brew.sh/test-0.0.1.dmg"
-        name "Test"
-        desc "Test cask"
-        homepage "https://brew.sh"
-
-        app "Test.app"
-      end
-
-      expect(cask.contains_os_specific_artifacts?).to be true
-    end
-  end
-
   describe "#supports_linux?" do
-    it "uses explicit macOS dependencies before falling back to heuristics" do
+    it "uses explicit OS dependencies and defaults to Linux support" do
       expect(Cask::CaskLoader.load("with-depends-on-macos-bare").supports_linux?).to be false
       expect(Cask::CaskLoader.load("with-depends-on-maximum-macos").supports_linux?).to be false
       expect(Cask::CaskLoader.load("with-depends-on-macos-in-on-macos").supports_linux?).to be true
       expect(Cask::CaskLoader.load("with-depends-on-linux-bare").supports_linux?).to be true
 
-      macos_artifact_cask = described_class.new("scoped-macos-dependency-with-app") do
-        version "1.0"
-        sha256 "bbbb"
-
-        url "https://brew.sh/test.zip"
-        homepage "https://brew.sh"
-
-        on_macos do
-          depends_on macos: :catalina
-        end
-
-        app "Test.app"
-      end
-
-      expect(macos_artifact_cask.supports_linux?).to be false
-    end
-
-    it "reflects whether the cask has only platform-agnostic artifacts" do
       expect(Cask::CaskLoader.load("with-non-executable-binary").supports_linux?).to be true
-      expect(Cask::CaskLoader.load("basic-cask").supports_linux?).to be false
-      expect(Cask::CaskLoader.load("with-installer-manual").supports_linux?).to be false
-
-      arch_only_cask = described_class.new("arch-only-binary") do
-        version "1.0"
-        sha256 arm: "aaaa", intel: "bbbb"
-
-        url "https://brew.sh/test-#{version}.tar.gz"
-        name "Arch Only Binary"
-        desc "Cask with arch-only sha256 and a binary artifact"
-        homepage "https://brew.sh"
-
-        binary "some-tool"
-      end
-
-      expect(arch_only_cask.supports_linux?).to be true
+      expect(Cask::CaskLoader.load("basic-cask").supports_linux?).to be true
+      expect(Cask::CaskLoader.load("with-installer-manual").supports_linux?).to be true
     end
   end
 
   describe "#supports_macos?" do
     it "returns false for casks with bare depends_on :linux" do
       expect(Cask::CaskLoader.load("with-depends-on-linux-bare").supports_macos?).to be false
+    end
+  end
+
+  describe "#outdated_info" do
+    it "includes pinned cask details" do
+      cask = Cask::CaskLoader.load("local-caffeine")
+      allow(cask).to receive_messages(outdated_version: "1.2.2", pinned?: true, pinned_version: "1.2.2")
+
+      expect(cask.outdated_info(false, true, false, false, false))
+        .to eq("local-caffeine (1.2.2) != 1.2.3 [pinned at 1.2.2]")
+      expect(cask.outdated_info(false, false, true, false, false)).to include(
+        pinned:         true,
+        pinned_version: "1.2.2",
+      )
     end
   end
 

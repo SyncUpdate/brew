@@ -29,18 +29,19 @@ module Cask
         greedy:              T.nilable(T::Boolean),
         greedy_latest:       T.nilable(T::Boolean),
         greedy_auto_updates: T.nilable(T::Boolean),
+        summary_pinned:      T.nilable(T::Array[String]),
         summary_disabled:    T.nilable(T::Array[String]),
       ).returns(T::Array[Cask])
     }
     def self.outdated_casks(casks, args:, force:, quiet:,
                             greedy: false, greedy_latest: false, greedy_auto_updates: false,
-                            summary_disabled: nil)
+                            summary_pinned: nil, summary_disabled: nil)
       # Validate mutually exclusive opt-in/opt-out env vars before we start
       # selecting casks so `brew upgrade` errors consistently.
       Homebrew::EnvConfig.upgrade_auto_updates_casks?
       greedy = true if Homebrew::EnvConfig.upgrade_greedy?
 
-      if casks.empty?
+      outdated_casks = if casks.empty?
         Caskroom.casks(config: Config.from_args(args)).select do |cask|
           if cask.disabled?
             summary_disabled&.push(cask.full_name)
@@ -73,6 +74,18 @@ module Cask
           end
         end
       end
+
+      pinned_casks = outdated_casks.select(&:pinned?)
+      outdated_casks -= pinned_casks
+      summary_pinned&.concat(pinned_casks.map { |cask| "#{cask.full_name} #{cask.installed_version}" })
+
+      if pinned_casks.any? && (!quiet || casks.any?)
+        message = "Not upgrading #{pinned_casks.count} pinned #{::Utils.pluralize("package", pinned_casks.count)}:"
+        casks.any? ? ofail(message) : opoo(message)
+        $stderr.puts pinned_casks.map { |cask| "#{cask.full_name} #{cask.installed_version}" } * ", " unless quiet
+      end
+
+      outdated_casks
     end
 
     sig { params(cask_upgrades: T::Array[String], dry_run: T.nilable(T::Boolean)).void }
@@ -103,6 +116,7 @@ module Cask
         show_upgrade_summary: T::Boolean,
         download_queue:       T.nilable(Homebrew::DownloadQueue),
         summary_upgrades:     T.nilable(T::Array[String]),
+        summary_pinned:       T.nilable(T::Array[String]),
         summary_deprecated:   T.nilable(T::Array[String]),
         summary_disabled:     T.nilable(T::Array[String]),
       ).returns(T::Boolean)
@@ -125,6 +139,7 @@ module Cask
       show_upgrade_summary: true,
       download_queue: nil,
       summary_upgrades: nil,
+      summary_pinned: nil,
       summary_deprecated: nil,
       summary_disabled: nil
     )
@@ -132,7 +147,7 @@ module Cask
 
       outdated_casks =
         self.outdated_casks(casks, args:, greedy:, greedy_latest:, greedy_auto_updates:, force:, quiet:,
-                                   summary_disabled:)
+                                   summary_pinned:, summary_disabled:)
 
       manual_installer_casks = outdated_casks.select do |cask|
         cask.artifacts.any? do |artifact|
@@ -292,6 +307,22 @@ module Cask
       false
     end
 
+    sig { params(old_cask: Cask).void }
+    def self.reopen_apps_after_upgrade(old_cask)
+      bundle_ids = old_cask.artifacts
+                           .grep(Artifact::Uninstall)
+                           .flat_map(&:bundle_ids_to_reopen)
+      return if bundle_ids.empty?
+
+      ohai "Reopening #{bundle_ids.count} #{::Utils.pluralize("application",
+                                                              bundle_ids.count)} closed during upgrade:"
+      bundle_ids.each do |bundle_id|
+        puts bundle_id
+        system("open", "-b", bundle_id)
+      end
+    end
+    private_class_method :reopen_apps_after_upgrade
+
     sig {
       params(
         old_cask:       Cask,
@@ -350,7 +381,7 @@ module Cask
         puts "  #{old_cask.version} -> #{new_cask.version}"
 
         # Start new cask's installation steps
-        new_cask_installer.check_conflicts
+        new_cask_installer.prelude
 
         if (caveats = new_cask_installer.caveats)
           puts caveats
@@ -391,6 +422,8 @@ module Cask
 
         # If successful, wipe the old cask from staging.
         old_cask_installer.finalize_upgrade
+
+        reopen_apps_after_upgrade(old_cask)
       rescue => e
         new_cask_installer.uninstall_artifacts(successor: old_cask) if new_artifacts_installed
         new_cask_installer.purge_versioned_files

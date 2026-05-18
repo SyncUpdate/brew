@@ -35,7 +35,6 @@ create
 debugger
 deps
 desc
-determine-test-runners
 developer
 dispatch-build-bottle
 docs
@@ -43,6 +42,7 @@ doctor
 dr
 edit
 environment
+exec
 extract
 fetch
 formula
@@ -50,7 +50,6 @@ formula-analytics
 formulae
 generate-analytics-api
 generate-cask-api
-generate-cask-ci-matrix
 generate-formula-api
 generate-internal-api
 generate-man-completions
@@ -134,8 +133,8 @@ update-test
 upgrade
 uses
 vendor-gems
-vendor-install
 verify
 version-install
 which-formula
 which-update
+x

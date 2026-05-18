@@ -7,7 +7,7 @@ module Cask
   module Artifact
     # Artifact corresponding to the `uninstall` stanza.
     class Uninstall < AbstractUninstall
-      UPGRADE_REINSTALL_SKIP_DIRECTIVES = [:quit, :signal].freeze
+      UPGRADE_REINSTALL_SKIP_DIRECTIVES = [:signal].freeze
 
       sig {
         params(
@@ -42,7 +42,7 @@ module Cask
         end
 
         filtered_directives.each do |directive_sym|
-          dispatch_uninstall_directive(directive_sym, **options)
+          dispatch_uninstall_directive(directive_sym, **options, upgrade:)
         end
       end
 
