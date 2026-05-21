@@ -32,22 +32,36 @@ RSpec.describe Homebrew::Cmd::TapInfo do
       allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
     end
 
-    it "marks an uninstalled formula as unsatisfied" do
-      expect(tap_info.send(:decorate_formula, tap, "missing", installed: false)).to match(/missing.*✘/)
+    it "does not mark an uninstalled formula" do
+      expect(tap_info.send(:decorate_formula, tap, "missing", installed: false)).not_to match(/✘/)
     end
 
     it "marks an installed formula as satisfied" do
-      formula = instance_double(Formula, outdated?: false)
+      formula = instance_double(Formula, outdated?: false, deprecated?: false, disabled?: false)
       allow(Formulary).to receive(:factory).with("homebrew/foo/installed").and_return(formula)
 
       expect(tap_info.send(:decorate_formula, tap, "installed", installed: true)).to match(/installed.*✔/)
     end
 
     it "marks an outdated installed formula as upgradable" do
-      formula = instance_double(Formula, outdated?: true)
+      formula = instance_double(Formula, outdated?: true, deprecated?: false, disabled?: false)
       allow(Formulary).to receive(:factory).with("homebrew/foo/outdated").and_return(formula)
 
       expect(tap_info.send(:decorate_formula, tap, "outdated", installed: true)).to match(/outdated.*↑/)
+    end
+
+    it "marks a deprecated formula with `(deprecated)`" do
+      formula = instance_double(Formula, outdated?: false, deprecated?: true, disabled?: false)
+      allow(Formulary).to receive(:factory).with("homebrew/foo/old").and_return(formula)
+
+      expect(tap_info.send(:decorate_formula, tap, "old", installed: false)).to match(/old.*\(deprecated\)/)
+    end
+
+    it "marks a disabled formula with `(disabled)`" do
+      formula = instance_double(Formula, outdated?: false, deprecated?: false, disabled?: true)
+      allow(Formulary).to receive(:factory).with("homebrew/foo/gone").and_return(formula)
+
+      expect(tap_info.send(:decorate_formula, tap, "gone", installed: false)).to match(/gone.*\(disabled\)/)
     end
   end
 
@@ -60,22 +74,36 @@ RSpec.describe Homebrew::Cmd::TapInfo do
       allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
     end
 
-    it "marks an uninstalled cask as unsatisfied" do
-      expect(tap_info.send(:decorate_cask, tap, "missing", installed: false)).to match(/missing.*✘/)
+    it "does not mark an uninstalled cask" do
+      expect(tap_info.send(:decorate_cask, tap, "missing", installed: false)).not_to match(/✘/)
     end
 
     it "marks an installed cask as satisfied" do
-      cask = instance_double(Cask::Cask, outdated?: false)
+      cask = instance_double(Cask::Cask, outdated?: false, deprecated?: false, disabled?: false)
       allow(Cask::CaskLoader).to receive(:load).with("homebrew/foo/installed").and_return(cask)
 
       expect(tap_info.send(:decorate_cask, tap, "installed", installed: true)).to match(/installed.*✔/)
     end
 
     it "marks an outdated installed cask as upgradable" do
-      cask = instance_double(Cask::Cask, outdated?: true)
+      cask = instance_double(Cask::Cask, outdated?: true, deprecated?: false, disabled?: false)
       allow(Cask::CaskLoader).to receive(:load).with("homebrew/foo/outdated").and_return(cask)
 
       expect(tap_info.send(:decorate_cask, tap, "outdated", installed: true)).to match(/outdated.*↑/)
+    end
+
+    it "marks a deprecated cask with `(deprecated)`" do
+      cask = instance_double(Cask::Cask, outdated?: false, deprecated?: true, disabled?: false)
+      allow(Cask::CaskLoader).to receive(:load).with("homebrew/foo/old").and_return(cask)
+
+      expect(tap_info.send(:decorate_cask, tap, "old", installed: false)).to match(/old.*\(deprecated\)/)
+    end
+
+    it "marks a disabled cask with `(disabled)`" do
+      cask = instance_double(Cask::Cask, outdated?: false, deprecated?: false, disabled?: true)
+      allow(Cask::CaskLoader).to receive(:load).with("homebrew/foo/gone").and_return(cask)
+
+      expect(tap_info.send(:decorate_cask, tap, "gone", installed: false)).to match(/gone.*\(disabled\)/)
     end
   end
 
@@ -102,16 +130,29 @@ RSpec.describe Homebrew::Cmd::TapInfo do
         allow(Formula).to receive(:installed_formula_names).and_return(["foo"])
         allow(Cask::Caskroom).to receive(:tokens).and_return(["bar"])
         allow(Formulary).to receive(:factory).with("homebrew/foo/foo")
-                                             .and_return(instance_double(Formula, outdated?: false))
+                                             .and_return(instance_double(Formula, outdated?:   false,
+                                                                                  deprecated?: false,
+                                                                                  disabled?:   false))
+        allow(Formulary).to receive(:factory).with("homebrew/foo/uninstalled-formula")
+                                             .and_return(instance_double(Formula, outdated?:   false,
+                                                                                  deprecated?: false,
+                                                                                  disabled?:   false))
         allow(Cask::CaskLoader).to receive(:load).with("homebrew/foo/bar")
-                                                 .and_return(instance_double(Cask::Cask, outdated?: false))
+                                                 .and_return(instance_double(Cask::Cask, outdated?:   false,
+                                                                                         deprecated?: false,
+                                                                                         disabled?:   false))
+        allow(Cask::CaskLoader).to receive(:load).with("homebrew/foo/uninstalled-cask")
+                                                 .and_return(instance_double(Cask::Cask, outdated?:   false,
+                                                                                         deprecated?: false,
+                                                                                         disabled?:   false))
       end
 
-      it "lists every formula and cask with mixed install markers under their headers" do
+      it "lists every formula and cask, marking only the installed ones" do
         expect { tap_info.send(:print_tap_listings, tap) }
           .to output(
-            /Commands.*mycmd.*==> Formulae.*foo.*✔.*uninstalled-formula.*✘.*==> Casks.*bar.*✔.*uninstalled-cask.*✘/m,
+            /Commands.*mycmd.*==> Formulae.*foo.*✔.*uninstalled-formula.*==> Casks.*bar.*✔.*uninstalled-cask/m,
           ).to_stdout
+        expect { tap_info.send(:print_tap_listings, tap) }.not_to output(/✘/).to_stdout
       end
     end
 
@@ -132,7 +173,9 @@ RSpec.describe Homebrew::Cmd::TapInfo do
         allow(Formula).to receive(:installed_formula_names).and_return(["formula7"])
         allow(Cask::Caskroom).to receive(:tokens).and_return([])
         allow(Formulary).to receive(:factory).with("homebrew/foo/formula7")
-                                             .and_return(instance_double(Formula, outdated?: false))
+                                             .and_return(instance_double(Formula, outdated?:   false,
+                                                                                  deprecated?: false,
+                                                                                  disabled?:   false))
       end
 
       it "warns about truncation and shows only installed entries under the standard header" do
@@ -159,9 +202,10 @@ RSpec.describe Homebrew::Cmd::TapInfo do
         allow(Cask::Caskroom).to receive(:tokens).and_return([])
       end
 
-      it "lists every formula and cask with uninstalled markers" do
+      it "lists every formula and cask without uninstalled markers" do
         expect { tap_info.send(:print_tap_listings, tap) }
-          .to output(/==> Formulae.*baz.*✘.*foo.*✘.*==> Casks.*bar.*✘/m).to_stdout
+          .to output(/==> Formulae.*baz.*foo.*==> Casks.*bar/m).to_stdout
+        expect { tap_info.send(:print_tap_listings, tap) }.not_to output(/✘/).to_stdout
       end
     end
 

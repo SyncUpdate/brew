@@ -150,18 +150,32 @@ module Homebrew
 
       sig { params(tap: Tap, name: String, installed: T::Boolean).returns(String) }
       def decorate_formula(tap, name, installed:)
-        outdated = installed && Formulary.factory("#{tap.name}/#{name}").outdated?
-        pretty_install_status(name, installed:, outdated:)
+        formula = Formulary.factory("#{tap.name}/#{name}")
+        pretty_install_status(
+          name,
+          installed:,
+          outdated:         installed && formula.outdated?,
+          deprecated:       formula.deprecated?,
+          disabled:         formula.disabled?,
+          mark_uninstalled: false,
+        )
       rescue
-        pretty_installed(name)
+        pretty_install_status(name, installed:, mark_uninstalled: false)
       end
 
       sig { params(tap: Tap, token: String, installed: T::Boolean).returns(String) }
       def decorate_cask(tap, token, installed:)
-        outdated = installed && Cask::CaskLoader.load("#{tap.name}/#{token}").outdated?
-        pretty_install_status(token, installed:, outdated:)
+        cask = Cask::CaskLoader.load("#{tap.name}/#{token}")
+        pretty_install_status(
+          token,
+          installed:,
+          outdated:         installed && cask.outdated?,
+          deprecated:       cask.deprecated?,
+          disabled:         cask.disabled?,
+          mark_uninstalled: false,
+        )
       rescue
-        pretty_installed(token)
+        pretty_install_status(token, installed:, mark_uninstalled: false)
       end
 
       sig { params(taps: T::Array[Tap]).void }

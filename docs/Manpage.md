@@ -133,6 +133,14 @@ Control Homebrew's anonymous aggregate user behaviour analytics. Read more at
 
 : Turn Homebrew's analytics off.
 
+### `as-console-user` *`command`* \[*`args`* ...\]
+
+Run a Homebrew command as the active macOS console user.
+
+This is intended for MDM, Munki and Jamf workflows where `brew` is invoked as
+root but Homebrew operations should run as the logged-in console user. The
+nested command is always dispatched through `HOMEBREW_BREW_FILE`.
+
 ### `autoremove` \[`--dry-run`\]
 
 Uninstall formulae that were only installed as a dependency of another formula
@@ -160,25 +168,6 @@ Note: Flatpak support is only available on Linux.
 : Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if
   set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set),
   `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise.
-
-`brew bundle upgrade`
-
-: Shorthand for `brew bundle install --upgrade`.
-
-`--upgrade`
-
-: Run `brew upgrade` on outdated dependencies, even if
-  `$HOMEBREW_BUNDLE_NO_UPGRADE` is set.
-
-`--upgrade-formulae`
-
-: Run `brew upgrade` on any of these comma-separated formulae, even if
-  `$HOMEBREW_BUNDLE_NO_UPGRADE` is set.
-
-`--jobs`
-
-: Run up to this many formula installations in parallel. Defaults to 1
-  (sequential). Use `auto` for the number of CPU cores (max 4).
 
 `brew bundle sh` \[`--check`\] \[`--no-secrets`\]
 
@@ -318,11 +307,13 @@ By default, only Homebrew formula dependencies are listed.
 
 : List npm packages.
 
-`brew bundle` \[`install`\]
+`brew bundle` \[`install`\|`upgrade`\]
 
 : Install and upgrade (by default) all dependencies from the `Brewfile`.
 
 Use this to restore a recorded installed state from a `Brewfile`.
+
+`brew bundle upgrade` is shorthand for `brew bundle install --upgrade`.
 
 You can specify the `Brewfile` location using `--file` or by setting the
 `$HOMEBREW_BUNDLE_FILE` environment variable.
@@ -1168,10 +1159,8 @@ upgrade *`formula`* if it is already installed but outdated.
 
 `--ask`
 
-: Ask for confirmation before downloading and installing. Print a dependency
-  plan, including added, changed and removed packages and dependencies, with
-  download and install sizes of formula bottles. Enabled by default if
-  `$HOMEBREW_ASK` is set.
+: Ask for confirmation before downloading and installing. Print the same plan as
+  `--dry-run` before prompting. Enabled by default if `$HOMEBREW_ASK` is set.
 
 `--formula`
 
@@ -1353,6 +1342,12 @@ paths within its current keg. If *`cask`* is provided, list its artifacts.
 : Show the version number for installed formulae, or only the specified formulae
   if *`formula`* are provided.
 
+`--json`
+
+: Output installed formulae and casks with versions, linked and opt-linked
+  formula versions and pinned versions as JSON using the fast Bash command path.
+  Requires `--versions`, no named arguments and `jq`.
+
 `--multiple`
 
 : Only show formulae with multiple versions installed. Implies `--versions`.
@@ -1529,6 +1524,11 @@ otherwise.
   deprecated and is currently the default if no version is specified. `v2`
   prints outdated formulae and casks.
 
+`--minimum-version`
+
+: Only list a named formula or cask with an installed version below the given
+  minimum version.
+
 `--fetch-HEAD`
 
 : Fetch the upstream repository to detect if the HEAD installation of the
@@ -1653,10 +1653,8 @@ for the reinstalled formulae or, every 30 days, for all formulae.
 
 `--ask`
 
-: Ask for confirmation before downloading and reinstalling. Print a dependency
-  plan, including added, changed and removed packages and dependencies, with
-  download and install sizes of formula bottles. Enabled by default if
-  `$HOMEBREW_ASK` is set.
+: Ask for confirmation before downloading and reinstalling. Print what would be
+  reinstalled before prompting. Enabled by default if `$HOMEBREW_ASK` is set.
 
 `--formula`
 
@@ -2140,6 +2138,11 @@ for the upgraded formulae or, every 30 days, for all formulae.
 `-n`, `--dry-run`
 
 : Show what would be upgraded, but do not actually upgrade anything.
+
+`--minimum-version`
+
+: Only upgrade a named formula or cask with an installed version below the given
+  minimum version.
 
 `--ask`
 

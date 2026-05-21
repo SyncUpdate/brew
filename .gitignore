@@ -24,6 +24,7 @@
 /Library/Taps
 /Library/PinnedTaps
 /Library/Homebrew/.byebug_history
+/Library/Homebrew/test/.npm/
 /Library/Homebrew/test/.rdbg_history
 
 # Ignore Bundler files
@@ -193,6 +194,8 @@
 !/.editorconfig
 !/.gitignore
 !/.irb_config
+!/.licenses
+!/.licenses/**
 !/.ruby-version
 !/.shellcheckrc
 !/.vale.ini
