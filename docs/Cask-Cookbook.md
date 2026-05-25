@@ -94,12 +94,16 @@ Having a common order for stanzas makes casks easier to update and parse. Below 
     stage_only
 
     preflight
+    preflight_steps
 
     postflight
+    postflight_steps
 
     uninstall_preflight
+    uninstall_preflight_steps
 
     uninstall_postflight
+    uninstall_postflight_steps
 
     uninstall
 
@@ -142,6 +146,7 @@ Each cask must declare one or more [artifacts](/rubydoc/Cask/Artifact.html) (i.e
 | `bash_completion`                | yes                           | Relative path to a Bash completion file that should be linked into the `$(brew --prefix)/etc/bash_completion.d` folder on installation. |
 | `fish_completion`                | yes                           | Relative path to a fish completion file that should be linked into the `$(brew --prefix)/share/fish/vendor_completions.d` folder on installation. |
 | `zsh_completion`                 | yes                           | Relative path to a Zsh completion file that should be linked into the `$(brew --prefix)/share/zsh/site-functions` folder on installation. |
+| `generate_completions_from_executable` | yes                      | Command and arguments used to generate shell completions from an executable at installation time. |
 | `colorpicker`                    | yes                           | Relative path to a ColorPicker plugin that should be moved into the `~/Library/ColorPickers` folder on installation. |
 | `dictionary`                     | yes                           | Relative path to a Dictionary that should be moved into the `~/Library/Dictionaries` folder on installation. |
 | `font`                           | yes                           | Relative path to a Font that should be moved into the `~/Library/Fonts` folder on installation. |
@@ -158,6 +163,16 @@ Each cask must declare one or more [artifacts](/rubydoc/Cask/Artifact.html) (i.e
 | `artifact`                       | yes                           | Relative path to an arbitrary path that should be moved on installation. Must provide an absolute path as a `target`. (Example: [free-gpgmail.rb](https://github.com/Homebrew/homebrew-cask/blob/b3c438d608d9702380edf10d5495e0727cf17108/Casks/f/free-gpgmail.rb#L44)) This is only for unusual cases; the `app` stanza is strongly preferred when moving `.app` bundles. |
 | `stage_only`                     | no                            | `true`. Asserts that the cask contains no activatable artifacts. |
 
+### Cask artifact trust and sandboxing
+
+Homebrew treats cask installation artifacts as trusted vendor installation actions once the cask has been accepted. Artifact stanzas such as [`app`](#stanza-app), [`pkg`](#stanza-pkg) and [`installer script`](#installer-script) are expected to install software and may write outside the Caskroom through Homebrew-managed moves, macOS installer services or vendor installer code.
+
+Generated completion artifacts are different: `generate_completions_from_executable` runs an installed executable only to produce shell completion text. That execution is sandboxed where Homebrew has an available sandbox. The sandbox allows reading the staged cask, writing temporary/cache files and blocks network access. This limits side effects from commands that should only print completion data.
+
+`installer script:` is not sandboxed. Many installer scripts are vendor installers that require broad filesystem writes, macOS services or `sudo`; macOS sandboxing does not work for root processes, and narrowing the write allowlist to the Caskroom plus uninstall or zap paths would break installers that legitimately write elsewhere. It would also change documented `SystemCommand` behaviours such as `sudo:`, `must_succeed:` and output handling.
+
+`pkg` artifacts are not run in the cask sandbox either. They are installed by macOS `/usr/sbin/installer`, which applies package payloads, scripts and receipts according to the package metadata.
+
 ### Optional stanzas
 
 | name                                       | multiple occurrences allowed? | value |
@@ -168,9 +183,13 @@ Each cask must declare one or more [artifacts](/rubydoc/Cask/Artifact.html) (i.e
 | [`deprecate!`](#stanza-deprecate--disable) | no                            | Date as a string in `YYYY-MM-DD` format and a string or symbol providing a reason. |
 | [`disable!`](#stanza-deprecate--disable)   | no                            | Date as a string in `YYYY-MM-DD` format and a string or symbol providing a reason. |
 | `preflight`                                | yes                           | Ruby block containing preflight install operations (needed only in very rare cases). |
+| `preflight_steps`                          | yes                           | Declarative file preparation steps run before artifact installation. |
 | [`postflight`](#stanza-flight)             | yes                           | Ruby block containing postflight install operations. |
+| `postflight_steps`                         | yes                           | Declarative file preparation steps run after artifact installation. |
 | `uninstall_preflight`                      | yes                           | Ruby block containing preflight uninstall operations (needed only in very rare cases). |
+| `uninstall_preflight_steps`                | yes                           | Declarative file preparation steps run before artifact uninstallation. |
 | `uninstall_postflight`                     | yes                           | Ruby block containing postflight uninstall operations. |
+| `uninstall_postflight_steps`               | yes                           | Declarative file preparation steps run after artifact uninstallation. |
 | [`language`](#stanza-language)             | required                      | Ruby block, called with language code parameters, containing other stanzas and/or a return value. |
 | `container nested:`                        | no                            | Relative path to an inner container that must be extracted before moving on with the installation. This allows for support of `.dmg` inside `.tar`, `.zip` inside `.dmg`, etc. (Example: [blocs.rb](https://github.com/Homebrew/homebrew-cask/blob/aa461148bbb5119af26b82cccf5003e2b4e50d95/Casks/b/blocs.rb#L17-L19)) |
 | `container type:`                          | no                            | Symbol to override container-type autodetect. May be one of: `:air`, `:bz2`, `:cab`, `:dmg`, `:generic_unar`, `:gzip`, `:otf`, `:pkg`, `:rar`, `:seven_zip`, `:sit`, `:tar`, `:ttf`, `:xar`, `:zip`, `:naked`. (Example: [parse.rb](https://github.com/Homebrew/homebrew-cask/blob/aa461148bbb5119af26b82cccf5003e2b4e50d95/Casks/p/parse.rb#L10)) |
@@ -544,6 +563,24 @@ Refer to [Deprecating, Disabling and Removing](Deprecating-Disabling-and-Removin
 
 The stanzas `preflight`, `postflight`, `uninstall_preflight`, and `uninstall_postflight` define operations to be run before or after installation or uninstallation.
 
+For simple file preparation, prefer `preflight_steps`, `postflight_steps`, `uninstall_preflight_steps` or `uninstall_postflight_steps`. These steps are stored in the JSON API and avoid loading cask Ruby for common operations.
+
+```ruby
+preflight_steps do
+  mkdir_p "Shared"
+  touch "Shared/state"
+end
+
+postflight_steps do
+  mv "payload", "Shared/payload"
+  ln_s "Shared/payload", "Payload", source_base: :relative
+end
+```
+
+`mkdir`, `mkdir_p`, `touch`, `move`, `mv`, `move_children`, `symlink`, `ln_s` and `ln_sf` are available in steps blocks. Relative paths default to `staged_path` for `base:`, `source_base:` and `target_base:`. Symlink steps can use `uninstall: true` to remove the symlink during uninstall. A steps block may only contain those step calls with literal arguments; it cannot call the wider cask DSL or arbitrary Ruby code. Each phase may define either its Ruby flight block or its matching steps block, not both.
+
+Flight blocks are not currently run in the cask sandbox. They should be written as though they may be sandboxed in the future: prefer the mini-DSL helpers below and keep filesystem writes limited to paths owned by the cask.
+
 #### Evaluation of blocks is always deferred
 
 The Ruby blocks defined by these stanzas are not evaluated until install time or uninstall time. Within a block you may refer to the `@cask` instance variable, and invoke [any method available on `@cask`](/rubydoc/Cask/Cask.html).
@@ -588,6 +625,8 @@ installer manual: "RubyMotion Installer.app"
 | `print_stderr:` | set to `false` to suppress `stderr` output |
 | `print_stdout:` | set to `false` to suppress `stdout` output |
 | `sudo:`         | set to `true` if the script needs *sudo* |
+
+Installer scripts run without the cask sandbox. Use them only when the vendor provides an installer command that cannot be represented by a more specific artifact stanza such as [`app`](#stanza-app) or [`pkg`](#stanza-pkg).
 
 The path may be absolute, or relative to the cask. Example (from [miniforge.rb](https://github.com/Homebrew/homebrew-cask/blob/864f623e2cd17dbde5987a7b3923fdb0b4ac9ee5/Casks/m/miniforge.rb#L23-L26)):
 

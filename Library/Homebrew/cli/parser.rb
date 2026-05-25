@@ -7,6 +7,7 @@ require "cask/config"
 require "cli/args"
 require "cli/error"
 require "commands"
+require "extend/ENV/sensitive"
 require "optparse"
 require "utils/tty"
 require "utils/formatter"
@@ -57,7 +58,7 @@ module Homebrew
         cmd_name = cmd_args_method_name.to_s.delete_suffix("_args").tr("_", "-")
 
         begin
-          if Homebrew.require?(cmd_path)
+          if ENV.clear_sensitive_environment! { Homebrew.require?(cmd_path) }
             cmd = Homebrew::AbstractCommand.command(cmd_name)
             if cmd
               cmd.parser
@@ -1024,11 +1025,23 @@ module Homebrew
         option_names.each do |name|
           option_name = option_to_name(name)
           @option_types[option_name] = type
+          # Global options are accepted everywhere, so a subcommand block
+          # re-declaring one (e.g. for a custom description) must not constrain it.
+          next if global_option?(name)
+
           effective_subcommands = effective_subcommands(subcommands)
           next if effective_subcommands.blank?
 
           @option_subcommands[option_name] = (@option_subcommands[option_name] || []) |
                                              effective_subcommands
+        end
+      end
+
+      sig { params(name: String).returns(T::Boolean) }
+      def global_option?(name)
+        option_name = option_to_name(name)
+        self.class.global_options.any? do |short, long, _desc|
+          option_to_name(short) == option_name || option_to_name(long) == option_name
         end
       end
 
@@ -1123,6 +1136,8 @@ module Homebrew
       sig { params(env: T.nilable(T.any(String, Symbol))).returns(T.untyped) }
       def value_for_env(env)
         return if env.blank?
+
+        return false if env.to_s == "ask" && Homebrew::EnvConfig.no_ask?
 
         method_name = :"#{env}?"
         if Homebrew::EnvConfig.respond_to?(method_name)

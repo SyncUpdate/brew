@@ -54,6 +54,8 @@ module Cask
       @quiet = quiet
       @download_queue = download_queue
       @defer_fetch = defer_fetch
+      @source_download = T.let(nil, T.nilable(Homebrew::API::SourceDownload))
+      @ran_prelude_fetch = T.let(false, T::Boolean)
       @ran_prelude = T.let(false, T::Boolean)
       @cask_and_formula_dependencies = T.let(nil, T.nilable(T::Array[T.any(Formula, ::Cask::Cask)]))
     end
@@ -331,6 +333,8 @@ on_request: true)
             Artifact::KeyboardLayout,
             Artifact::Mdimporter,
             Artifact::Moved,
+            Artifact::PostflightSteps,
+            Artifact::PreflightSteps,
             Artifact::Pkg,
             Artifact::Qlplugin,
             Artifact::Symlinked,
@@ -587,9 +591,9 @@ on_request: true)
       @cask.download_sha_path.parent.rmdir_if_possible
     end
 
-    sig { params(successor: T.nilable(Cask)).void }
-    def start_upgrade(successor:)
-      uninstall_artifacts(successor:)
+    sig { params(successor: T.nilable(Cask), quit: T::Boolean).void }
+    def start_upgrade(successor:, quit: true)
+      uninstall_artifacts(successor:, quit:)
       backup
     end
 
@@ -638,8 +642,8 @@ on_request: true)
       puts summary
     end
 
-    sig { params(clear: T::Boolean, successor: T.nilable(Cask)).void }
-    def uninstall_artifacts(clear: false, successor: nil)
+    sig { params(clear: T::Boolean, successor: T.nilable(Cask), quit: T::Boolean).void }
+    def uninstall_artifacts(clear: false, successor: nil, quit: true)
       odebug "Uninstalling artifacts"
       odebug "#{::Utils.pluralize("artifact", artifacts.length, include_count: true)} defined", artifacts
 
@@ -652,14 +656,18 @@ on_request: true)
               Artifact::GeneratedCompletion,
               Artifact::KeyboardLayout,
               Artifact::Moved,
+              Artifact::PostflightSteps,
+              Artifact::PreflightSteps,
               Artifact::Qlplugin,
               Artifact::Symlinked,
               Artifact::Uninstall,
+              Artifact::UninstallPostflightSteps,
+              Artifact::UninstallPreflightSteps,
             ),
           )
 
           odebug "Uninstalling artifact of class #{artifact.class}"
-          artifact.uninstall_phase(
+          uninstall_options = {
             command:   @command,
             verbose:   verbose?,
             skip:      clear,
@@ -667,7 +675,9 @@ on_request: true)
             successor:,
             upgrade:   upgrade?,
             reinstall: reinstall?,
-          )
+          }
+          uninstall_options[:quit] = quit if artifact.is_a?(Artifact::Uninstall)
+          artifact.uninstall_phase(**uninstall_options)
         end
 
         next unless artifact.respond_to?(:post_uninstall_phase)
@@ -899,13 +909,7 @@ on_request: true)
     def prelude
       return if @ran_prelude
 
-      check_deprecate_disable
-      check_conflicts
-      check_requirements
-      # Run the cask-self forbidden checks before loading the caskfile from the
-      # Source API so a forbidden cask never triggers a network fetch.
-      forbidden_tap_check(cask_only: true)
-      forbidden_cask_and_formula_check(cask_only: true)
+      check_prelude_requirements unless @ran_prelude_fetch
       load_cask_from_source_api! if cask_from_source_api?
       forbidden_tap_check
       forbidden_cask_and_formula_check
@@ -914,25 +918,72 @@ on_request: true)
       @ran_prelude = true
     end
 
+    sig { returns(T::Boolean) }
+    def source_download_requires_pre_fetch?
+      cask_from_source_api? && @cask.languages.any?
+    end
+
+    sig { params(download_queue: Homebrew::DownloadQueue).void }
+    def prelude_fetch(download_queue: @download_queue)
+      return unless (download = prelude_fetch_download)
+
+      download_queue.enqueue(download)
+    end
+
+    sig { returns(T.nilable(Homebrew::API::SourceDownload)) }
+    def prelude_fetch_download
+      return if @ran_prelude_fetch
+
+      check_prelude_requirements
+      @ran_prelude_fetch = true
+      return unless source_download_requires_pre_fetch?
+
+      if source_download.downloaded?
+        source_download.verify_download_integrity(source_download.cached_download)
+        source_download.downloader.create_symlink_to_cached_download(source_download.cached_download)
+        return
+      end
+
+      source_download
+    end
+
     sig { void }
     def enqueue_downloads
       download_queue = @download_queue
-      check_requirements
+      prelude_fetch(download_queue:) unless @ran_prelude_fetch
 
       # FIXME: We need to load Cask source before enqueuing to support
       # language-specific URLs, but this will block the main process.
-      if cask_from_source_api?
-        if @cask.languages.any?
-          load_cask_from_source_api!
-        else
-          Homebrew::API::Cask.source_download(@cask, download_queue:, enqueue: true)
-        end
+      if source_download_requires_pre_fetch?
+        load_cask_from_source_api!
+      elsif cask_from_source_api?
+        Homebrew::API::Cask.source_download(@cask, download_queue:, enqueue: true)
       end
+
+      forbidden_tap_check
+      forbidden_cask_and_formula_check
+      forbidden_cask_artifacts_check
 
       download_queue.enqueue(downloader)
     end
 
     private
+
+    sig { void }
+    def check_prelude_requirements
+      check_deprecate_disable
+      check_conflicts
+      check_requirements
+      # Run the cask-self forbidden checks before loading the caskfile from the
+      # Source API so a forbidden cask never triggers a network fetch.
+      forbidden_tap_check(cask_only: true)
+      forbidden_cask_and_formula_check(cask_only: true)
+    end
+
+    sig { returns(Homebrew::API::SourceDownload) }
+    def source_download
+      @source_download ||= Homebrew::API::Cask.source_download_for(@cask)
+    end
 
     # load the same cask file that was used for installation, if possible
     sig { void }

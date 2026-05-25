@@ -13,6 +13,7 @@ require "service"
 require "utils/curl"
 require "extend/hash/deep_transform_values"
 require "extend/hash/keys"
+require "extend/ENV/sensitive"
 require "tap"
 
 # The {Formulary} is responsible for creating instances of {Formula}.
@@ -151,10 +152,12 @@ module Formulary
         raise FormulaUnreadableError.new(name, e)
       end
     end
-    if ignore_errors
-      Ignorable.hook_raise(&eval_formula)
-    else
-      eval_formula.call
+    ENV.clear_sensitive_environment! do
+      if ignore_errors
+        Ignorable.hook_raise(&eval_formula)
+      else
+        eval_formula.call
+      end
     end
 
     class_name = class_s(name)
@@ -302,6 +305,12 @@ module Formulary
       formula_struct.link_overwrite_paths.each do |path|
         link_overwrite path
       end
+
+      @post_install_steps = T.let(
+        formula_struct.post_install_steps,
+        T.nilable(Homebrew::InstallSteps::Steps),
+      )
+      @post_install_steps_defined = T.let(formula_struct.post_install_steps.present?, T.nilable(T::Boolean))
 
       define_method(:install) do
         raise NotImplementedError, "Cannot build from source from abstract formula."
@@ -1187,7 +1196,12 @@ module Formulary
       end
     end
 
-    opoo "Formula #{old_name} was renamed to #{new_name}." if warn && old_name && new_name
+    if warn && old_name && new_name
+      destination_exists = find_formula_in_tap(name, tap).exist? ||
+                           (tap.core_tap? && !Homebrew::EnvConfig.no_install_from_api? &&
+                            Homebrew::API.formula_names.include?(name))
+      opoo "Formula #{old_name} was renamed to #{new_name}." if destination_exists
+    end
 
     [name, tap, type]
   end

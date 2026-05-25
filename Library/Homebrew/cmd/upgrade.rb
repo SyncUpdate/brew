@@ -61,7 +61,11 @@ module Homebrew
                             "minimum version."
         switch "--ask",
                description: "Ask for confirmation before downloading and upgrading. " \
-                            "Print the same plan as `--dry-run`, including available download sizes.",
+                            "Print the same plan as `--dry-run`, including available download sizes. " \
+                            "When named arguments are provided, only prompts if the plan includes packages " \
+                            "other than those arguments; if the requested formulae or casks are the only " \
+                            "things to upgrade, it only prints the plan. With no named arguments, prompts if " \
+                            "anything would be upgraded. The confirmation prompt is skipped without a TTY.",
                env:         :ask
         [
           [:switch, "--formula", "--formulae", {
@@ -108,6 +112,10 @@ module Homebrew
           }],
           [:switch, "--skip-cask-deps", {
             description: "Skip installing cask dependencies.",
+          }],
+          [:switch, "--no-quit", {
+            description: "Prevent running cask applications from being quit during upgrade.",
+            env:         :no_upgrade_quit_casks,
           }],
           [:switch, "-g", "--greedy", {
             description: "Also include casks with `version :latest` and `auto_updates true` casks " \
@@ -740,7 +748,7 @@ module Homebrew
           )
         end
         cask_names = outdated_casks.map(&:full_name)
-        Install.enqueue_cask_installers(fetchable_cask_installers)
+        Install.enqueue_cask_installers(fetchable_cask_installers, download_queue:)
         prefetch_names&.replace(cask_names)
         prefetch_upgrades&.replace(
           outdated_casks.map { |cask| "#{cask.full_name} #{cask.installed_version} -> #{cask.version}" },
@@ -778,6 +786,7 @@ module Homebrew
           quarantine:           args.quarantine?,
           require_sha:          args.require_sha?,
           skip_cask_deps:       args.skip_cask_deps?,
+          quit:                 !args.no_quit?,
           verbose:              args.verbose?,
           quiet:                args.quiet?,
           skip_prefetch:,

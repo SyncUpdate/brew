@@ -6,26 +6,28 @@ require "cmd/shared_examples/args_parse"
 require "commands"
 
 RSpec.describe Homebrew::Cmd::Bundle do
+  let(:klass) { Homebrew::Cmd::Bundle }
+
   it_behaves_like "parseable arguments"
 
   it "handles default install subcommand options", :aggregate_failures do
     with_env("HOMEBREW_BUNDLE_INSTALL_CLEANUP" => nil) do
-      expect(described_class.new([]).args.subcommand).to eq("install")
-      expect(described_class.new(%w[--cleanup --zap]).args.subcommand).to eq("install")
-      expect { described_class.new(%w[--zap]) }
+      expect(klass.new([]).args.subcommand).to eq("install")
+      expect(klass.new(%w[--cleanup --zap]).args.subcommand).to eq("install")
+      expect { klass.new(%w[--zap]) }
         .to raise_error(UsageError, /`--zap` cannot be passed without `--cleanup`/)
     end
   end
 
   it "rejects install-only options for exec" do
-    expect { described_class.new(%w[exec --jobs=1 true]) }
+    expect { klass.new(%w[exec --jobs=1 true]) }
       .to raise_error(UsageError, /`exec` subcommand does not accept the `--jobs` flag/)
   end
 
   it "treats upgrade as install --upgrade", :aggregate_failures do
     with_env("HOMEBREW_BUNDLE_NO_UPGRADE" => "1") do
-      args = described_class.new(%w[upgrade -fq]).args
-      context = described_class.context(args, extensions: described_class::BUNDLE_EXTENSIONS)
+      args = klass.new(%w[upgrade -fq]).args
+      context = klass.context(args, extensions: klass::BUNDLE_EXTENSIONS)
 
       expect(args.subcommand).to eq("install")
       expect(args.upgrade?).to be(true)
@@ -36,12 +38,20 @@ RSpec.describe Homebrew::Cmd::Bundle do
     end
   end
 
+  it "accepts global flags on subcommands that do not re-declare them", :aggregate_failures do
+    expect(klass.new(%w[cleanup --verbose]).args.verbose?).to be(true)
+    expect(klass.new(%w[cleanup -v]).args.verbose?).to be(true)
+    expect(klass.new(%w[dump --verbose]).args.subcommand).to eq("dump")
+    expect(klass.new(%w[list --verbose]).args.subcommand).to eq("list")
+  end
+
   it "uses subcommand-specific option descriptions", :aggregate_failures do
     subcommand_options = ->(subcommand) { Commands.command_options("bundle", subcommand:).to_h }
 
     expect(subcommand_options.call("list")["--vscode"]).to eq("List VSCode (and forks/variants) extensions.")
     expect(subcommand_options.call("dump")["--vscode"]).to eq("Dump VSCode (and forks/variants) extensions.")
     expect(subcommand_options.call("cleanup")["--vscode"]).to eq("Clean up VSCode (and forks/variants) extensions.")
+    expect(subcommand_options.call("cleanup")["--all"]).to eq("Clean up all supported dependencies.")
     expect(subcommand_options.call("add")["--vscode"])
       .to eq("Add entries for VSCode (and forks/variants) extensions.")
     expect(subcommand_options.call("remove")["--vscode"])
@@ -50,7 +60,7 @@ RSpec.describe Homebrew::Cmd::Bundle do
   end
 
   it "uses subcommand-specific descriptions in help output", :aggregate_failures do
-    help_text = described_class.parser.generate_help_text(remaining_args: ["list"])
+    help_text = klass.parser.generate_help_text(remaining_args: ["list"])
 
     expect(help_text).to include("List VSCode (and forks/variants) extensions.")
     expect(help_text).not_to include("Clean up VSCode (and forks/variants) extensions.")
@@ -74,7 +84,7 @@ RSpec.describe Homebrew::Cmd::Bundle do
             no_secrets: false,
           )
 
-        described_class.new(args).run
+        klass.new(args).run
       end
     end
   end
@@ -92,7 +102,7 @@ RSpec.describe Homebrew::Cmd::Bundle do
           no_secrets: false,
         )
 
-      described_class.new(["exec", "/usr/bin/true"]).run
+      klass.new(["exec", "/usr/bin/true"]).run
     end
   end
 

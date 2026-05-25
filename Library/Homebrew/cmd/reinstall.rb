@@ -40,7 +40,10 @@ module Homebrew
                description: "Print the verification and post-install steps."
         switch "--ask",
                description: "Ask for confirmation before downloading and reinstalling. " \
-                            "Print what would be reinstalled before prompting.",
+                            "Print what would be reinstalled before prompting. Only prompts if the plan " \
+                            "includes dependencies or dependants; if the requested formulae or casks are the " \
+                            "only things to reinstall, it only prints the plan. The confirmation prompt is " \
+                            "skipped without a TTY.",
                env:         :ask
         [
           [:switch, "--formula", "--formulae", {
@@ -245,7 +248,7 @@ module Homebrew
                   defer_fetch:    true,
                 )
               end
-              Install.enqueue_cask_installers(fetch_cask_installers)
+              Install.enqueue_cask_installers(fetch_cask_installers, download_queue: shared_download_queue)
               shared_download_queue.fetch
               casks_prefetched = true
               valid_formula_installers

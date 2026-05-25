@@ -154,7 +154,8 @@ and are now no longer needed.
 
 Bundler for non-Ruby dependencies from Homebrew, Homebrew Cask, Mac App Store
 dependencies, VSCode (and forks/variants) extensions, Go packages, Cargo
-packages, uv tools, Flatpak packages, Krew plugins and npm packages.
+packages, uv tools, Flatpak packages, WinGet packages, Krew plugins and npm
+packages.
 
 Note: Flatpak support is only available on Linux.
 
@@ -196,9 +197,9 @@ Note: Flatpak support is only available on Linux.
 
 : Remove entries that match `name` from your `Brewfile`. Use `--formula`,
   `--cask`, `--tap`, `--mas`, `--vscode`, `--go`, `--cargo`, `--uv`,
-  `--flatpak`, `--krew` and `--npm` to remove only entries of the corresponding
-  type. Passing `--formula` also removes matches against formula aliases and old
-  formula names.
+  `--flatpak`, `--winget`, `--krew` and `--npm` to remove only entries of the
+  corresponding type. Passing `--formula` also removes matches against formula
+  aliases and old formula names.
 
 `--install`
 
@@ -240,6 +241,10 @@ Note: Flatpak support is only available on Linux.
 `--flatpak`
 
 : Remove entries for Flatpak packages. Note: Linux only.
+
+`--winget`
+
+: Remove entries for WinGet packages. Note: WSL only.
 
 `--krew`
 
@@ -298,6 +303,10 @@ By default, only Homebrew formula dependencies are listed.
 `--flatpak`
 
 : List Flatpak packages. Note: Linux only.
+
+`--winget`
+
+: List WinGet packages. Note: WSL only.
 
 `--krew`
 
@@ -471,6 +480,10 @@ flags which will help with finding keg-only dependencies like `openssl`,
 
 : Dump Flatpak packages. Note: Linux only.
 
+`--winget`
+
+: Dump WinGet packages. Note: WSL only.
+
 `--krew`
 
 : Dump Krew plugins.
@@ -503,6 +516,11 @@ flags which will help with finding keg-only dependencies like `openssl`,
 
 : `dump` without Flatpak packages. Enabled by default if
   `$HOMEBREW_BUNDLE_DUMP_NO_FLATPAK` is set.
+
+`--no-winget`
+
+: `dump` without WinGet packages. Enabled by default if
+  `$HOMEBREW_BUNDLE_DUMP_NO_WINGET` is set.
 
 `--no-krew`
 
@@ -541,6 +559,10 @@ removed.
 
 : Actually perform cleanup operations.
 
+`--all`
+
+: Clean up all supported dependencies.
+
 `--formula`
 
 : Clean up Homebrew formula dependencies.
@@ -552,6 +574,10 @@ removed.
 `--tap`
 
 : Clean up Homebrew tap dependencies.
+
+`--mas`
+
+: Clean up Mac App Store dependencies.
 
 `--vscode`
 
@@ -572,6 +598,14 @@ removed.
 `--flatpak`
 
 : Clean up Flatpak packages. Note: Linux only.
+
+`--winget`
+
+: Clean up WinGet packages. Note: WSL only.
+
+`--krew`
+
+: Clean up Krew plugins.
 
 `--npm`
 
@@ -1160,7 +1194,10 @@ upgrade *`formula`* if it is already installed but outdated.
 `--ask`
 
 : Ask for confirmation before downloading and installing. Print the same plan as
-  `--dry-run` before prompting. Enabled by default if `$HOMEBREW_ASK` is set.
+  `--dry-run` before prompting. Only prompts if the plan includes dependencies
+  or dependants; if the requested formulae or casks are the only things to
+  install, it only prints the plan. The confirmation prompt is skipped without a
+  TTY. Enabled by default if `$HOMEBREW_ASK` is set.
 
 `--formula`
 
@@ -1654,7 +1691,10 @@ for the reinstalled formulae or, every 30 days, for all formulae.
 `--ask`
 
 : Ask for confirmation before downloading and reinstalling. Print what would be
-  reinstalled before prompting. Enabled by default if `$HOMEBREW_ASK` is set.
+  reinstalled before prompting. Only prompts if the plan includes dependencies
+  or dependants; if the requested formulae or casks are the only things to
+  reinstall, it only prints the plan. The confirmation prompt is skipped without
+  a TTY. Enabled by default if `$HOMEBREW_ASK` is set.
 
 `--formula`
 
@@ -2147,8 +2187,12 @@ for the upgraded formulae or, every 30 days, for all formulae.
 `--ask`
 
 : Ask for confirmation before downloading and upgrading. Print the same plan as
-  `--dry-run`, including available download sizes. Enabled by default if
-  `$HOMEBREW_ASK` is set.
+  `--dry-run`, including available download sizes. When named arguments are
+  provided, only prompts if the plan includes packages other than those
+  arguments; if the requested formulae or casks are the only things to upgrade,
+  it only prints the plan. With no named arguments, prompts if anything would be
+  upgraded. The confirmation prompt is skipped without a TTY. Enabled by default
+  if `$HOMEBREW_ASK` is set.
 
 `--formula`
 
@@ -2196,6 +2240,11 @@ for the upgraded formulae or, every 30 days, for all formulae.
 `--skip-cask-deps`
 
 : Skip installing cask dependencies.
+
+`--no-quit`
+
+: Prevent running cask applications from being quit during upgrade. Enabled by
+  default if `$HOMEBREW_NO_UPGRADE_QUIT_CASKS` is set.
 
 `-g`, `--greedy`
 
@@ -4089,21 +4138,6 @@ Update versions for CPAN resource blocks in *`formula`*.
 
 : Continue processing even if some resources can't be resolved.
 
-### `update-portable-ruby` \[`--dry-run`\] \[`--skip-vendor-install`\]
-
-Update the vendored portable Ruby version files, bottle checksums,
-`utils/ruby.sh` and `Gemfile.lock` entries from the current `portable-ruby`
-formula.
-
-`-n`, `--dry-run`
-
-: Print what would be done rather than doing it.
-
-`--skip-vendor-install`
-
-: Do not run `brew vendor-install ruby`; skip the `utils/ruby.sh`,
-  `Gemfile.lock` and RBI updates.
-
 ### `update-python-resources` \[*`options`*\] *`formula`* \[...\]
 
 Update versions for PyPI resource blocks in *`formula`*.
@@ -4439,7 +4473,11 @@ command execution (e.g. `$(cat file)`).
 `HOMEBREW_ASK`
 
 : If set, pass `--ask` to `brew install`, `brew upgrade` and `brew reinstall`
-  commands.
+  commands. Enabled by default if `$HOMEBREW_DEVELOPER` is set. This will become
+  the default behaviour in the next release. Ask mode prints the plan before
+  proceeding and prompts only if the plan includes dependencies, dependants or
+  packages other than named arguments. Otherwise, it only prints the plan. The
+  confirmation prompt is skipped without a TTY.
 
 `HOMEBREW_AUTO_UPDATE_SECS`
 
@@ -4833,9 +4871,8 @@ command execution (e.g. `$(cat file)`).
 
 `HOMEBREW_NO_ASK`
 
-: If set, do not ask for confirmation before downloading and installing,
-  upgrading or reinstalling formulae and casks. This is a no-op until ask mode
-  becomes the default behaviour in a later release.
+: If set, do not enable ask mode from `$HOMEBREW_ASK` or the
+  `$HOMEBREW_DEVELOPER` default. This does not disable an explicit `--ask`.
 
 `HOMEBREW_NO_AUTOREMOVE`
 
@@ -4925,6 +4962,11 @@ command execution (e.g. `$(cat file)`).
 : If set, `brew info` and `brew install` will not warn when a formula's
   executables are shadowed by other commands earlier on `$PATH`.
 
+`HOMEBREW_NO_SANDBOX_CASK`
+
+: If set, disable sandboxing for cask artifacts that generate files by running
+  executables.
+
 `HOMEBREW_NO_SANDBOX_LINUX`
 
 : If set, disable the Linux sandbox.
@@ -4932,6 +4974,11 @@ command execution (e.g. `$(cat file)`).
 `HOMEBREW_NO_UPDATE_REPORT_NEW`
 
 : If set, `brew update` will not show the list of newly added formulae/casks.
+
+`HOMEBREW_NO_UPGRADE_QUIT_CASKS`
+
+: If set, `brew upgrade` will not quit running applications for casks during
+  upgrades.
 
 `HOMEBREW_NO_VERIFY_ATTESTATIONS`
 
@@ -4952,7 +4999,8 @@ command execution (e.g. `$(cat file)`).
 `HOMEBREW_SANDBOX_LINUX`
 
 : If set, use the `bwrap`(1) sandbox for formula installation and testing on
-  Linux.
+  Linux. Enabled by default if `$HOMEBREW_DEVELOPER` is set. This will be the
+  default in Homebrew 5.2.0.
 
 `HOMEBREW_SBOM`
 

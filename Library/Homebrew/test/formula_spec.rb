@@ -23,7 +23,7 @@ RSpec.describe Formula do
 
   describe "::new" do
     let(:klass) do
-      Class.new(described_class) do
+      Class.new(Formula) do
         url "https://brew.sh/foo-1.0.tar.gz"
       end
     end
@@ -65,7 +65,7 @@ RSpec.describe Formula do
     end
 
     specify "formula instantiation without a subclass" do
-      expect { described_class.new(name, path, spec) }
+      expect { Formula.new(name, path, spec) }
         .to raise_error(RuntimeError, "Do not call `Formula.new' directly without a subclass.")
     end
 
@@ -839,7 +839,7 @@ RSpec.describe Formula do
 
   describe "::installed_with_alias_path" do
     specify "with alias path with nil" do
-      expect(described_class.installed_with_alias_path(nil)).to be_empty
+      expect(Formula.installed_with_alias_path(nil)).to be_empty
     end
 
     specify "with alias path with a path" do
@@ -870,12 +870,12 @@ RSpec.describe Formula do
         formula_with_different_alias,
       ]
 
-      allow(described_class).to receive(:installed).and_return(formulae)
+      allow(Formula).to receive(:installed).and_return(formulae)
 
       CoreTap.instance.alias_dir.mkpath
       FileUtils.ln_sf formula_with_alias.path, alias_path
 
-      expect(described_class.installed_with_alias_path(alias_path))
+      expect(Formula.installed_with_alias_path(alias_path))
         .to eq([formula_with_alias])
     end
   end
@@ -1080,6 +1080,97 @@ RSpec.describe Formula do
 
     expect(f1).to have_post_install_defined
     expect(f2).not_to have_post_install_defined
+  end
+
+  specify "#post_install_steps" do
+    f = formula do
+      url "foo-1.0"
+
+      post_install_steps do
+        mkdir_p "log/foo"
+        touch "foo/marker"
+        mv "move-source", "move-target"
+        move_children "children-source", "children-target"
+        ln_s "move-target", "linked-target", source_base: :relative, uninstall: true
+      end
+    end
+
+    expect(f.post_install_steps).to eq([
+      { "type" => "mkdir_p", "path" => { "base" => "var", "path" => "log/foo" } },
+      { "type" => "touch", "path" => { "base" => "var", "path" => "foo/marker" } },
+      {
+        "type"   => "move",
+        "source" => { "base" => "prefix", "path" => "move-source" },
+        "target" => { "base" => "prefix", "path" => "move-target" },
+      },
+      {
+        "type"   => "move_children",
+        "source" => { "base" => "prefix", "path" => "children-source" },
+        "target" => { "base" => "prefix", "path" => "children-target" },
+      },
+      {
+        "type"      => "symlink",
+        "source"    => { "base" => "relative", "path" => "move-target" },
+        "target"    => { "base" => "prefix", "path" => "linked-target" },
+        "uninstall" => true,
+      },
+    ])
+    expect(f.post_install_steps_defined?).to be(true)
+    expect(f.to_hash["post_install_steps"]).to eq(f.post_install_steps)
+  end
+
+  specify "#post_install_steps_defined? with an empty block" do
+    f = formula do
+      url "foo-1.0"
+
+      # This intentionally declares no steps to test definition tracking.
+      # rubocop:disable Lint/EmptyBlock
+      post_install_steps do
+      end
+      # rubocop:enable Lint/EmptyBlock
+    end
+
+    expect(f.post_install_steps).to be_empty
+    expect(f.post_install_steps_defined?).to be(true)
+  end
+
+  specify "#post_install_steps_conflict?" do
+    f = formula do
+      url "foo-1.0"
+
+      # This intentionally declares no steps to test conflict tracking.
+      # rubocop:disable Lint/EmptyBlock
+      post_install_steps do
+      end
+      # rubocop:enable Lint/EmptyBlock
+
+      def post_install; end
+    end
+
+    expect(f.post_install_steps_conflict?).to be(true)
+  end
+
+  specify "#run_post_install_steps uses the versioned prefix" do
+    f = formula "post-install-steps-prefix" do
+      url "foo-1.0"
+
+      post_install_steps do
+        ln_s "source", "linked", source_base: :prefix, target_base: :prefix
+      end
+    end
+
+    versioned_prefix = f.rack/f.pkg_version.to_s
+    FileUtils.rm_f f.opt_prefix
+    versioned_prefix.mkpath
+    f.opt_prefix.parent.mkpath
+    FileUtils.ln_s versioned_prefix, f.opt_prefix
+
+    f.run_post_install_steps
+
+    expect((versioned_prefix/"linked").readlink).to eq(versioned_prefix/"source")
+  ensure
+    FileUtils.rm_f f.opt_prefix
+    FileUtils.rm_rf f.rack
   end
 
   describe "#install_etc_var" do
@@ -1318,7 +1409,7 @@ RSpec.describe Formula do
 
       expect(f3.runtime_dependencies.map(&:name)).to eq(["baz/qux/f2"])
 
-      described_class.clear_cache
+      Formula.clear_cache
 
       f1_path = Tap.fetch("foo", "bar").path/"Formula/f1.rb"
       stub_formula_loader(formula("f1", path: f1_path) { url("f1-1.0") }, "foo/bar/f1")
@@ -1758,7 +1849,7 @@ RSpec.describe Formula do
     before do
       stub_formula_loader(f)
       stub_formula_loader(new_formula)
-      allow(described_class).to receive(:installed).and_return([f])
+      allow(Formula).to receive(:installed).and_return([f])
 
       f.build = tab
       new_formula.build = tab
@@ -1952,7 +2043,7 @@ RSpec.describe Formula do
 
       tab = setup_tab_for_prefix(old_alias_target_prefix, path: alias_path)
       old_formula.build = tab
-      allow(described_class).to receive(:installed).and_return([old_formula])
+      allow(Formula).to receive(:installed).and_return([old_formula])
 
       CoreTap.instance.alias_dir.mkpath
       FileUtils.ln_sf f.path, alias_path
@@ -1967,7 +2058,7 @@ RSpec.describe Formula do
 
       tab = setup_tab_for_prefix(old_alias_target_prefix, path: old_formula.path)
       old_formula.build = tab
-      allow(described_class).to receive(:installed).and_return([old_formula])
+      allow(Formula).to receive(:installed).and_return([old_formula])
       expect(f.outdated_kegs).to be_empty
     end
 
@@ -1991,7 +2082,7 @@ RSpec.describe Formula do
       expect(f.outdated_kegs).to be_empty
 
       setup_tab_for_prefix(greater_prefix, tap: "homebrew/core")
-      described_class.clear_cache
+      Formula.clear_cache
 
       expect(f.outdated_kegs).to be_empty
     end
@@ -2003,12 +2094,12 @@ RSpec.describe Formula do
 
       setup_tab_for_prefix(outdated_prefix)
       setup_tab_for_prefix(extra_outdated_prefix, tap: "homebrew/core")
-      described_class.clear_cache
+      Formula.clear_cache
 
       expect(f.outdated_kegs).not_to be_empty
 
       setup_tab_for_prefix(outdated_prefix, tap: "user/repo")
-      described_class.clear_cache
+      Formula.clear_cache
 
       expect(f.outdated_kegs).not_to be_empty
     end
@@ -2020,7 +2111,7 @@ RSpec.describe Formula do
       expect(f.outdated_kegs).to be_empty
 
       setup_tab_for_prefix(same_prefix, tap: "user/repo")
-      described_class.clear_cache
+      Formula.clear_cache
 
       expect(f.outdated_kegs).to be_empty
     end
@@ -2032,7 +2123,7 @@ RSpec.describe Formula do
 
       tab.source["versions"] = { "stable" => f.version.to_s }
       tab.write
-      described_class.clear_cache
+      Formula.clear_cache
 
       expect(f.outdated_kegs).to be_empty
     end
@@ -2071,15 +2162,15 @@ RSpec.describe Formula do
 
         tab_a.source["versions"] = { "stable" => f.version.to_s }
         tab_a.write
-        described_class.clear_cache
+        Formula.clear_cache
         expect(f.outdated_kegs(fetch_head: true)).not_to be_empty
 
         FileUtils.rm_r(head_prefix_a)
-        described_class.clear_cache
+        Formula.clear_cache
         expect(f.outdated_kegs(fetch_head: true)).not_to be_empty
 
         setup_tab_for_prefix(head_prefix_c, source_modified_time: 1)
-        described_class.clear_cache
+        Formula.clear_cache
         expect(f.outdated_kegs(fetch_head: true)).to be_empty
       ensure
         FileUtils.rm_r(testball_repo) if testball_repo.exist?
@@ -2131,13 +2222,13 @@ RSpec.describe Formula do
         setup_tab_for_prefix(prefix_b, versions: { "stable" => "2.14", "version_scheme" => 2 })
 
         expect(f.outdated_kegs).not_to be_empty
-        described_class.clear_cache
+        Formula.clear_cache
 
         prefix_c = HOMEBREW_CELLAR/"testball/20141009"
         setup_tab_for_prefix(prefix_c, versions: { "stable" => "20141009", "version_scheme" => 3 })
 
         expect(f.outdated_kegs).not_to be_empty
-        described_class.clear_cache
+        Formula.clear_cache
 
         prefix_d = HOMEBREW_CELLAR/"testball/20141011"
         setup_tab_for_prefix(prefix_d, versions: { "stable" => "20141009", "version_scheme" => 3 })
@@ -2160,7 +2251,7 @@ RSpec.describe Formula do
         setup_tab_for_prefix(head_prefix, versions: { "stable" => "1.0", "version_scheme" => 1 })
         expect(f.outdated_kegs).not_to be_empty
 
-        described_class.clear_cache
+        Formula.clear_cache
         FileUtils.rm_r(head_prefix)
 
         setup_tab_for_prefix(head_prefix, versions: { "stable" => "1.0", "version_scheme" => 2 })
@@ -2552,7 +2643,7 @@ RSpec.describe Formula do
 
   describe "#specified_path" do
     let(:klass) do
-      Class.new(described_class) do
+      Class.new(Formula) do
         url "https://brew.sh/foo-1.0.tar.gz"
       end
     end
@@ -2729,13 +2820,13 @@ RSpec.describe Formula do
 
   describe ".all" do
     it "skips formulas that raise FormulaSpecificationError" do
-      allow(described_class).to receive_messages(core_names: ["testball"], tap_files: [])
+      allow(Formula).to receive_messages(core_names: ["testball"], tap_files: [])
       allow(Formulary).to receive(:factory).with("testball").and_raise(
         FormulaSpecificationError, "testball: formula requires at least a URL"
       )
 
-      expect { described_class.all(eval_all: true) }.not_to raise_error
-      expect(described_class.all(eval_all: true)).to eq([])
+      expect { Formula.all(eval_all: true) }.not_to raise_error
+      expect(Formula.all(eval_all: true)).to eq([])
     end
   end
 

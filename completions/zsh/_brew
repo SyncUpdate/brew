@@ -152,7 +152,7 @@ __brew_internal_commands() {
     'bump-formula-pr:Create a pull request to update formula with a new URL or a new tag'
     'bump-revision:Create a commit to increment the revision of formula'
     'bump-unversioned-casks:Check all casks with unversioned URLs in a given tap for updates'
-    'bundle:Bundler for non-Ruby dependencies from Homebrew, Homebrew Cask, Mac App Store dependencies, VSCode (and forks/variants) extensions, Go packages, Cargo packages, uv tools, Flatpak packages, Krew plugins and npm packages'
+    'bundle:Bundler for non-Ruby dependencies from Homebrew, Homebrew Cask, Mac App Store dependencies, VSCode (and forks/variants) extensions, Go packages, Cargo packages, uv tools, Flatpak packages, WinGet packages, Krew plugins and npm packages'
     'casks:List all locally installable casks including short names'
     'cat:Display the source of a formula or cask'
     'cleanup:Remove stale lock files and outdated downloads for all formulae and casks, and remove old versions of installed formulae'
@@ -245,7 +245,6 @@ __brew_internal_commands() {
     'update-license-data:Update SPDX license data in the Homebrew repository'
     'update-maintainers:Update the list of maintainers in the `Homebrew/brew` README'
     'update-perl-resources:Update versions for CPAN resource blocks in formula'
-    'update-portable-ruby:Update the vendored portable Ruby version files, bottle checksums, `utils/ruby.sh` and `Gemfile.lock` entries from the current `portable-ruby` formula'
     'update-python-resources:Update versions for PyPI resource blocks in formula'
     'update-reset:Fetch and reset Homebrew and all tap repositories (or any specified repository) using `git`(1) to their latest `origin/HEAD`'
     'update-sponsors:Update the list of GitHub Sponsors in the `Homebrew/brew` README'
@@ -652,7 +651,7 @@ _brew_bundle() {
   local -a subcommands
   subcommands=(
     'sh:Run your shell in a `brew bundle exec` environment'
-    'remove:Remove entries that match `name` from your `Brewfile`. Use `--formula`, `--cask`, `--tap`, `--mas`, `--vscode`, `--go`, `--cargo`, `--uv`, `--flatpak`, `--krew` and `--npm` to remove only entries of the corresponding type. Passing `--formula` also removes matches against formula aliases and old formula names'
+    'remove:Remove entries that match `name` from your `Brewfile`. Use `--formula`, `--cask`, `--tap`, `--mas`, `--vscode`, `--go`, `--cargo`, `--uv`, `--flatpak`, `--winget`, `--krew` and `--npm` to remove only entries of the corresponding type. Passing `--formula` also removes matches against formula aliases and old formula names'
     'list:By default, only Homebrew formula dependencies are listed'
     'install:Use this to restore a recorded installed state from a `Brewfile`'
     'upgrade:Use this to restore a recorded installed state from a `Brewfile`'
@@ -713,7 +712,8 @@ remove)
           '--tap[Remove Homebrew tap entries]' \
           '(--no-uv)--uv[Remove entries for uv tools]' \
           '--verbose[Make some output more verbose]' \
-          '(--no-vscode)--vscode[Remove entries for VSCode (and forks/variants) extensions]'
+          '(--no-vscode)--vscode[Remove entries for VSCode (and forks/variants) extensions]' \
+          '(--no-winget)--winget[Remove entries for WinGet packages. Note: WSL only]'
         ;;
 list)
         _arguments \
@@ -735,7 +735,8 @@ list)
           '--tap[List Homebrew tap dependencies]' \
           '(--no-uv)--uv[List uv tools]' \
           '--verbose[Make some output more verbose]' \
-          '(--no-vscode)--vscode[List VSCode (and forks/variants) extensions]'
+          '(--no-vscode)--vscode[List VSCode (and forks/variants) extensions]' \
+          '(--no-winget)--winget[List WinGet packages. Note: WSL only]'
         ;;
 install|upgrade)
         _arguments \
@@ -814,15 +815,18 @@ dump)
           '--no-restart[Do not add `restart_service` to formula lines]' \
           '(--uv)--no-uv[`dump` without uv tools. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_UV` is set]' \
           '(--vscode)--no-vscode[`dump` without VSCode (and forks/variants) extensions. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_VSCODE` is set]' \
+          '(--winget)--no-winget[`dump` without WinGet packages. Enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_WINGET` is set]' \
           '(--no-npm)--npm[Dump npm packages]' \
           '--quiet[Make some output more quiet]' \
           '--tap[Dump Homebrew tap dependencies]' \
           '(--no-uv)--uv[Dump uv tools]' \
           '--verbose[Make some output more verbose]' \
-          '(--no-vscode)--vscode[Dump VSCode (and forks/variants) extensions]'
+          '(--no-vscode)--vscode[Dump VSCode (and forks/variants) extensions]' \
+          '(--no-winget)--winget[Dump WinGet packages. Note: WSL only]'
         ;;
 cleanup)
         _arguments \
+          '--all[Clean up all supported dependencies]' \
           '(--no-cargo)--cargo[Clean up Cargo packages]' \
           '--cask[Clean up Homebrew cask dependencies]' \
           '--debug[Display any debugging information]' \
@@ -834,12 +838,15 @@ cleanup)
           '(--no-go)--go[Clean up Go packages]' \
           '--help[Show this message]' \
           '--install[Run `install` before cleaning up dependencies]' \
+          '(--no-krew)--krew[Clean up Krew plugins]' \
+          '--mas[Clean up Mac App Store dependencies]' \
           '(--no-npm)--npm[Clean up npm packages]' \
           '--quiet[Make some output more quiet]' \
           '--tap[Clean up Homebrew tap dependencies]' \
           '(--no-uv)--uv[Clean up uv tools]' \
           '--verbose[Make some output more verbose]' \
           '(--no-vscode)--vscode[Clean up VSCode (and forks/variants) extensions]' \
+          '(--no-winget)--winget[Clean up WinGet packages. Note: WSL only]' \
           '--zap[Clean up casks using the `zap` command instead of `uninstall`]'
         ;;
 check)
@@ -1454,7 +1461,7 @@ _brew_install() {
     '(--formula)--appdir[Target location for Applications (default: `/Applications`)]' \
     '(--formula)--appimagedir[Target location for AppImages (default: `~/Applications`)]' \
     '(--cask)--as-dependency[Install but mark as installed as a dependency and not installed on request]' \
-    '--ask[Ask for confirmation before downloading and installing. Print the same plan as `--dry-run` before prompting. Enabled by default if `$HOMEBREW_ASK` is set]' \
+    '--ask[Ask for confirmation before downloading and installing. Print the same plan as `--dry-run` before prompting. Only prompts if the plan includes dependencies or dependants; if the requested formulae or casks are the only things to install, it only prints the plan. The confirmation prompt is skipped without a TTY. Enabled by default if `$HOMEBREW_ASK` is set]' \
     '(--formula)--audio-unit-plugindir[Target location for Audio Unit Plugins (default: `~/Library/Audio/Plug-Ins/Components`)]' \
     '(--formula)--binaries[Disable/enable linking of helper executables (default: enabled)]' \
     '(--cask)--bottle-arch[Optimise bottles for the specified architecture rather than the oldest architecture supported by the version of macOS the bottles are built on]' \
@@ -1891,7 +1898,7 @@ _brew_reinstall() {
     '(--formula)--adopt[Adopt existing artifacts in the destination that are identical to those being installed. Cannot be combined with `--force`]' \
     '(--formula)--appdir[Target location for Applications (default: `/Applications`)]' \
     '(--formula)--appimagedir[Target location for AppImages (default: `~/Applications`)]' \
-    '--ask[Ask for confirmation before downloading and reinstalling. Print what would be reinstalled before prompting. Enabled by default if `$HOMEBREW_ASK` is set]' \
+    '--ask[Ask for confirmation before downloading and reinstalling. Print what would be reinstalled before prompting. Only prompts if the plan includes dependencies or dependants; if the requested formulae or casks are the only things to reinstall, it only prints the plan. The confirmation prompt is skipped without a TTY. Enabled by default if `$HOMEBREW_ASK` is set]' \
     '(--formula)--audio-unit-plugindir[Target location for Audio Unit Plugins (default: `~/Library/Audio/Plug-Ins/Components`)]' \
     '(--formula)--binaries[Disable/enable linking of helper executables (default: enabled)]' \
     '(--cask --force-bottle)--build-from-source[Compile formula from source even if a bottle is available]' \
@@ -2534,17 +2541,6 @@ _brew_update_perl_resources() {
     '*:formula:__brew_formulae'
 }
 
-# brew update-portable-ruby
-_brew_update_portable_ruby() {
-  _arguments \
-    '--debug[Display any debugging information]' \
-    '--dry-run[Print what would be done rather than doing it]' \
-    '--help[Show this message]' \
-    '--quiet[Make some output more quiet]' \
-    '--skip-vendor-install[Do not run `brew vendor-install ruby`; skip the `utils/ruby.sh`, `Gemfile.lock` and RBI updates]' \
-    '--verbose[Make some output more verbose]'
-}
-
 # brew update-python-resources
 _brew_update_python_resources() {
   _arguments \
@@ -2601,7 +2597,7 @@ _brew_upgrade() {
   _arguments \
     '(--formula)--appdir[Target location for Applications (default: `/Applications`)]' \
     '(--formula)--appimagedir[Target location for AppImages (default: `~/Applications`)]' \
-    '--ask[Ask for confirmation before downloading and upgrading. Print the same plan as `--dry-run`, including available download sizes. Enabled by default if `$HOMEBREW_ASK` is set]' \
+    '--ask[Ask for confirmation before downloading and upgrading. Print the same plan as `--dry-run`, including available download sizes. When named arguments are provided, only prompts if the plan includes packages other than those arguments; if the requested formulae or casks are the only things to upgrade, it only prints the plan. With no named arguments, prompts if anything would be upgraded. The confirmation prompt is skipped without a TTY. Enabled by default if `$HOMEBREW_ASK` is set]' \
     '(--formula)--audio-unit-plugindir[Target location for Audio Unit Plugins (default: `~/Library/Audio/Plug-Ins/Components`)]' \
     '(--formula)--binaries[Disable/enable linking of helper executables (default: enabled)]' \
     '(--cask --force-bottle)--build-from-source[Compile formula from source even if a bottle is available]' \
@@ -2628,6 +2624,7 @@ _brew_upgrade() {
     '(--formula)--mdimporterdir[Target location for Spotlight Plugins (default: `~/Library/Spotlight`)]' \
     '--minimum-version[Only upgrade a named formula or cask with an installed version below the given minimum version]' \
     '--no-binaries[Disable/enable linking of helper executables (default: enabled)]' \
+    '(--formula)--no-quit[Prevent running cask applications from being quit during upgrade. Enabled by default if `$HOMEBREW_NO_UPGRADE_QUIT_CASKS` is set]' \
     '(--cask)--overwrite[Delete files that already exist in the prefix while linking]' \
     '(--formula)--prefpanedir[Target location for Preference Panes (default: `~/Library/PreferencePanes`)]' \
     '(--formula)--qlplugindir[Target location for Quick Look Plugins (default: `~/Library/QuickLook`)]' \
@@ -2640,7 +2637,7 @@ _brew_upgrade() {
     '(--formula)--vst-plugindir[Target location for VST Plugins (default: `~/Library/Audio/Plug-Ins/VST`)]' \
     '(--formula)--vst3-plugindir[Target location for VST3 Plugins (default: `~/Library/Audio/Plug-Ins/VST3`)]' \
     - installed_formula \
-    '(--casks --skip-cask-deps --greedy --greedy-latest --greedy-auto-updates --binaries --require-sha --quarantine --appdir --appimagedir --keyboard-layoutdir --colorpickerdir --prefpanedir --qlplugindir --mdimporterdir --dictionarydir --fontdir --servicedir --input-methoddir --internet-plugindir --audio-unit-plugindir --vst-plugindir --vst3-plugindir --screen-saverdir --language)--formula[Treat all named arguments as formulae. If no named arguments are specified, upgrade only outdated formulae]' \
+    '(--casks --skip-cask-deps --no-quit --greedy --greedy-latest --greedy-auto-updates --binaries --require-sha --quarantine --appdir --appimagedir --keyboard-layoutdir --colorpickerdir --prefpanedir --qlplugindir --mdimporterdir --dictionarydir --fontdir --servicedir --input-methoddir --internet-plugindir --audio-unit-plugindir --vst-plugindir --vst3-plugindir --screen-saverdir --language)--formula[Treat all named arguments as formulae. If no named arguments are specified, upgrade only outdated formulae]' \
     '*:installed_formula:__brew_installed_formulae' \
     - installed_cask \
     '(--formulae --build-from-source --interactive --force-bottle --fetch-HEAD --keep-tmp --debug-symbols --overwrite)--cask[Treat all named arguments as casks. If no named arguments are specified, upgrade only outdated casks]' \

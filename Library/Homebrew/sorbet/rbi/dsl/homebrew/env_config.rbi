@@ -275,6 +275,9 @@ module Homebrew::EnvConfig
     def no_proxy; end
 
     sig { returns(T::Boolean) }
+    def no_sandbox_cask?; end
+
+    sig { returns(T::Boolean) }
     def no_sandbox_linux?; end
 
     sig { returns(T::Boolean) }
@@ -282,6 +285,9 @@ module Homebrew::EnvConfig
 
     sig { returns(T::Boolean) }
     def no_upgrade_auto_updates_casks?; end
+
+    sig { returns(T::Boolean) }
+    def no_upgrade_quit_casks?; end
 
     sig { returns(T::Boolean) }
     def no_verify_attestations?; end
@@ -327,6 +333,9 @@ module Homebrew::EnvConfig
 
     sig { returns(T::Boolean) }
     def update_to_tag?; end
+
+    sig { returns(T::Boolean) }
+    def upgrade_auto_updates_casks?; end
 
     sig { returns(T::Boolean) }
     def upgrade_greedy?; end

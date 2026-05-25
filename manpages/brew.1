@@ -93,7 +93,7 @@ Uninstall formulae that were only installed as a dependency of another formula a
 \fB\-n\fP, \fB\-\-dry\-run\fP
 List what would be uninstalled, but do not actually uninstall anything\.
 .SS "\fBbundle\fP \fR[\fIsubcommand\fP]"
-Bundler for non\-Ruby dependencies from Homebrew, Homebrew Cask, Mac App Store dependencies, VSCode (and forks/variants) extensions, Go packages, Cargo packages, uv tools, Flatpak packages, Krew plugins and npm packages\.
+Bundler for non\-Ruby dependencies from Homebrew, Homebrew Cask, Mac App Store dependencies, VSCode (and forks/variants) extensions, Go packages, Cargo packages, uv tools, Flatpak packages, WinGet packages, Krew plugins and npm packages\.
 .P
 Note: Flatpak support is only available on Linux\.
 .TP
@@ -119,7 +119,7 @@ Check that all dependencies in the Brewfile are installed before starting the sh
 Attempt to remove secrets from the environment before starting the shell\. Enabled by default if \fB$HOMEBREW_BUNDLE_NO_SECRETS\fP is set\.
 .TP
 \fBbrew bundle remove\fP \fIname\fP [\.\.\.]
-Remove entries that match \fBname\fP from your \fBBrewfile\fP\&\. Use \fB\-\-formula\fP, \fB\-\-cask\fP, \fB\-\-tap\fP, \fB\-\-mas\fP, \fB\-\-vscode\fP, \fB\-\-go\fP, \fB\-\-cargo\fP, \fB\-\-uv\fP, \fB\-\-flatpak\fP, \fB\-\-krew\fP and \fB\-\-npm\fP to remove only entries of the corresponding type\. Passing \fB\-\-formula\fP also removes matches against formula aliases and old formula names\.
+Remove entries that match \fBname\fP from your \fBBrewfile\fP\&\. Use \fB\-\-formula\fP, \fB\-\-cask\fP, \fB\-\-tap\fP, \fB\-\-mas\fP, \fB\-\-vscode\fP, \fB\-\-go\fP, \fB\-\-cargo\fP, \fB\-\-uv\fP, \fB\-\-flatpak\fP, \fB\-\-winget\fP, \fB\-\-krew\fP and \fB\-\-npm\fP to remove only entries of the corresponding type\. Passing \fB\-\-formula\fP also removes matches against formula aliases and old formula names\.
 .TP
 \fB\-\-install\fP
 Run \fBinstall\fP before removing entries\.
@@ -150,6 +150,9 @@ Remove entries for uv tools\.
 .TP
 \fB\-\-flatpak\fP
 Remove entries for Flatpak packages\. Note: Linux only\.
+.TP
+\fB\-\-winget\fP
+Remove entries for WinGet packages\. Note: WSL only\.
 .TP
 \fB\-\-krew\fP
 Remove entries for Krew plugins\.
@@ -194,6 +197,9 @@ List uv tools\.
 .TP
 \fB\-\-flatpak\fP
 List Flatpak packages\. Note: Linux only\.
+.TP
+\fB\-\-winget\fP
+List WinGet packages\. Note: WSL only\.
 .TP
 \fB\-\-krew\fP
 List Krew plugins\.
@@ -307,6 +313,9 @@ Dump uv tools\.
 \fB\-\-flatpak\fP
 Dump Flatpak packages\. Note: Linux only\.
 .TP
+\fB\-\-winget\fP
+Dump WinGet packages\. Note: WSL only\.
+.TP
 \fB\-\-krew\fP
 Dump Krew plugins\.
 .TP
@@ -327,6 +336,9 @@ Dump npm packages\.
 .TP
 \fB\-\-no\-flatpak\fP
 \fBdump\fP without Flatpak packages\. Enabled by default if \fB$HOMEBREW_BUNDLE_DUMP_NO_FLATPAK\fP is set\.
+.TP
+\fB\-\-no\-winget\fP
+\fBdump\fP without WinGet packages\. Enabled by default if \fB$HOMEBREW_BUNDLE_DUMP_NO_WINGET\fP is set\.
 .TP
 \fB\-\-no\-krew\fP
 \fBdump\fP without Krew plugins\. Enabled by default if \fB$HOMEBREW_BUNDLE_DUMP_NO_KREW\fP is set\.
@@ -353,6 +365,9 @@ Run \fBinstall\fP before cleaning up dependencies\.
 \fB\-f\fP, \fB\-\-force\fP
 Actually perform cleanup operations\.
 .TP
+\fB\-\-all\fP
+Clean up all supported dependencies\.
+.TP
 \fB\-\-formula\fP
 Clean up Homebrew formula dependencies\.
 .TP
@@ -361,6 +376,9 @@ Clean up Homebrew cask dependencies\.
 .TP
 \fB\-\-tap\fP
 Clean up Homebrew tap dependencies\.
+.TP
+\fB\-\-mas\fP
+Clean up Mac App Store dependencies\.
 .TP
 \fB\-\-vscode\fP
 Clean up VSCode (and forks/variants) extensions\.
@@ -376,6 +394,12 @@ Clean up uv tools\.
 .TP
 \fB\-\-flatpak\fP
 Clean up Flatpak packages\. Note: Linux only\.
+.TP
+\fB\-\-winget\fP
+Clean up WinGet packages\. Note: WSL only\.
+.TP
+\fB\-\-krew\fP
+Clean up Krew plugins\.
 .TP
 \fB\-\-npm\fP
 Clean up npm packages\.
@@ -749,7 +773,7 @@ Print the verification and post\-install steps\.
 Show what would be installed, but do not actually install anything\.
 .TP
 \fB\-\-ask\fP
-Ask for confirmation before downloading and installing\. Print the same plan as \fB\-\-dry\-run\fP before prompting\. Enabled by default if \fB$HOMEBREW_ASK\fP is set\.
+Ask for confirmation before downloading and installing\. Print the same plan as \fB\-\-dry\-run\fP before prompting\. Only prompts if the plan includes dependencies or dependants; if the requested formulae or casks are the only things to install, it only prints the plan\. The confirmation prompt is skipped without a TTY\. Enabled by default if \fB$HOMEBREW_ASK\fP is set\.
 .TP
 \fB\-\-formula\fP
 Treat all named arguments as formulae\.
@@ -1051,7 +1075,7 @@ Install without checking for previously installed keg\-only or non\-migrated ver
 Print the verification and post\-install steps\.
 .TP
 \fB\-\-ask\fP
-Ask for confirmation before downloading and reinstalling\. Print what would be reinstalled before prompting\. Enabled by default if \fB$HOMEBREW_ASK\fP is set\.
+Ask for confirmation before downloading and reinstalling\. Print what would be reinstalled before prompting\. Only prompts if the plan includes dependencies or dependants; if the requested formulae or casks are the only things to reinstall, it only prints the plan\. The confirmation prompt is skipped without a TTY\. Enabled by default if \fB$HOMEBREW_ASK\fP is set\.
 .TP
 \fB\-\-formula\fP
 Treat all named arguments as formulae\.
@@ -1358,7 +1382,7 @@ Show what would be upgraded, but do not actually upgrade anything\.
 Only upgrade a named formula or cask with an installed version below the given minimum version\.
 .TP
 \fB\-\-ask\fP
-Ask for confirmation before downloading and upgrading\. Print the same plan as \fB\-\-dry\-run\fP, including available download sizes\. Enabled by default if \fB$HOMEBREW_ASK\fP is set\.
+Ask for confirmation before downloading and upgrading\. Print the same plan as \fB\-\-dry\-run\fP, including available download sizes\. When named arguments are provided, only prompts if the plan includes packages other than those arguments; if the requested formulae or casks are the only things to upgrade, it only prints the plan\. With no named arguments, prompts if anything would be upgraded\. The confirmation prompt is skipped without a TTY\. Enabled by default if \fB$HOMEBREW_ASK\fP is set\.
 .TP
 \fB\-\-formula\fP
 Treat all named arguments as formulae\. If no named arguments are specified, upgrade only outdated formulae\.
@@ -1389,6 +1413,9 @@ Treat all named arguments as casks\. If no named arguments are specified, upgrad
 .TP
 \fB\-\-skip\-cask\-deps\fP
 Skip installing cask dependencies\.
+.TP
+\fB\-\-no\-quit\fP
+Prevent running cask applications from being quit during upgrade\. Enabled by default if \fB$HOMEBREW_NO_UPGRADE_QUIT_CASKS\fP is set\.
 .TP
 \fB\-g\fP, \fB\-\-greedy\fP
 Also include casks with \fBversion :latest\fP and \fBauto_updates true\fP casks that would otherwise be skipped\. Enabled by default if \fB$HOMEBREW_UPGRADE_GREEDY\fP is set\.
@@ -2631,14 +2658,6 @@ Suppress any output\.
 .TP
 \fB\-\-ignore\-errors\fP
 Continue processing even if some resources can\[u2019]t be resolved\.
-.SS "\fBupdate\-portable\-ruby\fP \fR[\fB\-\-dry\-run\fP] \fR[\fB\-\-skip\-vendor\-install\fP]"
-Update the vendored portable Ruby version files, bottle checksums, \fButils/ruby\.sh\fP and \fBGemfile\.lock\fP entries from the current \fBportable\-ruby\fP formula\.
-.TP
-\fB\-n\fP, \fB\-\-dry\-run\fP
-Print what would be done rather than doing it\.
-.TP
-\fB\-\-skip\-vendor\-install\fP
-Do not run \fBbrew vendor\-install ruby\fP; skip the \fButils/ruby\.sh\fP, \fBGemfile\.lock\fP and RBI updates\.
 .SS "\fBupdate\-python\-resources\fP \fR[\fIoptions\fP] \fIformula\fP \fR[\.\.\.]"
 Update versions for PyPI resource blocks in \fIformula\fP\&\.
 .TP
@@ -2858,7 +2877,7 @@ Prefix all download URLs, including those for bottles, with this value\. For exa
 When \fB$HOMEBREW_ARTIFACT_DOMAIN\fP and \fB$HOMEBREW_ARTIFACT_DOMAIN_NO_FALLBACK\fP are both set, if the request to \fB$HOMEBREW_ARTIFACT_DOMAIN\fP fails then Homebrew will error rather than trying any other/default URLs\.
 .TP
 \fBHOMEBREW_ASK\fP
-If set, pass \fB\-\-ask\fP to \fBbrew install\fP, \fBbrew upgrade\fP and \fBbrew reinstall\fP commands\.
+If set, pass \fB\-\-ask\fP to \fBbrew install\fP, \fBbrew upgrade\fP and \fBbrew reinstall\fP commands\. Enabled by default if \fB$HOMEBREW_DEVELOPER\fP is set\. This will become the default behaviour in the next release\. Ask mode prints the plan before proceeding and prompts only if the plan includes dependencies, dependants or packages other than named arguments\. Otherwise, it only prints the plan\. The confirmation prompt is skipped without a TTY\.
 .TP
 \fBHOMEBREW_AUTO_UPDATE_SECS\fP
 Run \fBbrew update\fP once every \fB$HOMEBREW_AUTO_UPDATE_SECS\fP seconds before some commands, e\.g\. \fBbrew install\fP, \fBbrew upgrade\fP or \fBbrew tap\fP\&\. Alternatively, disable auto\-update entirely with \fB$HOMEBREW_NO_AUTO_UPDATE\fP\&\.
@@ -3164,7 +3183,7 @@ If set, do not send analytics\. Google Analytics were destroyed\. For more infor
 .UE
 .TP
 \fBHOMEBREW_NO_ASK\fP
-If set, do not ask for confirmation before downloading and installing, upgrading or reinstalling formulae and casks\. This is a no\-op until ask mode becomes the default behaviour in a later release\.
+If set, do not enable ask mode from \fB$HOMEBREW_ASK\fP or the \fB$HOMEBREW_DEVELOPER\fP default\. This does not disable an explicit \fB\-\-ask\fP\&\.
 .TP
 \fBHOMEBREW_NO_AUTOREMOVE\fP
 If set, calls to \fBbrew cleanup\fP and \fBbrew uninstall\fP will not automatically remove unused formula dependents\.
@@ -3219,11 +3238,17 @@ If set, \fBbrew install\fP \fIformula|cask\fP will not upgrade \fIformula|cask\f
 \fBHOMEBREW_NO_PATH_SHADOW_CHECK\fP
 If set, \fBbrew info\fP and \fBbrew install\fP will not warn when a formula\[u2019]s executables are shadowed by other commands earlier on \fB$PATH\fP\&\.
 .TP
+\fBHOMEBREW_NO_SANDBOX_CASK\fP
+If set, disable sandboxing for cask artifacts that generate files by running executables\.
+.TP
 \fBHOMEBREW_NO_SANDBOX_LINUX\fP
 If set, disable the Linux sandbox\.
 .TP
 \fBHOMEBREW_NO_UPDATE_REPORT_NEW\fP
 If set, \fBbrew update\fP will not show the list of newly added formulae/casks\.
+.TP
+\fBHOMEBREW_NO_UPGRADE_QUIT_CASKS\fP
+If set, \fBbrew upgrade\fP will not quit running applications for casks during upgrades\.
 .TP
 \fBHOMEBREW_NO_VERIFY_ATTESTATIONS\fP
 If set, Homebrew will not verify cryptographic attestations of build provenance for bottles from homebrew\-core\.
@@ -3239,7 +3264,7 @@ If set, \fBbrew install\fP \fIformula\fP will use this URL to download PyPI pack
 If set, use Pry for the \fBbrew irb\fP command\.
 .TP
 \fBHOMEBREW_SANDBOX_LINUX\fP
-If set, use the \fBbwrap\fP(1) sandbox for formula installation and testing on Linux\.
+If set, use the \fBbwrap\fP(1) sandbox for formula installation and testing on Linux\. Enabled by default if \fB$HOMEBREW_DEVELOPER\fP is set\. This will be the default in Homebrew 5\.2\.0\.
 .TP
 \fBHOMEBREW_SBOM\fP
 If set, Homebrew will write SBOM files and run SBOM\-related installation logic\. This is a no\-op until Homebrew 5\.2\.0, when it will become required for that behaviour\.

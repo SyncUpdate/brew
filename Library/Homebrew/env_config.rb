@@ -54,7 +54,13 @@ module Homebrew
         boolean:     true,
       },
       HOMEBREW_ASK:                              {
-        description: "If set, pass `--ask` to `brew install`, `brew upgrade` and `brew reinstall` commands.",
+        # odeprecated: make `HOMEBREW_ASK` the default in the next release
+        description: "If set, pass `--ask` to `brew install`, `brew upgrade` and `brew reinstall` commands. " \
+                     "Enabled by default if `$HOMEBREW_DEVELOPER` is set. This will become the default behaviour " \
+                     "in the next release. " \
+                     "Ask mode prints the plan before proceeding and prompts only if the plan includes " \
+                     "dependencies, dependants or packages other than named arguments. Otherwise, it only " \
+                     "prints the plan. The confirmation prompt is skipped without a TTY.",
         boolean:     true,
       },
       HOMEBREW_AUTO_UPDATE_SECS:                 {
@@ -386,9 +392,8 @@ module Homebrew
         boolean:     true,
       },
       HOMEBREW_NO_ASK:                           {
-        description: "If set, do not ask for confirmation before downloading and installing, upgrading or " \
-                     "reinstalling formulae and casks. This is a no-op until ask mode becomes the default " \
-                     "behaviour in a later release.",
+        description: "If set, do not enable ask mode from `$HOMEBREW_ASK` or the `$HOMEBREW_DEVELOPER` default. " \
+                     "This does not disable an explicit `--ask`.",
         boolean:     true,
       },
       HOMEBREW_NO_AUTOREMOVE:                    {
@@ -469,6 +474,11 @@ module Homebrew
                      "shadowed by other commands earlier on `$PATH`.",
         boolean:     true,
       },
+      HOMEBREW_NO_SANDBOX_CASK:                  {
+        # odeprecated: make cask executable sandboxing mandatory in a future release.
+        description: "If set, disable sandboxing for cask artifacts that generate files by running executables.",
+        boolean:     true,
+      },
       HOMEBREW_NO_SANDBOX_LINUX:                 {
         description: "If set, disable the Linux sandbox.",
         boolean:     true,
@@ -482,6 +492,10 @@ module Homebrew
                      "Does not affect `--greedy` or `--greedy-auto-updates` upgrades.",
         boolean:     true,
         hidden:      true, # odeprecated: remove in 5.2.0
+      },
+      HOMEBREW_NO_UPGRADE_QUIT_CASKS:            {
+        description: "If set, `brew upgrade` will not quit running applications for casks during upgrades.",
+        boolean:     true,
       },
       HOMEBREW_NO_VERIFY_ATTESTATIONS:           {
         description: "If set, Homebrew will not verify cryptographic attestations of build provenance for bottles " \
@@ -497,7 +511,10 @@ module Homebrew
         boolean:     true,
       },
       HOMEBREW_SANDBOX_LINUX:                    {
-        description: "If set, use the `bwrap`(1) sandbox for formula installation and testing on Linux.",
+        # odeprecated: edit in 5.2.0
+        description: "If set, use the `bwrap`(1) sandbox for formula installation and testing on Linux. " \
+                     "Enabled by default if `$HOMEBREW_DEVELOPER` is set. This will be the default in " \
+                     "Homebrew 5.2.0.",
         boolean:     true,
       },
       HOMEBREW_SBOM:                             {
@@ -576,6 +593,7 @@ module Homebrew
                      "if `--greedy` was passed when upgrading any cask on this list.",
       },
       HOMEBREW_USE_INTERNAL_API:                 {
+        # odeprecated: make default next release
         description: "If set, test the new beta internal API for fetching formula and cask data.",
         boolean:     true,
       },
@@ -623,6 +641,8 @@ module Homebrew
       method_name
     end
 
+    # Developer-mode defaults should be materialised in `brew.sh` by setting
+    # the matching environment variable rather than inferred here.
     CUSTOM_IMPLEMENTATIONS = T.let(Set.new([
       :HOMEBREW_MAKE_JOBS,
       :HOMEBREW_CASK_OPTS,
@@ -631,7 +651,6 @@ module Homebrew
       :HOMEBREW_FORBID_PACKAGES_FROM_PATHS,
       :HOMEBREW_DOWNLOAD_CONCURRENCY,
       :HOMEBREW_SANDBOX_LINUX,
-      :HOMEBREW_UPGRADE_AUTO_UPDATES_CASKS,
       :HOMEBREW_USE_INTERNAL_API,
     ]).freeze, T::Set[Symbol])
 
@@ -730,24 +749,6 @@ module Homebrew
       # Provide an opt-out for tests and developers.
       # Our testing framework installs formulae from file paths all over the place.
       ENV["HOMEBREW_TESTS"].blank? && ENV["HOMEBREW_DEVELOPER"].blank?
-    end
-
-    sig { returns(T::Boolean) }
-    def upgrade_auto_updates_casks?
-      upgrade_auto_updates_casks = ENV.fetch("HOMEBREW_UPGRADE_AUTO_UPDATES_CASKS", nil)
-      upgrade_auto_updates_casks = upgrade_auto_updates_casks.present? &&
-                                   FALSY_VALUES.exclude?(upgrade_auto_updates_casks.downcase)
-      no_upgrade_auto_updates_casks = T.unsafe(self).no_upgrade_auto_updates_casks?
-
-      if upgrade_auto_updates_casks && no_upgrade_auto_updates_casks
-        raise UsageError,
-              "`HOMEBREW_UPGRADE_AUTO_UPDATES_CASKS` and `HOMEBREW_NO_UPGRADE_AUTO_UPDATES_CASKS` " \
-              "cannot both be set."
-      end
-
-      return false if no_upgrade_auto_updates_casks
-
-      upgrade_auto_updates_casks || T.unsafe(self).developer?
     end
 
     sig { returns(T::Boolean) }
