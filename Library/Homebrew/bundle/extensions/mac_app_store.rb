@@ -28,11 +28,6 @@ module Homebrew
           false
         end
 
-        sig { override.returns(T::Boolean) }
-        def dump_disable_supported?
-          false
-        end
-
         sig { override.returns(T.nilable(String)) }
         def cleanup_heading
           "Mac App Store apps"
@@ -130,7 +125,7 @@ module Homebrew
           end
           return [].freeze if kept_app_ids.empty?
 
-          packages.reject { |app| kept_app_ids.any? { |id| app.id.to_i == id.to_i } }
+          packages.reject { |app| app.id.to_i.zero? || kept_app_ids.any? { |id| app.id.to_i == id.to_i } }
                   .map { |app| cleanup_item(app) }
         end
 

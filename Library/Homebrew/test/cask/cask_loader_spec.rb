@@ -299,6 +299,89 @@ RSpec.describe Cask::CaskLoader, :cask do
       end
     end
 
+    it "allows the GitHub API token while evaluating casks" do
+      cask_token = "github-token-env"
+      cask_file = mktmpdir/"#{cask_token}.rb"
+      cask_file.write <<~RUBY
+        cask "#{cask_token}" do
+          version "1.0.0"
+          sha256 "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+
+          url "https://example.com/app.dmg"
+          name "GitHub Token Env"
+          desc ENV.key?("HOMEBREW_GITHUB_API_TOKEN") ? "Token present" : "Token absent"
+          homepage "https://example.com"
+
+          app "App.app"
+        end
+      RUBY
+
+      with_env(HOMEBREW_GITHUB_API_TOKEN: "github-token") do
+        cask = Cask::CaskLoader::FromPathLoader.new(cask_file).load(config: nil)
+
+        expect(cask.desc).to eq("Token present")
+      end
+    end
+
+    it "supports temporarily opting out of scrubbing while evaluating casks" do
+      cask_token = "unscrubbed-env"
+      cask_file = mktmpdir/"#{cask_token}.rb"
+      cask_file.write <<~RUBY
+        cask "#{cask_token}" do
+          version "1.0.0"
+          sha256 "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+
+          url "https://example.com/app.dmg"
+          name "Unscrubbed Env"
+          desc ENV.key?("SECRET_TOKEN") ? "Secret present" : "Secret absent"
+          homepage "https://example.com"
+
+          app "App.app"
+        end
+      RUBY
+
+      with_env(HOMEBREW_NO_EVAL_ENV_SCRUBBING: "1", SECRET_TOKEN: "password") do
+        cask = Cask::CaskLoader::FromPathLoader.new(cask_file).load(config: nil)
+
+        expect(cask.desc).to eq("Secret present")
+      end
+    end
+
+    it "refuses untrusted third-party tap casks when trust is enabled" do
+      tap = Tap.fetch("thirdparty", "foo")
+      cask_token = "sensitive-env"
+      cask_file = tap.cask_dir/"#{cask_token}.rb"
+      cask_file.dirname.mkpath
+      cask_file.write <<~RUBY
+        cask "#{cask_token}" do
+          version "1.0.0"
+          sha256 "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+
+          url "https://example.com/app.dmg"
+          name "Sensitive Env"
+          desc "Sensitive Env"
+          homepage "https://example.com"
+
+          app "App.app"
+        end
+      RUBY
+
+      with_env(HOMEBREW_REQUIRE_TAP_TRUST: "1") do
+        expect { Cask::CaskLoader::FromPathLoader.new(cask_file).load(config: nil) }
+          .to raise_error(Homebrew::UntrustedTapError, %r{thirdparty/foo})
+      end
+
+      Homebrew::Trust.trust!(:cask, "thirdparty/foo/sensitive-env")
+
+      with_env(HOMEBREW_REQUIRE_TAP_TRUST: "1") do
+        expect(Cask::CaskLoader::FromPathLoader.new(cask_file).load(config: nil).full_name)
+          .to eq("thirdparty/foo/sensitive-env")
+      end
+    ensure
+      Homebrew::Trust.clear!(:cask)
+      FileUtils.rm_rf HOMEBREW_TAP_DIRECTORY/"thirdparty"
+    end
+
     describe "loading a cask with a removed DSL method" do
       let(:tmpdir) { mktmpdir }
       let(:cask_token) { "removed-method-cask" }

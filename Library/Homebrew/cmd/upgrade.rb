@@ -10,6 +10,7 @@ require "cask/upgrade"
 require "api"
 require "reinstall"
 require "minimum_version"
+require "trust"
 
 module Homebrew
   module Cmd
@@ -181,6 +182,8 @@ module Homebrew
         @ask_prompt_required = false
 
         if args.named.present?
+          Homebrew::Trust.trust_fully_qualified_items!(args.named, type: args.only_formula_or_cask)
+
           args.named.to_formulae_and_casks_and_unavailable(method: :resolve).each do |item|
             case item
             when FormulaOrCaskUnavailableError, NoSuchKegError
@@ -204,10 +207,13 @@ module Homebrew
         only_upgrade_formulae = (named_given && casks.blank?) || (formulae.present? && casks.blank?)
         only_upgrade_casks = (named_given && formulae.blank?) || (casks.present? && formulae.blank?)
 
-        formulae = Homebrew::Attestation.sort_formulae_for_install(formulae) if Homebrew::Attestation.enabled?
+        if Homebrew::EnvConfig.verify_attestations?
+          formulae = Homebrew::Attestation.sort_formulae_for_install(formulae)
+        end
 
         formulae_prefetched = T.let(false, T::Boolean)
         prefetched_casks = T.let(false, T::Boolean)
+        ask_upgrade_planned = T.let(false, T::Boolean)
         shared_download_queue = T.let(nil, T.nilable(Homebrew::DownloadQueue))
         if args.ask?
           unless only_upgrade_casks
@@ -238,11 +244,13 @@ module Homebrew
             named:           args.named.present?,
           )
             Install.ask(action: "upgrade")
+            Cask::Upgrade.show_upgrade_summary(final_upgrade_summary.version_changes)
           end
+          ask_upgrade_planned = final_upgrade_summary.version_changes.present?
           @final_upgrade_summary = FinalUpgradeSummary.new
         end
 
-        if !args.dry_run? && !args.ask? && !only_upgrade_formulae && !only_upgrade_casks
+        if !args.dry_run? && (!args.ask? || ask_upgrade_planned) && !only_upgrade_formulae && !only_upgrade_casks
           shared_download_queue = Homebrew::DownloadQueue.new(pour: true)
           begin
             formulae_prefetched = upgrade_outdated_formulae!(
@@ -261,10 +269,12 @@ module Homebrew
               prefetch_upgrades:      prefetched_cask_upgrades,
               show_downloads_heading: false,
             )
-            Cask::Upgrade.show_upgrade_summary(
-              prefetched_formulae_upgrades + prefetched_cask_upgrades,
-              dry_run: args.dry_run?,
-            )
+            unless args.ask?
+              Cask::Upgrade.show_upgrade_summary(
+                prefetched_formulae_upgrades + prefetched_cask_upgrades,
+                dry_run: args.dry_run?,
+              )
+            end
             Install.show_combined_fetch_downloads_heading(
               formula_names: prefetched_formulae_names,
               cask_names:    prefetched_cask_names,
@@ -708,7 +718,6 @@ module Homebrew
                                    prefetch_upgrades: nil,
                                    show_downloads_heading: true)
         return false if args.formula?
-        return false if args.ask?
 
         casks = minimum_version_casks(casks, quiet: true)
         return false if minimum_version.present? && casks.empty?

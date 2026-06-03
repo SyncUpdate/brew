@@ -9,6 +9,28 @@ RSpec.describe Homebrew::Cmd::Bundle::CleanupSubcommand do
   let(:klass) { Homebrew::Cmd::Bundle::CleanupSubcommand }
 
   describe "#run" do
+    it "asks before cleanup unless --force is passed" do
+      args = args_for_subcommand(:cleanup, all?: false, formulae?: false, casks?: false, taps?: false, mas?: false,
+                                           vscode?: false, cargo?: false, flatpak?: false, go?: false, krew?: false,
+                                           npm?: false, uv?: false)
+      context = bundle_subcommand_context(:cleanup)
+
+      expect(klass).to receive(:cleanup).with(hash_including(ask: true, force: false))
+
+      klass.new(args, context:).run
+    end
+
+    it "does not ask before cleanup when --force is passed" do
+      args = args_for_subcommand(:cleanup, all?: false, formulae?: false, casks?: false, taps?: false, mas?: false,
+                                           vscode?: false, cargo?: false, flatpak?: false, go?: false, krew?: false,
+                                           npm?: false, uv?: false)
+      context = bundle_subcommand_context(:cleanup, force: true)
+
+      expect(klass).to receive(:cleanup).with(hash_including(ask: false, force: true))
+
+      klass.new(args, context:).run
+    end
+
     it "cleans up every supported type when --all is passed" do
       args = args_for_subcommand(:cleanup, all?: true, formulae?: false, casks?: false, taps?: false, mas?: false,
                                            vscode?: false, cargo?: false, flatpak?: false, go?: false, krew?: false,
@@ -29,6 +51,47 @@ RSpec.describe Homebrew::Cmd::Bundle::CleanupSubcommand do
           uv:      true,
           vscode:  true,
         )
+      end
+
+      klass.new(args, context:).run
+    end
+
+    it "does not clean up disabled types by default" do
+      args = args_for_subcommand(:cleanup, no_formulae?: true, no_mas?: true)
+      context = bundle_subcommand_context(:cleanup)
+
+      expect(klass).to receive(:cleanup) do |formulae:, casks:, taps:, extension_types:, **|
+        expect(formulae).to be(false)
+        expect(casks).to be(true)
+        expect(taps).to be(true)
+        expect(extension_types[:mas]).to be(false)
+        expect(extension_types[:vscode]).to be(true)
+      end
+
+      klass.new(args, context:).run
+    end
+
+    it "treats --no-tap as --no-cleanup-tap" do
+      args = args_for_subcommand(:cleanup, no_taps?: true)
+      context = bundle_subcommand_context(:cleanup)
+
+      expect(klass).to receive(:cleanup) do |taps:, **|
+        expect(taps).to be(false)
+      end
+
+      klass.new(args, context:).run
+    end
+
+    it "does not clean up types disabled by environment" do
+      args = args_for_subcommand(:cleanup, no_cleanup_brew?: true, no_cleanup_mas?: true)
+      context = bundle_subcommand_context(:cleanup)
+
+      expect(klass).to receive(:cleanup) do |formulae:, casks:, taps:, extension_types:, **|
+        expect(formulae).to be(false)
+        expect(casks).to be(true)
+        expect(taps).to be(true)
+        expect(extension_types[:mas]).to be(false)
+        expect(extension_types[:vscode]).to be(true)
       end
 
       klass.new(args, context:).run
@@ -382,7 +445,7 @@ RSpec.describe Homebrew::Cmd::Bundle::CleanupSubcommand do
     it "lists casks, formulae and taps" do
       expect(Formatter).to receive(:columns).with(%w[a b]).exactly(5).times.and_return("a b")
       expect(Kernel).not_to receive(:system)
-      expect(klass).to receive(:system_output_no_stderr).and_return("")
+      expect(Homebrew::Cleanup).to receive(:dry_run_output).and_return("")
       output_pattern = Regexp.new(
         "Would uninstall casks:.*Would uninstall formulae:.*Would untap:.*" \
         "Would uninstall VSCode extensions:.*Would uninstall flatpaks:",
@@ -392,6 +455,21 @@ RSpec.describe Homebrew::Cmd::Bundle::CleanupSubcommand do
         klass.cleanup
       end.to raise_error(SystemExit)
         .and output(output_pattern).to_stdout
+    end
+
+    it "prompts and cleans up when asking" do
+      allow($stdin).to receive_messages(getch: "y", tty?: true)
+      allow($stdout).to receive(:tty?).and_return(true)
+      allow(Homebrew::Bundle).to receive(:mark_as_installed_on_request!)
+      allow(Kernel).to receive(:system)
+      allow(klass).to receive(:system_output_no_stderr).and_return("")
+      expect(Formatter).to receive(:columns).with(%w[a b]).exactly(5).times.and_return("a b")
+      expect(Kernel).to receive(:system).with(HOMEBREW_BREW_FILE, "uninstall", "--cask", "--force", "a", "b")
+      expect(Kernel).to receive(:system).with(HOMEBREW_BREW_FILE, "uninstall", "--formula", "--force", "a", "b")
+      expect(Kernel).to receive(:system).with(HOMEBREW_BREW_FILE, "untap", "a", "b")
+      expect(Homebrew::Cleanup).to receive(:dry_run_output).and_return("")
+
+      expect { klass.cleanup(ask: true) }.not_to raise_error
     end
   end
 
@@ -405,12 +483,13 @@ RSpec.describe Homebrew::Cmd::Bundle::CleanupSubcommand do
     end
 
     define_method(:sane?) do
-      expect(klass).to receive(:system_output_no_stderr).and_return("cleaned")
+      expect(klass).not_to receive(:system_output_no_stderr)
+      expect(Homebrew::Cleanup).to receive(:dry_run_output).and_return("cleaned")
     end
 
     context "with --force" do
       it "prints output" do
-        sane?
+        expect(klass).to receive(:system_output_no_stderr).and_return("cleaned")
         expect { klass.cleanup(force: true) }.to output(/cleaned/).to_stdout
       end
     end
@@ -418,7 +497,11 @@ RSpec.describe Homebrew::Cmd::Bundle::CleanupSubcommand do
     context "without --force" do
       it "prints output" do
         sane?
-        expect { klass.cleanup }.to output(/cleaned/).to_stdout
+        expect { klass.cleanup }.to output(<<~EOS).to_stdout
+          Would `brew cleanup`:
+          cleaned
+          Run `brew bundle cleanup --force` to make these changes.
+        EOS
       end
     end
   end

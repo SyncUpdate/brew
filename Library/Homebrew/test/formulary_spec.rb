@@ -74,9 +74,74 @@ RSpec.describe Formulary do
           ignore_errors: false,
         )
 
-        expect(formula_class.const_get(:SECRET_TOKEN_PRESENT)).to be(false)
+        expect(formula_class::SECRET_TOKEN_PRESENT).to be(false)
         expect(ENV.fetch("SECRET_TOKEN", nil)).to eq("password")
       end
+    end
+
+    it "allows the GitHub API token while evaluating formulae" do
+      with_env(HOMEBREW_GITHUB_API_TOKEN: "github-token") do
+        formula_class = Formulary.load_formula(
+          "github-token-env",
+          mktmpdir/"github-token-env.rb",
+          <<~RUBY,
+            class GithubTokenEnv < Formula
+              GITHUB_TOKEN_PRESENT = ENV.key?("HOMEBREW_GITHUB_API_TOKEN")
+              url "https://brew.sh/github-token-env-1.0.tar.gz"
+            end
+          RUBY
+          "GithubTokenEnvNamespace",
+          flags:         [],
+          ignore_errors: false,
+        )
+
+        expect(formula_class::GITHUB_TOKEN_PRESENT).to be(true)
+      end
+    end
+
+    it "supports temporarily opting out of scrubbing while evaluating formulae" do
+      with_env(HOMEBREW_NO_EVAL_ENV_SCRUBBING: "1", SECRET_TOKEN: "password") do
+        formula_class = Formulary.load_formula(
+          "unscrubbed-env",
+          mktmpdir/"unscrubbed-env.rb",
+          <<~RUBY,
+            class UnscrubbedEnv < Formula
+              SECRET_TOKEN_PRESENT = ENV.key?("SECRET_TOKEN")
+              url "https://brew.sh/unscrubbed-env-1.0.tar.gz"
+            end
+          RUBY
+          "UnscrubbedEnvNamespace",
+          flags:         [],
+          ignore_errors: false,
+        )
+
+        expect(formula_class::SECRET_TOKEN_PRESENT).to be(true)
+      end
+    end
+
+    it "refuses untrusted third-party tap formulae when trust is enabled" do
+      tap = Tap.fetch("thirdparty", "foo")
+      formula_path = tap.formula_dir/"sensitive-env.rb"
+      formula_path.dirname.mkpath
+      formula_path.write <<~RUBY
+        class SensitiveEnv < Formula
+          url "https://brew.sh/sensitive-env-1.0.tar.gz"
+        end
+      RUBY
+
+      with_env(HOMEBREW_REQUIRE_TAP_TRUST: "1") do
+        expect { Formulary.factory(formula_path) }
+          .to raise_error(Homebrew::UntrustedTapError, %r{thirdparty/foo})
+      end
+
+      Homebrew::Trust.trust!(:formula, "thirdparty/foo/sensitive-env")
+
+      with_env(HOMEBREW_REQUIRE_TAP_TRUST: "1") do
+        expect(Formulary.factory(formula_path).full_name).to eq("thirdparty/foo/sensitive-env")
+      end
+    ensure
+      Homebrew::Trust.clear!(:formula)
+      FileUtils.rm_rf HOMEBREW_TAP_DIRECTORY/"thirdparty"
     end
   end
 
@@ -568,6 +633,22 @@ RSpec.describe Formulary do
         expect(formula.to_hash_with_variations).to eq(expected_hash)
       end
 
+      it "loads patches from API JSON" do
+        allow(Homebrew::API::Formula).to receive(:all_formulae).and_return formula_json_contents(
+          "patches" => [
+            {
+              "strip"  => "p1",
+              "url"    => "https://example.com/test.patch",
+              "sha256" => TEST_SHA256,
+            },
+          ],
+        )
+
+        formula = klass.factory(formula_name)
+
+        expect(formula.patchlist.first).to be_a(ExternalPatch)
+      end
+
       it "returns a deprecated Formula when given a name" do
         allow(Homebrew::API::Formula).to receive(:all_formulae).and_return formula_json_contents(deprecate_json)
 
@@ -681,8 +762,8 @@ RSpec.describe Formulary do
             { "#{old_formula_name}": "homebrew/core/#{formula_name}" }
           JSON
 
-          loader = klass::FromNameLoader.try_new(old_formula_name)
-          expect(loader).to be_a(klass::FromAPILoader)
+          loader = Formulary::FromNameLoader.try_new(old_formula_name)
+          expect(loader).to be_a(Formulary::FromAPILoader)
           expect(loader.name).to eq formula_name
           expect(loader.path).not_to exist
         end
@@ -693,8 +774,8 @@ RSpec.describe Formulary do
             { "#{old_formula_name}": "homebrew/core/#{formula_name}" }
           JSON
 
-          loader = klass::FromTapLoader.try_new("#{foo_tap}/#{old_formula_name}")
-          expect(loader).to be_a(klass::FromAPILoader)
+          loader = Formulary::FromTapLoader.try_new("#{foo_tap}/#{old_formula_name}")
+          expect(loader).to be_a(Formulary::FromAPILoader)
           expect(loader.name).to eq formula_name
           expect(loader.path).not_to exist
         end
@@ -802,6 +883,8 @@ RSpec.describe Formulary do
     context "when not using the API", :no_api do
       context "when a formula is migrated" do
         let(:token) { "foo" }
+        let(:old_tap) { core_tap }
+        let(:new_tap) { core_cask_tap }
 
         let(:core_tap) { CoreTap.instance }
         let(:core_cask_tap) { CoreCaskTap.instance }

@@ -7,6 +7,7 @@ require "hardware"
 require "development_tools"
 require "upgrade"
 require "download_queue"
+require "ask"
 require "utils/output"
 require "utils/topological_hash"
 
@@ -147,7 +148,7 @@ module Homebrew
           elsif only_dependencies
             return true
           elsif !quiet
-            opoo <<~EOS
+            opoo_without_github_actions_annotation <<~EOS
               #{formula.full_name} #{formula.pkg_version} is already installed and up-to-date.
               To reinstall #{formula.pkg_version}, run:
                 brew reinstall #{formula.name}
@@ -185,15 +186,14 @@ module Homebrew
                 brew link #{formula.full_name}
             EOS
           else
-            msg = if quiet
-              nil
-            else
-              <<~EOS
+            unless quiet
+              opoo_without_github_actions_annotation <<~EOS
                 #{msg} and up-to-date.
                 To reinstall #{formula.pkg_version}, run:
                   brew reinstall #{formula.name}
               EOS
             end
+            msg = nil
           end
           opoo msg if msg
         elsif !formula.any_version_installed? && (old_formula = formula.old_installed_formulae.first)
@@ -718,6 +718,7 @@ module Homebrew
         check_cpu
         attempt_directory_creation
         Diagnostic.checks(:supported_configuration_checks, fatal: all_fatal)
+        Diagnostic.checks(:preinstall_checks, fatal: false)
         Diagnostic.checks(:fatal_preinstall_checks)
       end
 
@@ -743,24 +744,8 @@ module Homebrew
 
       sig { params(action: String).void }
       def ask_input(action: "installation")
-        return if !$stdin.tty? || !$stdout.tty?
-
-        ohai "Do you want to proceed with the #{action}? [y/N]"
-        accepted_inputs = %w[y yes]
-        declined_inputs = %w[n no]
-        loop do
-          result = $stdin.gets
-          return unless result
-
-          result = result.chomp.strip.downcase
-          if accepted_inputs.include?(result)
-            break
-          elsif result.blank? || declined_inputs.include?(result)
-            exit 1
-          else
-            puts "Invalid input. Please enter 'y' or 'yes' to proceed, or 'n' or 'no' to abort."
-          end
-        end
+        Homebrew::Ask.confirm?(action:)
+        nil
       end
 
       # Compute the total sizes (download and installed) for the given formulae.

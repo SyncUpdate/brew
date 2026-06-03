@@ -1057,6 +1057,9 @@ fi
 if [[ -n "${HOMEBREW_DEVELOPER}" ]]
 then
   export HOMEBREW_ASK="1"
+  export HOMEBREW_BUNDLE_DESCRIBE="1"
+  export HOMEBREW_BUNDLE_JOBS="auto"
+  export HOMEBREW_BUNDLE_NO_SECRETS="1"
   export HOMEBREW_UPGRADE_AUTO_UPDATES_CASKS="1"
   export HOMEBREW_SANDBOX_LINUX="1"
 fi
@@ -1066,22 +1069,27 @@ if [[ -n "${HOMEBREW_DEVELOPER}" || -n "${HOMEBREW_DEV_CMD_RUN}" ]]
 then
   # odeprecated: make default next release
   export HOMEBREW_USE_INTERNAL_API="1"
+fi
 
-  # Probably never makes sense to be default for everyone?
+# Only enable runtime typechecking for commands where correctness matters more
+# than performance.
+if [[ "${HOMEBREW_COMMAND}" == "test" || "${HOMEBREW_COMMAND}" == "test-bot" ||
+      "${HOMEBREW_COMMAND}" == "tests" ]]
+then
   export HOMEBREW_SORBET_RUNTIME="1"
 fi
 
 # Provide a (temporary, undocumented) way to disable Sorbet globally if needed
-# to avoid reverting the above.
+# to override any earlier environment setting.
 if [[ -n "${HOMEBREW_NO_SORBET_RUNTIME}" ]]
 then
   unset HOMEBREW_SORBET_RUNTIME
 fi
 
-if [[ -f "${HOMEBREW_LIBRARY}/Homebrew/cmd/${HOMEBREW_COMMAND}.sh" ]]
+if [[ -z "${HOMEBREW_FORCE_RUBY_COMMAND:-}" && -f "${HOMEBREW_LIBRARY}/Homebrew/cmd/${HOMEBREW_COMMAND}.sh" ]]
 then
   HOMEBREW_BASH_COMMAND="${HOMEBREW_LIBRARY}/Homebrew/cmd/${HOMEBREW_COMMAND}.sh"
-elif [[ -f "${HOMEBREW_LIBRARY}/Homebrew/dev-cmd/${HOMEBREW_COMMAND}.sh" ]]
+elif [[ -z "${HOMEBREW_FORCE_RUBY_COMMAND:-}" && -f "${HOMEBREW_LIBRARY}/Homebrew/dev-cmd/${HOMEBREW_COMMAND}.sh" ]]
 then
   HOMEBREW_BASH_COMMAND="${HOMEBREW_LIBRARY}/Homebrew/dev-cmd/${HOMEBREW_COMMAND}.sh"
 fi

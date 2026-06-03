@@ -43,6 +43,7 @@ require "utils/spdx"
 require "on_system"
 require "api"
 require "api_hashable"
+require "trust"
 require "utils/output"
 require "pypi_packages"
 require "time"
@@ -1659,12 +1660,18 @@ class Formula
         PATH:          PATH.new(ORIGINAL_PATHS),
       }
 
-      with_env(new_env) do
-        ENV.clear_sensitive_environment!
-        ENV.activate_extensions!
+      Dir.mktmpdir("#{name}-postinstall-") do |home|
+        postinstall_home = Pathname(home)
+        new_env[:HOME] = postinstall_home.to_s
+        setup_home postinstall_home
 
-        with_logging("post_install") do
-          post_install
+        with_env(new_env) do
+          ENV.clear_sensitive_environment!
+          ENV.activate_extensions!
+
+          with_logging("post_install") do
+            post_install
+          end
         end
       end
     ensure
@@ -2554,14 +2561,18 @@ class Formula
   end
 
   # An array of each known {Formula}.
-  # Can only be used when users specify `--eval-all` with a command or set `HOMEBREW_EVAL_ALL=1`.
+  # Can only be used when users set `HOMEBREW_REQUIRE_TAP_TRUST=1` or `HOMEBREW_NO_REQUIRE_TAP_TRUST=1`.
   sig { params(eval_all: T::Boolean).returns(T::Array[Formula]) }
   def self.all(eval_all: false)
-    if !eval_all && !Homebrew::EnvConfig.eval_all?
-      raise ArgumentError, "Formula#all cannot be used without `--eval-all` or `HOMEBREW_EVAL_ALL=1`"
+    if !eval_all && !Homebrew::EnvConfig.tap_trust_configured?
+      raise ArgumentError,
+            "Formula#all cannot be used without `HOMEBREW_REQUIRE_TAP_TRUST=1` or " \
+            "`HOMEBREW_NO_REQUIRE_TAP_TRUST=1`"
     end
 
-    (core_names + tap_files).filter_map do |name_or_file|
+    trusted_tap_files = Homebrew::Trust.trusted_formula_files(tap_files)
+
+    (core_names + trusted_tap_files).filter_map do |name_or_file|
       Formulary.factory(name_or_file)
     rescue FormulaUnavailableError, FormulaUnreadableError, FormulaSpecificationError => e
       # Don't let one broken formula break commands. But do complain.
@@ -2931,6 +2942,7 @@ class Formula
         "bottle" => bottle_defined?,
       },
       "urls"                            => urls_hash,
+      "patches"                         => serialized_patches,
       "revision"                        => revision,
       "version_scheme"                  => version_scheme,
       "compatibility_version"           => compatibility_version,
@@ -3110,6 +3122,25 @@ class Formula
   end
 
   sig { returns(T::Array[T::Hash[String, T.untyped]]) }
+  def serialized_patches
+    patchlist.map do |p|
+      h = { "strip" => p.strip.to_s }
+      if p.external?
+        external = T.cast(p, ExternalPatch)
+        h["url"] = external.url
+        h["sha256"] = external.resource.checksum&.hexdigest
+        h["apply"] = external.resource.patch_files.map(&:to_s) if external.resource.patch_files.any?
+        h["directory"] = external.resource.directory.to_s if external.resource.directory.present?
+      elsif p.is_a?(LocalPatch)
+        h["file"] = p.file.to_s
+      else
+        h["data"] = true
+      end
+      h
+    end
+  end
+
+  sig { returns(T::Array[T::Hash[String, T.untyped]]) }
   def serialized_requirements
     requirements = self.class.spec_syms.to_h do |sym|
       [sym, send(sym)&.requirements]
@@ -3245,8 +3276,7 @@ class Formula
       PATH:          PATH.new(ENV.fetch("PATH"), HOMEBREW_PREFIX/"bin"),
       HOMEBREW_TERM: ENV.fetch("TERM", nil),
       HOMEBREW_PATH: nil,
-    }.merge(common_stage_test_env)
-    test_env[:_JAVA_OPTIONS] += " -Djava.io.tmpdir=#{HOMEBREW_TEMP}"
+    }
 
     ENV.clear_sensitive_environment!
     Utils::Git.set_name_email!
@@ -3255,6 +3285,8 @@ class Formula
       staging.retain! if keep_tmp
       @testpath = T.let(staging.tmpdir, T.nilable(Pathname))
       test_env[:HOME] = @testpath
+      test_env.merge!(common_stage_test_env(T.must(@testpath)))
+      test_env[:_JAVA_OPTIONS] += " -Djava.io.tmpdir=#{HOMEBREW_TEMP}"
       setup_home T.must(@testpath)
       begin
         with_logging("test") do
@@ -3706,15 +3738,15 @@ class Formula
   end
 
   # Common environment variables used at both build and test time.
-  sig { returns(T::Hash[Symbol, String]) }
-  def common_stage_test_env
+  sig { params(home: Pathname).returns(T::Hash[Symbol, String]) }
+  def common_stage_test_env(home)
     {
       _JAVA_OPTIONS:           "-Duser.home=#{HOMEBREW_CACHE}/java_cache",
       GOCACHE:                 "#{HOMEBREW_CACHE}/go_cache",
       GOPATH:                  "#{HOMEBREW_CACHE}/go_mod_cache",
       CARGO_HOME:              "#{HOMEBREW_CACHE}/cargo_cache",
       PIP_CACHE_DIR:           "#{HOMEBREW_CACHE}/pip_cache",
-      CURL_HOME:               ENV.fetch("CURL_HOME") { Dir.home },
+      CURL_HOME:               ENV.fetch("CURL_HOME") { home.to_s },
       PYTHONDONTWRITEBYTECODE: "1",
     }
   end
@@ -3733,7 +3765,7 @@ class Formula
 
       unless interactive
         stage_env[:HOME] = env_home
-        stage_env.merge!(common_stage_test_env)
+        stage_env.merge!(common_stage_test_env(env_home))
       end
 
       setup_home env_home

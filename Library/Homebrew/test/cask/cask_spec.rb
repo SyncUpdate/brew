@@ -57,6 +57,37 @@ RSpec.describe Cask::Cask, :cask do
     Cask::CaskLoader.load(path)
   end
 
+  describe ".all" do
+    it "skips untrusted tap casks when trust is enabled" do
+      tap = Tap.fetch("thirdparty", "foo")
+      cask_path = tap.cask_dir/"untrusted.rb"
+      cask_path.dirname.mkpath
+      cask_path.write <<~RUBY
+        raise "untrusted cask evaluated"
+      RUBY
+
+      allow(CoreCaskTap.instance).to receive(:cask_tokens).and_return([])
+      allow(Tap).to receive(:reject).and_return([tap])
+      expect(Cask::CaskLoader).not_to receive(:load).with(cask_path)
+
+      with_env(HOMEBREW_REQUIRE_TAP_TRUST: "1") do
+        expect { expect(klass.all(eval_all: true)).to eq([]) }
+          .to output(%r{Skipping thirdparty/foo because it is not trusted}).to_stderr
+      end
+    ensure
+      FileUtils.rm_rf HOMEBREW_TAP_DIRECTORY/"thirdparty"
+    end
+
+    it "allows all casks when trust is disabled" do
+      allow(CoreCaskTap.instance).to receive(:cask_tokens).and_return([])
+      allow(Tap).to receive(:reject).and_return([])
+
+      with_env(HOMEBREW_NO_REQUIRE_TAP_TRUST: "1") do
+        expect(klass.all).to eq([])
+      end
+    end
+  end
+
   context "when multiple versions are installed" do
     describe "#installed_version" do
       context "when there are duplicate versions" do
@@ -419,7 +450,9 @@ RSpec.describe Cask::Cask, :cask do
 
     context "when it is from a non-core tap" do
       it "returns the fully-qualified name of the cask" do
-        c = Cask::CaskLoader.load("third-party/tap/third-party-cask")
+        c = with_env(HOMEBREW_NO_REQUIRE_TAP_TRUST: "1") do
+          Cask::CaskLoader.load("third-party/tap/third-party-cask")
+        end
         expect(c.full_name).to eq("third-party/tap/third-party-cask")
       end
     end
@@ -596,6 +629,20 @@ RSpec.describe Cask::Cask, :cask do
     end
   end
 
+  describe "#refresh_for_tag" do
+    let(:cask) { Cask::CaskLoader.load("on-linux-asymmetric") }
+
+    it "yields with the cask refreshed for a supported tag" do
+      tag = Utils::Bottles::Tag.new(system: :sonoma, arch: :intel)
+      expect(cask.refresh_for_tag(tag) { cask.url.to_s }).to include("caffeine-intel-darwin")
+    end
+
+    it "returns nil for a tag the cask does not support" do
+      tag = Utils::Bottles::Tag.new(system: :linux, arch: :arm)
+      expect(cask.refresh_for_tag(tag) { cask.url }).to be_nil
+    end
+  end
+
   describe "#to_hash_with_variations" do
     let!(:original_macos_version) { MacOS.full_version.to_s }
     let(:expected_versions_variations) do
@@ -742,6 +789,14 @@ RSpec.describe Cask::Cask, :cask do
 
       expect(h).to be_a(Hash)
       expect(JSON.pretty_generate(h["variations"])).to eq expected_sha256_variations_os.strip
+    end
+
+    it "omits tags a cask intentionally doesn't define in on_system blocks" do
+      c = Cask::CaskLoader.load("on-linux-asymmetric")
+      h = c.to_hash_with_variations
+
+      expect(h["variations"]).to include(:x86_64_linux)
+      expect(h["variations"]).not_to include(:arm64_linux)
     end
 
     # NOTE: The calls to `Cask.generating_hash!` and `Cask.generated_hash!`

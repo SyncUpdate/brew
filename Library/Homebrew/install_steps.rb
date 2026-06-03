@@ -46,9 +46,24 @@ module Homebrew
       sig { params(steps: ::T::Array[::T.untyped]).returns(Steps) }
       def self.normalise_steps(steps)
         steps.map do |step|
-          ::T.cast(::Utils.deep_stringify_symbols(step), Step)
+          ::T.cast(normalise_step_value(step), Step)
         end
       end
+
+      sig { params(obj: ::T.untyped).returns(::T.untyped) }
+      def self.normalise_step_value(obj)
+        case obj
+        when Symbol
+          obj.to_s
+        when Hash
+          obj.to_h { |key, value| [key.to_s, normalise_step_value(value)] }
+        when Array
+          obj.map { |value| normalise_step_value(value) }
+        else
+          obj
+        end
+      end
+      private_class_method :normalise_step_value
 
       sig { params(path: ::T.any(::String, ::Pathname), base: ::T.nilable(::T.any(::String, ::Symbol))).void }
       def mkdir(path, base: nil)
@@ -153,6 +168,36 @@ module Homebrew
         symlink(source, target, source_base:, target_base:, source_formula:, target_formula:, force: true, uninstall:)
       end
 
+      sig { void }
+      def compile_gsettings_schemas
+        add_rebuild_action("compile_gsettings_schemas", "share/glib-2.0/schemas")
+      end
+
+      sig { void }
+      def gio_querymodules
+        add_rebuild_action("gio_querymodules", "lib/gio/modules")
+      end
+
+      sig { void }
+      def gdk_pixbuf_query_loaders
+        add_step("gdk_pixbuf_query_loaders")
+      end
+
+      sig { void }
+      def gtk_update_icon_cache
+        add_rebuild_action("gtk_update_icon_cache", "share/icons/hicolor")
+      end
+
+      sig { void }
+      def update_mime_database
+        add_rebuild_action("update_mime_database", "share/mime")
+      end
+
+      sig { void }
+      def update_desktop_database
+        add_rebuild_action("update_desktop_database", "share/applications")
+      end
+
       private
 
       sig { params(type: ::String, fields: ::T.untyped).void }
@@ -160,6 +205,11 @@ module Homebrew
         step = fields.transform_keys(&:to_s)
         step["type"] = type
         @steps << ::T.cast(::Utils.deep_compact_blank(step), Step)
+      end
+
+      sig { params(type: ::String, path: ::String).void }
+      def add_rebuild_action(type, path)
+        add_step(type, "path" => path_spec(path, base: :homebrew_prefix))
       end
 
       sig {
@@ -240,6 +290,18 @@ module Homebrew
           target.dirname.mkpath
           FileUtils.rm_f target if step["force"] == true
           File.symlink link_source(step.fetch("source")), target
+        when "compile_gsettings_schemas"
+          run_formula_tool("glib", "glib-compile-schemas", resolve_path(step.fetch("path")))
+        when "gio_querymodules"
+          run_formula_tool("glib", "gio-querymodules", resolve_path(step.fetch("path")))
+        when "gdk_pixbuf_query_loaders"
+          run_formula_tool("gdk-pixbuf", "gdk-pixbuf-query-loaders", "--update-cache")
+        when "gtk_update_icon_cache"
+          run_formula_tool("gtk+3", "gtk3-update-icon-cache", "-q", "-t", "-f", resolve_path(step.fetch("path")))
+        when "update_mime_database"
+          run_formula_tool("shared-mime-info", "update-mime-database", resolve_path(step.fetch("path")))
+        when "update_desktop_database"
+          run_formula_tool("desktop-file-utils", "update-desktop-database", resolve_path(step.fetch("path")))
         else
           raise ArgumentError, "unknown install step: #{step.fetch("type")}"
         end
@@ -282,6 +344,11 @@ module Homebrew
         else
           { "path" => spec.to_s }
         end
+      end
+
+      sig { params(formula: String, executable: String, args: T.untyped).void }
+      def run_formula_tool(formula, executable, *args)
+        @context.send(:safe_system, Formula[formula].opt_bin/executable, *args)
       end
 
       sig { params(base: String, formula: T.nilable(String)).returns(Pathname) }

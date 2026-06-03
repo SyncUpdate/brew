@@ -3,11 +3,13 @@
 
 require "abstract_subcommand"
 require "bundle/extensions/extension"
+require "cleanup"
 
 require "utils/formatter"
 require "utils"
 require "bundle/dsl"
 require "bundle/extensions"
+require "ask"
 module Homebrew
   module Cmd
     class Bundle < Homebrew::AbstractCommand
@@ -30,13 +32,38 @@ module Homebrew
                  description: "Clean up all supported dependencies."
           switch "--formula", "--formulae", "--brews",
                  description: "Clean up Homebrew formula dependencies."
+          switch "--no-formula", "--no-formulae", "--no-brews",
+                 description: "Clean up without Homebrew formula dependencies. " \
+                              "Enabled by default if `$HOMEBREW_BUNDLE_CLEANUP_NO_BREW` is set."
+          switch "--no-cleanup-brew",
+                 description: "Clean up without Homebrew formula dependencies.",
+                 env:         :bundle_cleanup_no_brew
           switch "--cask", "--casks",
                  description: "Clean up Homebrew cask dependencies."
+          switch "--no-cask", "--no-casks",
+                 description: "Clean up without Homebrew cask dependencies. " \
+                              "Enabled by default if `$HOMEBREW_BUNDLE_CLEANUP_NO_CASK` is set."
+          switch "--no-cleanup-cask",
+                 description: "Clean up without Homebrew cask dependencies.",
+                 env:         :bundle_cleanup_no_cask
           switch "--tap", "--taps",
                  description: "Clean up Homebrew tap dependencies."
+          switch "--no-tap", "--no-taps",
+                 description: "Clean up without Homebrew tap dependencies. " \
+                              "Enabled by default if `$HOMEBREW_BUNDLE_CLEANUP_NO_TAP` is set."
+          switch "--no-cleanup-tap",
+                 description: "Clean up without Homebrew tap dependencies.",
+                 env:         :bundle_cleanup_no_tap
           Homebrew::Bundle.extensions.select(&:cleanup_supported?).each do |extension|
+            env = "HOMEBREW_#{extension.cleanup_disable_env.to_s.upcase}"
             switch "--#{extension.flag}",
                    description: extension.switch_description("Clean up #{extension.banner_name}.")
+            switch "--no-#{extension.flag}",
+                   description: "#{extension.cleanup_disable_description} " \
+                                "Enabled by default if `$#{env}` is set."
+            switch "--no-cleanup-#{extension.flag}",
+                   description: extension.cleanup_disable_description,
+                   env:         extension.cleanup_disable_env
           end
           switch "--zap",
                  description: "Clean up casks using the `zap` command instead of `uninstall`."
@@ -44,18 +71,21 @@ module Homebrew
 
         sig { override.void }
         def run
+          core_type_options = context.core_type_options(args, "cleanup", all: args.all?)
           self.class.cleanup(
             global:          context.global,
             file:            context.file,
             force:           context.force,
             zap:             context.zap,
-            formulae:        args.formulae? || args.all? || context.no_type_args,
-            casks:           args.casks? || args.all? || context.no_type_args,
-            taps:            args.taps? || args.all? || context.no_type_args,
+            ask:             context.ask || !context.force,
+            formulae:        core_type_options.fetch(:formulae),
+            casks:           core_type_options.fetch(:casks),
+            taps:            core_type_options.fetch(:taps),
             extension_types: context.extensions.select(&:cleanup_supported?).to_h do |extension|
               [
                 extension.type,
-                context.extension_selected?(args, extension) || args.all? || context.no_type_args,
+                !context.extension_disabled?(args, extension) &&
+                  (context.extension_selected?(args, extension) || args.all? || context.no_type_args),
               ]
             end,
           )
@@ -81,12 +111,15 @@ module Homebrew
         sig {
           params(global: T::Boolean, file: T.nilable(String), force: T::Boolean, zap: T::Boolean,
                  dsl: T.nilable(Homebrew::Bundle::Dsl), formulae: T::Boolean, casks: T::Boolean, taps: T::Boolean,
-                 extension_types: Homebrew::Bundle::ExtensionTypes).void
+                 ask: T::Boolean, extension_types: Homebrew::Bundle::ExtensionTypes).void
         }
         def self.cleanup(global: false, file: nil, force: false, zap: false, dsl: nil,
-                         formulae: true, casks: true, taps: true, extension_types: {})
+                         formulae: true, casks: true, taps: true, ask: false, extension_types: {})
           read_dsl_from_brewfile!(global:, file:, dsl:)
 
+          cleanup_formulae = formulae
+          cleanup_casks = casks
+          cleanup_taps = taps
           extension_types = Homebrew::Bundle.extensions.select(&:cleanup_supported?).to_h do |extension|
             [extension.type, true]
           end.merge(extension_types)
@@ -172,13 +205,14 @@ module Homebrew
               would_uninstall = true
             end
 
-            cleanup = system_output_no_stderr(HOMEBREW_BREW_FILE, "cleanup", "--dry-run")
-            unless cleanup.empty?
-              puts "Would `brew cleanup`:"
-              puts cleanup
-            end
+            would_cleanup = Cleanup.printed_dry_run_output?(Cleanup.dry_run_output)
 
-            puts "Run `brew bundle cleanup --force` to make these changes." if would_uninstall || !cleanup.empty?
+            puts "Run `brew bundle cleanup --force` to make these changes." if would_uninstall || would_cleanup
+            if ask && (would_uninstall || would_cleanup) && Homebrew::Ask.confirm?(action: "cleanup")
+              cleanup(global:, file:, force: true, zap:, dsl: @dsl, formulae: cleanup_formulae, casks: cleanup_casks,
+                      taps: cleanup_taps, extension_types:)
+              return
+            end
             exit 1 if would_uninstall
           end
         end

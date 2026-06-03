@@ -23,8 +23,8 @@ RSpec.describe Homebrew::InstallSteps do
   end
 
   specify "runs mkdir, touch, move and symlink steps", :aggregate_failures do
-    steps = described_class::DSL.build(default_base: :var, default_source_base: :staged_path,
-                                       default_target_base: :staged_path) do
+    steps = Homebrew::InstallSteps::DSL.build(default_base: :var, default_source_base: :staged_path,
+                                              default_target_base: :staged_path) do
       mkdir_p "log/example"
       touch "state/marker", base: :prefix
       mv "move-source", "move-target"
@@ -34,7 +34,7 @@ RSpec.describe Homebrew::InstallSteps do
     (root/"stage").mkpath
     (root/"stage/move-source").write "moved"
 
-    described_class::Runner.new(context:).run(steps)
+    Homebrew::InstallSteps::Runner.new(context:).run(steps)
 
     expect(root/"var/log/example").to be_a_directory
     expect(root/"prefix/state/marker").to exist
@@ -44,7 +44,7 @@ RSpec.describe Homebrew::InstallSteps do
   end
 
   specify "runs mkdir without creating parent directories" do
-    steps = described_class::DSL.build(default_base: :var) do
+    steps = Homebrew::InstallSteps::DSL.build(default_base: :var) do
       mkdir "missing-parent/example"
     end
 
@@ -55,11 +55,11 @@ RSpec.describe Homebrew::InstallSteps do
         "path" => "missing-parent/example",
       },
     )
-    expect { described_class::Runner.new(context:).run(steps) }.to raise_error(Errno::ENOENT)
+    expect { Homebrew::InstallSteps::Runner.new(context:).run(steps) }.to raise_error(Errno::ENOENT)
   end
 
   specify "runs mkdir_p recursively" do
-    steps = described_class::DSL.build(default_base: :var) do
+    steps = Homebrew::InstallSteps::DSL.build(default_base: :var) do
       mkdir_p "nested/example"
     end
 
@@ -71,13 +71,64 @@ RSpec.describe Homebrew::InstallSteps do
       },
     )
 
-    described_class::Runner.new(context:).run(steps)
+    Homebrew::InstallSteps::Runner.new(context:).run(steps)
 
     expect(root/"var/nested/example").to be_a_directory
   end
 
+  specify "normalises API step keys and values" do
+    steps = [
+      {
+        type: :mkdir_p,
+        path: {
+          base: :var,
+          path: "nested/example",
+        },
+      },
+    ]
+
+    expect(Homebrew::InstallSteps::DSL.normalise_steps(steps)).to contain_exactly(
+      "type" => "mkdir_p",
+      "path" => {
+        "base" => "var",
+        "path" => "nested/example",
+      },
+    )
+  end
+
+  specify "runs named desktop and cache rebuild actions" do
+    steps = Homebrew::InstallSteps::DSL.build do
+      compile_gsettings_schemas
+      gio_querymodules
+      gdk_pixbuf_query_loaders
+      gtk_update_icon_cache
+      update_mime_database
+      update_desktop_database
+    end
+
+    formula = instance_double(Formula, opt_bin: root/"opt/bin")
+    allow(Formula).to receive(:[]).with("glib").and_return(formula)
+    allow(Formula).to receive(:[]).with("gdk-pixbuf").and_return(formula)
+    allow(Formula).to receive(:[]).with("gtk+3").and_return(formula)
+    allow(Formula).to receive(:[]).with("shared-mime-info").and_return(formula)
+    allow(Formula).to receive(:[]).with("desktop-file-utils").and_return(formula)
+    expect(context).to receive(:safe_system).with(root/"opt/bin/glib-compile-schemas",
+                                                  HOMEBREW_PREFIX/"share/glib-2.0/schemas").ordered
+    expect(context).to receive(:safe_system).with(root/"opt/bin/gio-querymodules",
+                                                  HOMEBREW_PREFIX/"lib/gio/modules").ordered
+    expect(context).to receive(:safe_system).with(root/"opt/bin/gdk-pixbuf-query-loaders", "--update-cache").ordered
+    expect(context).to receive(:safe_system).with(root/"opt/bin/gtk3-update-icon-cache", "-q", "-t", "-f",
+                                                  HOMEBREW_PREFIX/"share/icons/hicolor").ordered
+    expect(context).to receive(:safe_system).with(root/"opt/bin/update-mime-database",
+                                                  HOMEBREW_PREFIX/"share/mime").ordered
+    expect(context).to receive(:safe_system).with(root/"opt/bin/update-desktop-database",
+                                                  HOMEBREW_PREFIX/"share/applications").ordered
+
+    Homebrew::InstallSteps::Runner.new(context:).run(steps)
+  end
+
   specify "does not add the default base to home paths" do
-    steps = described_class::DSL.build(default_base: :var) do
+    steps = Homebrew::InstallSteps::DSL.build(default_base: :var) do
       mkdir_p "~/example"
     end
 
@@ -90,34 +141,34 @@ RSpec.describe Homebrew::InstallSteps do
   end
 
   specify "moves a directory's children without moving the new target directory" do
-    steps = described_class::DSL.build(default_source_base: :staged_path, default_target_base: :staged_path) do
+    steps = Homebrew::InstallSteps::DSL.build(default_source_base: :staged_path, default_target_base: :staged_path) do
       move_children ".", "Nested"
     end
 
     (root/"stage").mkpath
     (root/"stage/source-file").write "source"
 
-    described_class::Runner.new(context:).run(steps)
+    Homebrew::InstallSteps::Runner.new(context:).run(steps)
 
     expect(root/"stage/Nested/source-file").to exist
   end
 
   specify "removes symlinks marked for uninstall" do
-    steps = described_class::DSL.build(default_target_base: :staged_path) do
+    steps = Homebrew::InstallSteps::DSL.build(default_target_base: :staged_path) do
       ln_sf "target", "linked-target", source_base: :relative, uninstall: true
     end
 
     (root/"stage").mkpath
     File.symlink "target", root/"stage/linked-target"
 
-    described_class::Runner.new(context:).run(steps, phase: :uninstall)
+    Homebrew::InstallSteps::Runner.new(context:).run(steps, phase: :uninstall)
 
     expect(root/"stage/linked-target").not_to be_a_symlink
   end
 
   specify "does not expose the surrounding formula or cask DSL" do
     expect do
-      described_class::DSL.build(default_base: :var) do
+      Homebrew::InstallSteps::DSL.build(default_base: :var) do
         system "true"
       end
     end.to raise_error(NameError)

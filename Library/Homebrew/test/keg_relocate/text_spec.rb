@@ -1,4 +1,4 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require "keg_relocate"
@@ -27,7 +27,7 @@ RSpec.describe Keg do
   end
 
   def setup_relocation(placeholders: false)
-    relocation = klass::Relocation.new
+    relocation = Keg::Relocation.new
 
     if placeholders
       relocation.add_replacement_pair :dir, placeholder, dir.to_s

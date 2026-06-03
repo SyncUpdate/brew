@@ -10,6 +10,8 @@ When running commands in this repository, use `./bin/brew` (not a system `brew` 
 
 When running Ruby directly (e.g. `ruby -e ...`, `gem`, profiling tools), never use the system Ruby. Use `./bin/brew ruby -- <args>` to run Ruby scripts with Homebrew's vendored Ruby and libraries loaded. The system macOS Ruby is an incompatible older version.
 
+Do not use conventional commit prefixes such as `feat:`, `fix:`, `chore:`, `refactor:`, `perf:` or `ci:`; the `Commit Style` GitHub Actions workflow rejects them.
+
 ## Code Standards
 
 ### Required Before Each Commit
@@ -32,6 +34,7 @@ When running Ruby directly (e.g. `ruby -e ...`, `gem`, profiling tools), never u
 - When adding or tightening tests, verify them with a red/green cycle using the exact `--only=file:line` target for the example you changed.
 - Formula classes created in specs may be frozen; avoid stubbing class methods on them with RSpec mocks and prefer instance-level stubs or test setup that does not require class-method stubbing.
 - Keep comments minimal; prefer self-documenting code through strings, variable names, etc. over more comments.
+- Aim to wrap human-written user-facing terminal output at around 80 characters; this does not apply to generated output or code.
 
 ## Repository Structure
 

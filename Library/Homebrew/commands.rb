@@ -89,18 +89,32 @@ module Commands
   sig { params(cmd: String).returns(T.nilable(Pathname)) }
   def self.external_ruby_v2_cmd_path(cmd)
     path = which("#{cmd}.rb", tap_cmd_directories)
+    require_trusted_command!(path, cmd)
     path if ENV.clear_sensitive_environment! { Homebrew.require?(path) }
   end
 
   # Ruby commands which are run by being `require`d.
   sig { params(cmd: String).returns(T.nilable(Pathname)) }
   def self.external_ruby_cmd_path(cmd)
-    which("brew-#{cmd}.rb", PATH.new(ENV.fetch("PATH")).append(tap_cmd_directories))
+    path = which("brew-#{cmd}.rb", PATH.new(ENV.fetch("PATH")).append(tap_cmd_directories))
+    require_trusted_command!(path, cmd)
+    path
   end
 
   sig { params(cmd: String).returns(T.nilable(Pathname)) }
   def self.external_cmd_path(cmd)
-    which("brew-#{cmd}", PATH.new(ENV.fetch("PATH")).append(tap_cmd_directories))
+    path = which("brew-#{cmd}", PATH.new(ENV.fetch("PATH")).append(tap_cmd_directories))
+    require_trusted_command!(path, cmd)
+    path
+  end
+
+  sig { params(path: T.nilable(Pathname), cmd: String).void }
+  def self.require_trusted_command!(path, cmd)
+    return unless path
+    return if path.expand_path.ascend.none?(HOMEBREW_TAP_DIRECTORY)
+
+    require "trust"
+    Homebrew::Trust.require_trusted_command!(path, cmd)
   end
 
   sig { params(cmd: String).returns(T.nilable(Pathname)) }
@@ -168,9 +182,14 @@ module Commands
   sig { returns(T::Array[String]) }
   def self.external_commands
     tap_cmd_directories.flat_map do |path|
-      find_commands(path).select(&:executable?)
-                         .map { |basename| basename_without_extension(basename) }
-                         .map { |p| p.to_s.delete_prefix("brew-").strip }
+      commands = find_commands(path).select(&:executable?)
+      if path.expand_path.ascend.any?(HOMEBREW_TAP_DIRECTORY)
+        require "trust"
+        commands = Homebrew::Trust.trusted_command_files(commands)
+      end
+      commands
+        .map { |basename| basename_without_extension(basename) }
+        .map { |p| p.to_s.delete_prefix("brew-").strip }
     end.map(&:to_s)
        .sort
   end
@@ -317,8 +336,17 @@ module Commands
     cmd_parser = Homebrew::CLI::Parser.from_cmd_path(path)
     return if cmd_parser.blank?
 
+    hidden_options = cmd_parser.processed_options.filter_map do |short, long, _desc, hidden|
+      next unless hidden
+
+      option_name = long || short
+      next unless option_name
+
+      Homebrew::CLI::Parser.option_to_name(option_name).tr("_", "-")
+    end
+
     cmd_parser.conflicts.map do |set|
-      set.map! { |s| s.tr "_", "-" }
+      set = set.map { |s| s.tr "_", "-" } - hidden_options
       set - [option] if set.include? option
     end.flatten.compact
   end
