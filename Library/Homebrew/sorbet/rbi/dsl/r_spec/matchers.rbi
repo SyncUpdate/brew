@@ -46,6 +46,9 @@ module RSpec::Matchers
   def be_a_symlink(*args, &block); end
 
   sig { params(args: T.untyped, block: T.untyped).returns(T.untyped) }
+  def be_active(*args, &block); end
+
+  sig { params(args: T.untyped, block: T.untyped).returns(T.untyped) }
   def be_alias_changed(*args, &block); end
 
   sig { params(args: T.untyped, block: T.untyped).returns(T.untyped) }
@@ -229,6 +232,9 @@ module RSpec::Matchers
   def be_ppc7400(*args, &block); end
 
   sig { params(args: T.untyped, block: T.untyped).returns(T.untyped) }
+  def be_present(*args, &block); end
+
+  sig { params(args: T.untyped, block: T.untyped).returns(T.untyped) }
   def be_private(*args, &block); end
 
   sig { params(args: T.untyped, block: T.untyped).returns(T.untyped) }
@@ -389,6 +395,9 @@ module RSpec::Matchers
 
   sig { params(args: T.untyped, block: T.untyped).returns(T.untyped) }
   def have_valid_bash_syntax(*args, &block); end
+
+  sig { params(args: T.untyped, block: T.untyped).returns(T.untyped) }
+  def match_json(*args, &block); end
 
   sig { params(args: T.untyped, block: T.untyped).returns(T.untyped) }
   def miss_apply(*args, &block); end

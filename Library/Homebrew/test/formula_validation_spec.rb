@@ -4,8 +4,6 @@
 require "formula"
 
 RSpec.describe Formula do
-  let(:klass) { Formula }
-
   describe "::new" do
     matcher :fail_with_invalid do |attr|
       match do |actual|
@@ -27,12 +25,13 @@ RSpec.describe Formula do
         formula do
           def brew; end
         end
-      end.to raise_error(RuntimeError, /\AThe method `brew` on #{klass} was declared as final/)
+      end.to raise_error(RuntimeError, /\AThe method `brew` on #{described_class} was declared as final/o)
     end
 
     it "validates the `name`" do
       expect do
         formula "name with spaces" do
+          T.bind(self, T.class_of(Formula))
           url "foo"
           version "1.0"
         end
@@ -42,6 +41,7 @@ RSpec.describe Formula do
     it "validates the `url`" do
       expect do
         formula do
+          T.bind(self, T.class_of(Formula))
           url ""
           version "1"
         end
@@ -51,6 +51,7 @@ RSpec.describe Formula do
     it "validates the `version`" do
       expect do
         formula do
+          T.bind(self, T.class_of(Formula))
           url "foo"
           version "version with spaces"
         end
@@ -58,6 +59,7 @@ RSpec.describe Formula do
 
       expect do
         formula do
+          T.bind(self, T.class_of(Formula))
           url "foo"
           version ""
         end
@@ -65,6 +67,7 @@ RSpec.describe Formula do
 
       expect do
         formula do
+          T.bind(self, T.class_of(Formula))
           url "foo"
           version nil
         end
@@ -73,6 +76,7 @@ RSpec.describe Formula do
 
     specify "HEAD-only is valid" do
       f = formula do
+        T.bind(self, T.class_of(Formula))
         head "foo"
       end
 

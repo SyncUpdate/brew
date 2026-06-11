@@ -4,9 +4,8 @@
 require "livecheck/strategy"
 
 RSpec.describe Homebrew::Livecheck::Strategy::Xorg do
-  subject(:xorg) { klass }
+  subject(:xorg) { described_class }
 
-  let(:klass) { Homebrew::Livecheck::Strategy::Xorg }
   let(:xorg_urls) do
     {
       app:         "https://www.x.org/archive/individual/app/abc-1.2.3.tar.bz2",
@@ -52,7 +51,7 @@ RSpec.describe Homebrew::Livecheck::Strategy::Xorg do
     }
   end
   let(:content) do
-    <<~EOS
+    <<~HTML
       <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
       <html>
       <head>
@@ -113,7 +112,7 @@ RSpec.describe Homebrew::Livecheck::Strategy::Xorg do
         <address>Apache/2.4.38 (Debian) Server at www.x.org Port 443</address>
       </body>
       </html>
-    EOS
+    HTML
   end
   let(:matches) { ["1.2.2", "1.2.3"] }
 

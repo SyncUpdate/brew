@@ -1,17 +1,20 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require "sbom"
 
 RSpec.describe SBOM do
-  let(:klass) { SBOM }
-
   describe "#schema_validation_errors" do
-    subject(:sbom) { klass.create(f, tab) }
+    subject(:sbom) { described_class.create(f, tab) }
 
     before { ENV.delete("HOMEBREW_ENFORCE_SBOM") }
 
-    let(:f) { formula { url "foo-1.0" } }
+    let(:f) do
+      formula do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+      end
+    end
     let(:tab) { Tab.new }
 
     it "returns true if valid" do
@@ -25,6 +28,7 @@ RSpec.describe SBOM do
     context "with a maximal SBOM" do
       let(:f) do
         formula do
+          T.bind(self, T.class_of(Formula))
           homepage "https://brew.sh"
 
           url "https://brew.sh/test-0.1.tbz"
@@ -49,6 +53,7 @@ RSpec.describe SBOM do
       end
       let(:tab) do
         beanstalkd = formula "beanstalkd" do
+          T.bind(self, T.class_of(Formula))
           url "one-1.1"
 
           bottle do
@@ -57,6 +62,7 @@ RSpec.describe SBOM do
         end
 
         zlib = formula "zlib" do
+          T.bind(self, T.class_of(Formula))
           url "two-1.1"
 
           bottle do

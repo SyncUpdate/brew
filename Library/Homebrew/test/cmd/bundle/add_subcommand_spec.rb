@@ -7,10 +7,9 @@ require "cask/cask_loader"
 
 RSpec.describe Homebrew::Cmd::Bundle::AddSubcommand do
   subject(:add) do
-    klass.new(args_object, context:).run
+    described_class.new(args_object, context:).run
   end
 
-  let(:klass) { Homebrew::Cmd::Bundle::AddSubcommand }
   let(:global) { false }
   let(:context) { bundle_subcommand_context(:add, global:, file:, no_type_args: false) }
   let(:args_object) do
@@ -27,7 +26,12 @@ RSpec.describe Homebrew::Cmd::Bundle::AddSubcommand do
     let(:file) { "/tmp/some_random_brewfile#{Random.rand(2 ** 16)}" }
 
     before do
-      stub_formula_loader formula("hello") { url "hello-1.0" }
+      stub_formula_loader(
+        formula("hello") do
+          T.bind(self, T.class_of(Formula))
+          url "hello-1.0"
+        end,
+      )
     end
 
     it "adds entries to the given Brewfile" do

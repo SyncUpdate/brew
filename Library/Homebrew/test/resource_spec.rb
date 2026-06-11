@@ -5,10 +5,10 @@ require "resource"
 require "livecheck"
 
 RSpec.describe Resource do
-  subject(:resource) { Resource.new("test") }
+  subject(:resource) { described_class.new("test") }
 
   let(:livecheck_resource) do
-    Resource.new do
+    described_class.new do
       url "https://brew.sh/foo-1.0.tar.gz"
       sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
@@ -176,7 +176,7 @@ RSpec.describe Resource do
   end
 
   describe "#owner" do
-    let(:owner) { Resource.new("test-owner") }
+    let(:owner) { described_class.new("test-owner") }
 
     it "sets the owner" do
       resource.owner = owner
@@ -184,7 +184,10 @@ RSpec.describe Resource do
     end
 
     it "sets its owner to be the patches' owner" do
-      resource.patch(:p1) { url "file:///my.patch" }
+      resource.patch(:p1) do
+        T.bind(self, Resource::Patch)
+        url "file:///my.patch"
+      end
       resource.owner = owner
       resource.patches.each do |p|
         expect(p.resource.owner).to eq(owner)

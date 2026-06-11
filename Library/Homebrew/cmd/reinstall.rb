@@ -39,13 +39,19 @@ module Homebrew
                             "non-migrated versions."
         switch "-v", "--verbose",
                description: "Print the verification and post-install steps."
+        switch "--no-ask", "--yes", "-y",
+               description: "Do not ask for confirmation before downloading and reinstalling. " \
+                            "Ask mode is the default.",
+               env:         :no_ask
         switch "--ask",
                description: "Ask for confirmation before downloading and reinstalling. " \
                             "Print what would be reinstalled before prompting. Only prompts if the plan " \
                             "includes dependencies or dependants; if the requested formulae or casks are the " \
                             "only things to reinstall, it only prints the plan. The confirmation prompt is " \
-                            "skipped without a TTY.",
-               env:         :ask
+                            "skipped without a TTY. This is the default unless `$HOMEBREW_NO_ASK` is set.",
+               env:         :ask,
+               replacement: "the default behaviour",
+               odeprecated: true
         [
           [:switch, "--formula", "--formulae", {
             description: "Treat all named arguments as formulae.",
@@ -90,10 +96,6 @@ module Homebrew
             description: "Require all casks to have a checksum.",
             env:         :cask_opts_require_sha,
           }],
-          [:switch, "--[no-]quarantine", {
-            env:       :cask_opts_quarantine,
-            odisabled: true,
-          }],
           [:switch, "--adopt", {
             description: "Adopt existing artifacts in the destination that are identical to those being installed. " \
                          "Cannot be combined with `--force`.",
@@ -113,6 +115,7 @@ module Homebrew
         cask_options
 
         conflicts "--build-from-source", "--force-bottle"
+        conflicts "--ask", "--no-ask"
 
         named_args [:formula, :cask], min: 1
       end
@@ -126,6 +129,7 @@ module Homebrew
           T::Array[T.any(FormulaOrCaskUnavailableError, NoSuchKegError)],
         )
         Homebrew::Trust.trust_fully_qualified_items!(args.named, type: args.only_formula_or_cask)
+        ask = !args.no_ask?
 
         args.named.to_formulae_and_casks_and_unavailable(method: :resolve).each do |item|
           case item
@@ -162,7 +166,7 @@ module Homebrew
         shared_download_queue = T.let(nil, T.nilable(Homebrew::DownloadQueue))
         casks_prefetched = T.let(false, T::Boolean)
 
-        Install.ask_casks casks, action: "reinstallation", skip_cask_deps: args.skip_cask_deps? if args.ask?
+        Install.ask_casks casks, action: "reinstallation", skip_cask_deps: args.skip_cask_deps? if ask
 
         unless formulae.empty?
           Install.perform_preinstall_checks_once
@@ -192,7 +196,7 @@ module Homebrew
           dependants = Upgrade.dependants(
             formulae,
             flags:                      args.flags_only,
-            ask:                        args.ask?,
+            ask:                        ask,
             force_bottle:               args.force_bottle?,
             build_from_source_formulae: args.build_from_source_formulae,
             interactive:                args.interactive?,
@@ -207,7 +211,7 @@ module Homebrew
           formulae_installers = reinstall_contexts.map(&:formula_installer)
 
           # Main block: if asking the user is enabled, show dry-run information.
-          if args.ask?
+          if ask
             Install.ask_formulae(
               formulae_installers,
               dependants,
@@ -246,7 +250,6 @@ module Homebrew
                   skip_cask_deps: args.skip_cask_deps?,
                   require_sha:    args.require_sha?,
                   reinstall:      true,
-                  quarantine:     args.quarantine?,
                   zap:            args.zap?,
                   download_queue: shared_download_queue,
                   defer_fetch:    true,
@@ -296,7 +299,7 @@ module Homebrew
               force:          args.force?,
               require_sha:    args.require_sha?,
               skip_cask_deps: args.skip_cask_deps?,
-              quarantine:     args.quarantine?,
+              quarantine:     true,
               zap:            args.zap?,
               skip_prefetch:  casks_prefetched,
               download_queue: nil,

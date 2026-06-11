@@ -1,17 +1,14 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require "build_options"
 require "options"
 
 RSpec.describe BuildOptions do
-  subject(:build_options) { klass.new(args, opts) }
+  subject(:build_options) { described_class.new(args, opts) }
 
-  let(:klass) { BuildOptions }
-  let(:bad_build) { klass.new(bad_args, opts) }
   let(:args) { Options.create(%w[--with-foo --with-bar --without-qux]) }
   let(:opts) { Options.create(%w[--with-foo --with-bar --without-baz --without-qux]) }
-  let(:bad_args) { Options.create(%w[--with-foo --with-bar --without-bas --without-qux --without-abc]) }
 
   alias_matcher :be_built_with, :be_with
   alias_matcher :be_built_without, :be_without

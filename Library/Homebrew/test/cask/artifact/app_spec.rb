@@ -2,17 +2,15 @@
 # frozen_string_literal: true
 
 RSpec.describe Cask::Artifact::App, :cask do
-  let(:klass) { Cask::Artifact::App }
-
   let(:cask) { Cask::CaskLoader.load(cask_path("local-caffeine")) }
   let(:command) { NeverSudoSystemCommand }
   let(:adopt) { false }
   let(:force) { false }
   let(:auto_updates) { false }
-  let(:app) { cask.artifacts.find { |a| a.is_a?(klass) } }
+  let(:app) { cask.artifacts.find { |a| a.is_a?(described_class) } }
 
   let(:source_path) { cask.staged_path.join("Caffeine.app") }
-  let(:target_path) { cask.config.appdir.join("Caffeine.app") }
+  let(:target_path) { Pathname(cask.config.appdir).join("Caffeine.app") }
 
   let(:install_phase) { app.install_phase(command:, adopt:, force:, auto_updates:) }
   let(:uninstall_phase) { app.uninstall_phase(command:, force:) }
@@ -62,7 +60,7 @@ RSpec.describe Cask::Artifact::App, :cask do
       expect(target_path).to be_a_directory
       expect(source_path).to be_a_symlink
 
-      expect(cask.config.appdir.join("Caffeine Deluxe.app")).not_to exist
+      expect(Pathname(cask.config.appdir).join("Caffeine Deluxe.app")).not_to exist
       expect(cask.staged_path.join("Caffeine Deluxe.app")).to exist
     end
 
@@ -310,6 +308,34 @@ RSpec.describe Cask::Artifact::App, :cask do
       uninstall_phase
 
       expect(source_path).to be_a_directory
+    end
+
+    it "uses clonefile copy arguments on supported macOS versions", :needs_macos do
+      install_phase
+
+      allow(MacOS).to receive(:version).and_return(MacOSVersion.from_symbol(:sonoma))
+
+      expect(app.send(:backup_copy_args, target_path, source_path)).to eq(["-c", "-pR", target_path, source_path])
+    end
+
+    it "uses portable copy arguments on older macOS versions", :needs_macos do
+      install_phase
+
+      allow(MacOS).to receive(:version).and_return(MacOSVersion.from_symbol(:ventura))
+
+      expect(app.send(:backup_copy_args, target_path, source_path)).to eq(["-pR", target_path, source_path])
+    end
+
+    it "uses portable copy arguments across filesystems", :needs_macos do
+      install_phase
+
+      source_dir = source_path.dirname
+      allow(MacOS).to receive(:version).and_return(MacOSVersion.from_symbol(:sonoma))
+      allow(target_path).to receive(:stat).and_return(instance_double(File::Stat, dev: 1))
+      allow(source_path).to receive(:dirname).and_return(source_dir)
+      allow(source_dir).to receive(:stat).and_return(instance_double(File::Stat, dev: 2))
+
+      expect(app.send(:backup_copy_args, target_path, source_path)).to eq(["-pR", target_path, source_path])
     end
   end
 

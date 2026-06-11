@@ -5,6 +5,7 @@ require "abstract_command"
 require "fileutils"
 require "hardware"
 require "system_command"
+require "utils/git"
 
 module Homebrew
   module DevCmd
@@ -175,9 +176,10 @@ module Homebrew
           end
 
           if parallel
-            system "bundle", "exec", "parallel_rspec", *parallel_args, "--", *bundle_args, "--", *files
+            system("bundle", "exec", "parallel_rspec", *parallel_args,
+                   "--", *bundle_args, "--", *files)
           else
-            system "bundle", "exec", "rspec", *bundle_args, "--", *files
+            system("bundle", "exec", "rspec", *bundle_args, "--", *files)
           end
           success = $CHILD_STATUS.success?
 
@@ -202,6 +204,7 @@ module Homebrew
       sig { params(bundle_args: T::Array[String]).returns(T::Array[String]) }
       def non_macos_bundle_args(bundle_args)
         bundle_args << "--tag" << "~needs_homebrew_core" if ENV["CI"]
+        bundle_args << "--tag" << "~needs_svnadmin" unless args.online?
         bundle_args << "--tag" << "~needs_svn" unless args.online?
 
         bundle_args << "--tag" << "~needs_macos" << "--tag" << "~cask"
@@ -233,15 +236,14 @@ module Homebrew
 
       sig { returns(T::Array[String]) }
       def changed_test_files
-        changed_files = Utils.popen_read("git", "diff", "--name-only", "main")
+        changed_files = Utils::Git.changed_files(HOMEBREW_REPOSITORY)
 
-        odebug "No files have been changed from the `main` branch." if changed_files.blank?
-        return [] if changed_files.blank?
+        odebug "No files have been changed from the default branch." if changed_files.empty?
+        return [] if changed_files.empty?
 
         filestub_regex = %r{Library/Homebrew/([\w/-]+).rb}
-        T.cast(changed_files.scan(filestub_regex), T::Array[T::Array[String]])
-         .map { it.fetch(-1) }
-         .flat_map do |filestub|
+        changed_files.filter_map { |file| file[filestub_regex, 1] }
+                     .flat_map do |filestub|
           shared_context_tests = shared_context_test_files(filestub)
           next shared_context_tests if shared_context_tests.present?
 
@@ -305,7 +307,6 @@ module Homebrew
           HOMEBREW_GITHUB_API_TOKEN
           HOMEBREW_CACHE
           HOMEBREW_LOGS
-          HOMEBREW_SANDBOX_LINUX
           HOMEBREW_TEMP
         ]
         allowed_test_env << "HOMEBREW_USE_RUBY_FROM_PATH" if Homebrew::EnvConfig.developer?
@@ -329,6 +330,7 @@ module Homebrew
         end
 
         ENV["HOMEBREW_TESTS"] = "1"
+        ENV.delete("HOMEBREW_ASK")
         ENV["HOMEBREW_NO_AUTO_UPDATE"] = "1"
         ENV["HOMEBREW_NO_ANALYTICS_THIS_RUN"] = "1"
         ENV["HOMEBREW_TEST_GENERIC_OS"] = "1" if args.generic?
@@ -341,6 +343,8 @@ module Homebrew
         # Avoid local configuration messing with tests, e.g. git being configured
         # to use GPG to sign by default
         ENV["HOME"] = "#{HOMEBREW_LIBRARY_PATH}/test"
+        # Sandbox the config home too, so the spec teardown can't delete the real `trust.json`.
+        ENV["HOMEBREW_USER_CONFIG_HOME"] = "#{Dir.home}/.homebrew"
 
         # Print verbose output when requesting debug or verbose output.
         ENV["HOMEBREW_VERBOSE_TESTS"] = "1" if args.debug? || args.verbose?

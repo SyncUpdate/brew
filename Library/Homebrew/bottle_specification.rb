@@ -4,7 +4,15 @@
 class BottleSpecification
   include Utils::Output::Mixin
 
-  RELOCATABLE_CELLARS = [:any, :any_skip_relocation].freeze
+  # Relocatable cellar using placeholders, e.g. `@@HOMEBREW_PREFIX@@`.
+  # Requires relocating text files and binaries.
+  ANY_CELLAR = :any
+
+  # Relocatable cellar using placeholders, e.g. `@@HOMEBREW_PREFIX@@`.
+  # Does not need to relocate binaries but still relocates text files.
+  ANY_SKIP_RELOCATION_CELLAR = :any_skip_relocation
+
+  RELOCATABLE_CELLARS = T.let([ANY_CELLAR, ANY_SKIP_RELOCATION_CELLAR].freeze, T::Array[Symbol])
 
   sig { returns(T.nilable(Tap)) }
   attr_accessor :tap
@@ -90,10 +98,14 @@ class BottleSpecification
   end
 
   # Does the {Bottle} this {BottleSpecification} belongs to need to be relocated?
-  sig { params(tag: Utils::Bottles::Tag).returns(T::Boolean) }
-  def skip_relocation?(tag: Utils::Bottles.tag)
+  #
+  # This will always return false on Linux unless a `tab` is provided that
+  # reports the bottle was built with Homebrew 5.1.15 or newer. The caller must
+  # make sure that the provided `tab` is for the requested `tag`.
+  sig { params(tag: Utils::Bottles::Tag, tab: T.nilable(Tab)).returns(T::Boolean) }
+  def skip_relocation?(tag: Utils::Bottles.tag, tab: nil)
     spec = collector.specification_for(tag)
-    spec&.cellar == :any_skip_relocation
+    spec&.cellar == ANY_SKIP_RELOCATION_CELLAR
   end
 
   sig { params(tag: Utils::Bottles::Tag, no_older_versions: T::Boolean).returns(T::Boolean) }

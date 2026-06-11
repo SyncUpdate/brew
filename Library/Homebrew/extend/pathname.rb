@@ -320,9 +320,15 @@ class Pathname
   #
   # @api public
   sig {
-    params(target:      T.any(Pathname, String),
-           args_or_env: T.any(String, T::Array[String], T::Hash[String, String], T::Hash[Symbol, String]),
-           env:         T.any(T::Hash[String, String], T::Hash[Symbol, String])).void
+    params(
+      target:      T.any(Pathname, String),
+      args_or_env: T.any(
+        String, Pathname,
+        T::Array[T.any(String, Pathname)],
+        T::Hash[T.any(String, Symbol), T.any(String, Pathname)]
+      ),
+      env:         T::Hash[T.any(String, Symbol), T.any(String, Pathname)],
+    ).void
   }
   def write_env_script(target, args_or_env, env = T.unsafe(nil))
     args = if env.nil?
@@ -332,7 +338,7 @@ class Pathname
     elsif args_or_env.is_a?(Array)
       args_or_env.join(" ")
     else
-      T.cast(args_or_env, T.nilable(String))
+      T.cast(args_or_env, T.nilable(T.any(String, Pathname)))
     end
 
     env_export = +""
@@ -349,7 +355,7 @@ class Pathname
   # Writes a wrapper env script and moves all files to the dst.
   #
   # @api public
-  sig { params(dst: Pathname, env: T::Hash[Symbol, String]).void }
+  sig { params(dst: Pathname, env: T::Hash[Symbol, T.any(String, Pathname)]).void }
   def env_script_all_files(dst, env)
     dst.mkpath
     Pathname.glob("#{self}/*") do |file|

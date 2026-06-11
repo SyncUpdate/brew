@@ -4,9 +4,8 @@
 require "livecheck/strategy"
 
 RSpec.describe Homebrew::Livecheck::Strategy::HeaderMatch do
-  subject(:header_match) { klass }
+  subject(:header_match) { described_class }
 
-  let(:klass) { Homebrew::Livecheck::Strategy::HeaderMatch }
   let(:http_url) { "https://brew.sh/blog/" }
   let(:non_http_url) { "ftp://brew.sh/" }
   let(:regexes) do
@@ -35,6 +34,15 @@ RSpec.describe Homebrew::Livecheck::Strategy::HeaderMatch do
     headers[:no_version] = headers[:content_disposition_and_location].merge({
       "content-disposition" => "attachment; filename=brew.tar.gz",
       "location"            => http_url,
+    })
+
+    # Location headers shouldn't appear more than once in an HTTP response but
+    # this is intended to exercise related logic in `versions_from_content`.
+    headers[:location_array] = headers[:location].merge({
+      "location" => [
+        "https://example.com/",
+        "https://github.com/Homebrew/brew/releases/tag/1.2.4",
+      ],
     })
 
     headers
@@ -73,11 +81,15 @@ RSpec.describe Homebrew::Livecheck::Strategy::HeaderMatch do
       expect(header_match.versions_from_content([headers[:location]])).to eq(matches[:location])
       expect(header_match.versions_from_content([headers[:content_disposition_and_location]]))
         .to eq(matches[:content_disposition_and_location])
+      expect(header_match.versions_from_content([headers[:location_array]]))
+        .to eq(matches[:location])
 
       expect(header_match.versions_from_content([headers[:content_disposition]], regexes[:archive]))
         .to eq(matches[:content_disposition])
       expect(header_match.versions_from_content([headers[:location]], regexes[:latest])).to eq(matches[:location])
       expect(header_match.versions_from_content([headers[:content_disposition_and_location]], regexes[:latest]))
+        .to eq(matches[:location])
+      expect(header_match.versions_from_content([headers[:location_array]], regexes[:latest]))
         .to eq(matches[:location])
     end
 

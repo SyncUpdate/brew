@@ -81,9 +81,9 @@ module Homebrew
         switch "--no-all-checks",
                depends_on:  "--merge",
                description: "Don't try to create an `all` bottle or stop a no-change upload."
-        # odeprecated: replace with `HOMEBREW_GIT_COMMITTER_NAME` and `HOMEBREW_GIT_COMMITTER_EMAIL`.
         flag   "--committer=",
-               description: "Specify a committer name and email in `git`'s standard author format."
+               description: "Specify a committer name and email in `git`'s standard author format.",
+               odeprecated: true
         flag   "--root-url=",
                description: "Use the specified <URL> as the root of the bottle's URL instead of Homebrew's default."
         flag   "--root-url-using=",
@@ -470,8 +470,8 @@ module Homebrew
 
           tag_spec = Formula[formula.name].bottle_specification
                                           .tag_specification_for(bottle_tag, no_older_versions: true)
-          relocatable = [:any, :any_skip_relocation].include?(tag_spec.cellar)
-          skip_relocation = tag_spec.cellar == :any_skip_relocation
+          relocatable = BottleSpecification::RELOCATABLE_CELLARS.include?(tag_spec.cellar)
+          skip_relocation = tag_spec.cellar == BottleSpecification::ANY_SKIP_RELOCATION_CELLAR
 
           prefix = bottle_tag.default_prefix
           cellar = bottle_tag.default_cellar
@@ -608,9 +608,9 @@ module Homebrew
         bottle.root_url(root_url) if root_url
         bottle_cellar = if relocatable
           if skip_relocation
-            :any_skip_relocation
+            BottleSpecification::ANY_SKIP_RELOCATION_CELLAR
           else
-            :any
+            BottleSpecification::ANY_CELLAR
           end
         else
           cellar
@@ -708,7 +708,7 @@ module Homebrew
       def merge
         bottles_hash = merge_json_files(parse_json_files(args.named))
 
-        any_cellars = ["any", "any_skip_relocation"]
+        any_cellars = BottleSpecification::RELOCATABLE_CELLARS.map(&:to_s)
         bottles_hash.each do |formula_name, bottle_hash|
           ohai formula_name
 

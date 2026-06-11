@@ -4,8 +4,6 @@
 require "cask/list"
 
 RSpec.describe Cask::List, :cask do
-  let(:klass) { Cask::List }
-
   it "lists the installed Casks in a pretty fashion" do
     casks = %w[local-caffeine local-transmission].map { |c| Cask::CaskLoader.load(c) }
 
@@ -14,7 +12,7 @@ RSpec.describe Cask::List, :cask do
     end
 
     expect do
-      klass.list_casks
+      described_class.list_casks
     end.to output(<<~EOS).to_stdout
       local-caffeine
       local-transmission
@@ -22,43 +20,49 @@ RSpec.describe Cask::List, :cask do
   end
 
   it "lists oneline" do
-    casks = %w[
-      local-caffeine
-      third-party/tap/third-party-cask
-      local-transmission
-    ].map { |c| Cask::CaskLoader.load(c) }
+    with_env(HOMEBREW_USER_CONFIG_HOME: mktmpdir) do
+      Homebrew::Trust.trust!(:tap, "third-party/tap")
+      casks = %w[
+        local-caffeine
+        third-party/tap/third-party-cask
+        local-transmission
+      ].map { |c| Cask::CaskLoader.load(c) }
 
-    casks.each do |c|
-      InstallHelper.install_with_caskfile(c)
+      casks.each do |c|
+        InstallHelper.install_with_caskfile(c)
+      end
+
+      expect do
+        described_class.list_casks(one: true)
+      end.to output(<<~EOS).to_stdout
+        local-caffeine
+        local-transmission
+        third-party-cask
+      EOS
     end
-
-    expect do
-      klass.list_casks(one: true)
-    end.to output(<<~EOS).to_stdout
-      local-caffeine
-      local-transmission
-      third-party-cask
-    EOS
   end
 
   it "lists full names" do
-    casks = %w[
-      local-caffeine
-      third-party/tap/third-party-cask
-      local-transmission
-    ].map { |c| Cask::CaskLoader.load(c) }
+    with_env(HOMEBREW_USER_CONFIG_HOME: mktmpdir) do
+      Homebrew::Trust.trust!(:tap, "third-party/tap")
+      casks = %w[
+        local-caffeine
+        third-party/tap/third-party-cask
+        local-transmission
+      ].map { |c| Cask::CaskLoader.load(c) }
 
-    casks.each do |c|
-      InstallHelper.install_with_caskfile(c)
+      casks.each do |c|
+        InstallHelper.install_with_caskfile(c)
+      end
+
+      expect do
+        described_class.list_casks(full_name: true)
+      end.to output(<<~EOS).to_stdout
+        local-caffeine
+        local-transmission
+        third-party/tap/third-party-cask
+      EOS
     end
-
-    expect do
-      klass.list_casks(full_name: true)
-    end.to output(<<~EOS).to_stdout
-      local-caffeine
-      local-transmission
-      third-party/tap/third-party-cask
-    EOS
   end
 
   describe "lists versions" do
@@ -83,13 +87,13 @@ RSpec.describe Cask::List, :cask do
 
     it "of all installed Casks" do
       expect do
-        klass.list_casks(versions: true)
+        described_class.list_casks(versions: true)
       end.to output(expected_output).to_stdout
     end
 
     it "of given Casks" do
       expect do
-        klass.list_casks(*casks, versions: true)
+        described_class.list_casks(*casks, versions: true)
       end.to output(expected_output).to_stdout
     end
   end
@@ -107,12 +111,12 @@ RSpec.describe Cask::List, :cask do
       end
 
       expect do
-        klass.list_casks(transmission, caffeine)
+        described_class.list_casks(transmission, caffeine)
       end.to output(<<~EOS).to_stdout
         ==> App
-        #{transmission.config.appdir.join("Transmission.app")} (#{transmission.config.appdir.join("Transmission.app").abv})
+        #{Pathname(transmission.config.appdir).join("Transmission.app")} (#{Pathname(transmission.config.appdir).join("Transmission.app").abv})
         ==> App
-        Missing App: #{caffeine.config.appdir.join("Caffeine.app")}
+        Missing App: #{Pathname(caffeine.config.appdir).join("Caffeine.app")}
       EOS
     end
   end

@@ -57,6 +57,7 @@ require "test/support/helper/subcommand"
 
 require "test/support/helper/spec/shared_context/homebrew_cask" if OS.mac?
 require "test/support/helper/spec/shared_context/integration_test"
+require "test/support/helper/spec/shared_context/trust_store"
 require "test/support/helper/spec/shared_examples/formulae_exist"
 
 TEST_DIRECTORIES = [
@@ -207,11 +208,17 @@ RSpec.configure do |config|
 
   svn_path_dirs = nil
   svn_skip_reason = nil
+  svn_client_path_dirs = nil
+  svn_client_skip_reason = nil
+
+  config.define_derived_metadata(:needs_svnadmin) do |metadata|
+    metadata[:needs_svn] = true
+  end
 
   config.before(:each, :needs_svn) do
-    skip svn_skip_reason if svn_skip_reason
-    if svn_path_dirs
-      ENV["PATH"] = PATH.new(ENV.fetch("PATH")).append(svn_path_dirs)
+    skip svn_client_skip_reason if svn_client_skip_reason
+    if svn_client_path_dirs
+      ENV["PATH"] = PATH.new(ENV.fetch("PATH")).append(svn_client_path_dirs)
       next
     end
 
@@ -222,16 +229,10 @@ RSpec.configure do |config|
       svn_paths.append(File.dirname(xcrun_svn)) if $CHILD_STATUS.success? && xcrun_svn.present?
     end
 
-    svnadmin = which("svnadmin", svn_paths)
-    unless svnadmin
-      svn_skip_reason = "svnadmin is not installed."
-      skip svn_skip_reason
-    end
-
     svn_shim = HOMEBREW_SHIMS_PATH/"shared/svn"
     unless quiet_system svn_shim, "--version"
-      svn_skip_reason = "Subversion is not installed."
-      skip svn_skip_reason
+      svn_client_skip_reason = "Subversion is not installed."
+      skip svn_client_skip_reason
     end
 
     svn_shim_path = Pathname(Utils.popen_read(svn_shim, "--homebrew=print-path").chomp.presence)
@@ -239,11 +240,28 @@ RSpec.configure do |config|
 
     svn = which("svn", svn_paths)
     unless svn
-      svn_skip_reason = "svn is not installed."
+      svn_client_skip_reason = "svn is not installed."
+      skip svn_client_skip_reason
+    end
+
+    svn_client_path_dirs = [svn.dirname]
+    ENV["PATH"] = PATH.new(ENV.fetch("PATH")).append(svn_client_path_dirs)
+  end
+
+  config.before(:each, :needs_svnadmin) do
+    skip svn_skip_reason if svn_skip_reason
+    if svn_path_dirs
+      ENV["PATH"] = PATH.new(ENV.fetch("PATH")).append(svn_path_dirs)
+      next
+    end
+
+    svnadmin = which("svnadmin")
+    unless svnadmin
+      svn_skip_reason = "svnadmin is not installed."
       skip svn_skip_reason
     end
 
-    svn_path_dirs = [svn.dirname, svnadmin.dirname]
+    svn_path_dirs = [svnadmin.dirname]
     ENV["PATH"] = PATH.new(ENV.fetch("PATH")).append(svn_path_dirs)
   end
 
@@ -284,6 +302,23 @@ RSpec.configure do |config|
     Pathname("#{ENV.fetch("HOMEBREW_CACHE")}/api").glob("*.json").each do |path|
       FileUtils.ln_s path, HOMEBREW_CACHE/"api/#{path.basename}"
     end
+    Pathname("#{ENV.fetch("HOMEBREW_CACHE")}/api").glob("*.txt").each do |path|
+      FileUtils.cp path, HOMEBREW_CACHE/"api/#{path.basename}"
+    end
+    Pathname("#{ENV.fetch("HOMEBREW_CACHE")}/api/internal").glob("*.{json,txt}").each do |path|
+      target = HOMEBREW_CACHE/"api/internal/#{path.basename}"
+      target.dirname.mkpath
+      (path.extname == ".txt") ? FileUtils.cp(path, target) : FileUtils.ln(path, target)
+      next unless path.basename.to_s.start_with?("packages.")
+
+      [:generic, :linux, :macos, *MacOSVersion::SYMBOLS.keys].product([:arm, :intel]).each do |system, arch|
+        tag = Utils::Bottles::Tag.new(system:, arch:)
+        next unless tag.valid_combination?
+
+        target = HOMEBREW_CACHE/"api/internal/packages.#{tag}.jws.json"
+        FileUtils.ln path, target unless target.exist?
+      end
+    end
 
     begin
       if example.metadata.keys.exclude?(:focus) && !ENV.key?("HOMEBREW_VERBOSE_TESTS")
@@ -320,13 +355,22 @@ RSpec.configure do |config|
       Tap.all.each(&:clear_cache)
       Cachable::Registry.clear_all_caches
 
+      # Refuse to clean a config home outside the sandboxed `HOME`, else this deletes the user's
+      # real `~/.homebrew/trust.json`; canonicalise first so `..`/symlinks can't slip past.
+      home = Pathname(Dir.home).realpath
+      user_config_home = Pathname(ENV.fetch("HOMEBREW_USER_CONFIG_HOME")).expand_path
+      resolved_ancestor = user_config_home.ascend.find(&:exist?)&.realpath
+      unless resolved_ancestor&.ascend&.include?(home)
+        raise "HOMEBREW_USER_CONFIG_HOME (#{user_config_home}) is not sandboxed under HOME (#{Dir.home})"
+      end
+
       FileUtils.rm_rf [
         *TEST_DIRECTORIES,
         *Keg.must_exist_subdirectories,
         HOMEBREW_LINKED_KEGS,
         HOMEBREW_PINNED_KEGS,
         HOMEBREW_PINNED_CASKS,
-        Pathname(ENV.fetch("HOMEBREW_USER_CONFIG_HOME"))/"trust.json",
+        user_config_home/"trust.json",
         HOMEBREW_PREFIX/"Caskroom",
         HOMEBREW_PREFIX/"Frameworks",
         HOMEBREW_LIBRARY/"Taps/homebrew/homebrew-cask",

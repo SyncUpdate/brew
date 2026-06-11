@@ -11,8 +11,6 @@ require "test/support/fixtures/testball_bottle"
 require "test/support/fixtures/testball_bottle_cellar"
 
 RSpec.describe FormulaInstaller do
-  let(:klass) { FormulaInstaller }
-
   alias_matcher :pour_bottle, :be_pour_bottle
 
   matcher :be_poured_from_bottle do
@@ -24,8 +22,18 @@ RSpec.describe FormulaInstaller do
     expect(formula).to be_bottled
     expect(formula).to pour_bottle
 
-    stub_formula_loader formula("gcc") { url "gcc-1.0" }
-    stub_formula_loader formula("glibc") { url "glibc-1.0" }
+    stub_formula_loader(
+      formula("gcc") do
+        T.bind(self, T.class_of(Formula))
+        url "gcc-1.0"
+      end,
+    )
+    stub_formula_loader(
+      formula("glibc") do
+        T.bind(self, T.class_of(Formula))
+        url "glibc-1.0"
+      end,
+    )
     stub_formula_loader formula
 
     fi = FormulaInstaller.new(formula)
@@ -104,7 +112,7 @@ RSpec.describe FormulaInstaller do
     expect(formula).not_to be_bottled
 
     expect do
-      klass.new(formula).install
+      described_class.new(formula).install
     end.to raise_error(UnbottledError)
 
     expect(formula).not_to be_latest_version_installed

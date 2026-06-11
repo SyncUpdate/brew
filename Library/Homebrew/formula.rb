@@ -43,6 +43,7 @@ require "utils/spdx"
 require "on_system"
 require "api"
 require "api_hashable"
+require "release_cooldown"
 require "trust"
 require "utils/output"
 require "pypi_packages"
@@ -392,6 +393,9 @@ class Formula
     if latest && !latest_version_installed?
       ohai "Upgrading `#{name}`#{reason}..."
       safe_system HOMEBREW_BREW_FILE, "upgrade", "--formula", full_name
+    elsif missing_dependencies.present?
+      ohai "Reinstalling `#{name}`#{reason}..."
+      safe_system HOMEBREW_BREW_FILE, "reinstall", "--formula", full_name
     end
 
     executable ? opt_bin/executable : self
@@ -497,6 +501,9 @@ class Formula
 
     alias_path || @unresolved_path
   end
+
+  sig { returns(T.any(String, Pathname)) }
+  def reloadable_ref = loaded_from_api? ? full_name : path
 
   # The name specified to find this formula.
   sig { returns(String) }
@@ -1849,12 +1856,6 @@ class Formula
   # @api private
   delegate disable_args: :"self.class"
 
-  sig { returns(T::Boolean) }
-  def skip_cxxstdlib_check?
-    odisabled "`Formula#skip_cxxstdlib_check?`"
-    false
-  end
-
   # Applies all patches in the {.patchlist} to the source tree.
   #
   # @api public
@@ -2217,7 +2218,7 @@ class Formula
     args = ["--verbose", "--no-deps", "--no-binary=:all:", "--ignore-installed", "--no-compile"]
     # Delay packages published in the last day so builds are less likely to
     # install a freshly compromised PyPI release.
-    args << "--uploaded-prior-to=#{(Time.now.utc - (24 * 60 * 60)).iso8601(0)}"
+    args << "--uploaded-prior-to=#{(Time.now.utc - Homebrew::RELEASE_COOLDOWN_SECONDS).iso8601(0)}"
     args << "--prefix=#{prefix}" if prefix
     args << "--no-build-isolation" unless build_isolation
     args
@@ -3745,6 +3746,7 @@ class Formula
       GOCACHE:                 "#{HOMEBREW_CACHE}/go_cache",
       GOPATH:                  "#{HOMEBREW_CACHE}/go_mod_cache",
       CARGO_HOME:              "#{HOMEBREW_CACHE}/cargo_cache",
+      BUNDLE_COOLDOWN:         Homebrew::RELEASE_COOLDOWN_DAYS.to_s,
       PIP_CACHE_DIR:           "#{HOMEBREW_CACHE}/pip_cache",
       CURL_HOME:               ENV.fetch("CURL_HOME") { home.to_s },
       PYTHONDONTWRITEBYTECODE: "1",
@@ -4001,7 +4003,7 @@ class Formula
     def network_access_allowed?(phase)
       raise ArgumentError, "Unknown phase: #{phase}" unless SUPPORTED_NETWORK_ACCESS_PHASES.include?(phase)
 
-      env_var = Homebrew::EnvConfig.send(:"formula_#{phase}_network")
+      env_var = Homebrew::EnvConfig.public_send(:"formula_#{phase}_network")
       env_var.nil? ? network_access_allowed[phase] : env_var == "allow"
     end
 
@@ -4504,14 +4506,9 @@ class Formula
     # ```
     #
     # @api public
-    sig { params(name: T.any(String, Symbol), description: String).void }
+    sig { params(name: String, description: String).void }
     def option(name, description = "")
-      case name
-      when Symbol
-        odisabled "`option :#{name}`"
-      else
-        specs.each { |spec| spec.option(name, description) }
-      end
+      specs.each { |spec| spec.option(name, description) }
     end
 
     # Deprecated options are used to rename options and migrate users who used
@@ -4685,15 +4682,6 @@ class Formula
       @keg_only_reason = T.let(KegOnlyReason.new(reason, explanation), T.nilable(KegOnlyReason))
     end
 
-    # Pass `:skip` to this method to disable post-install stdlib checking.
-    #
-    # @api public
-    sig { params(check_type: Symbol).void }
-    def cxxstdlib_check(check_type)
-      odisabled "`cxxstdlib_check :skip`"
-      define_method(:skip_cxxstdlib_check?) { true } if check_type == :skip
-    end
-
     # Marks the {Formula} as failing with a particular compiler so it will fall back to others.
     #
     # ### Examples
@@ -4728,22 +4716,6 @@ class Formula
     sig { params(compiler: T.any(Symbol, T::Hash[Symbol, String]), block: T.nilable(T.proc.void)).void }
     def fails_with(compiler, &block)
       specs.each { |spec| spec.fails_with(compiler, &block) }
-    end
-
-    # Used to mark the {Formula} as needing a certain standard, so Homebrew
-    # would fall back to other compilers if the default compiler
-    # did not implement that standard.
-    #
-    # This is now a no-op as we prefer to {.depends_on} a desired compiler
-    # and explicitly use that compiler in a formula's {#install} block,
-    # rather than implicitly finding a suitable compiler with `needs`.
-    #
-    # @see .fails_with
-    #
-    # @api public
-    sig { params(_standards: Symbol).void }
-    def needs(*_standards)
-      odisabled "`needs :openmp`", '`depends_on "gcc"`'
     end
 
     # A test is required for new formulae and makes us happy.
@@ -4827,7 +4799,7 @@ class Formula
         raise ArgumentError, "'because' argument should use valid symbol or a string!"
       end
 
-      odeprecated "no_autobump! because: :requires_manual_review" if because == :requires_manual_review
+      odisabled "no_autobump! because: :requires_manual_review" if because == :requires_manual_review
 
       @no_autobump_defined = T.let(true, T.nilable(T::Boolean))
       @no_autobump_message = T.let(because, T.nilable(T.any(String, Symbol)))

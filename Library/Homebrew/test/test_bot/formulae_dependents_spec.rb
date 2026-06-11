@@ -1,25 +1,26 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require "test_bot"
 
 RSpec.describe Homebrew::TestBot::FormulaeDependents do
   subject(:formulae_dependents) do
-    klass.new(tap: nil, git: nil, dry_run: false, fail_fast: false, verbose: false)
+    described_class.new(tap: nil, git: nil, dry_run: false, fail_fast: false, verbose: false)
   end
-
-  let(:klass) { Homebrew::TestBot::FormulaeDependents }
 
   describe "#dependents_for_shard" do
     it "keeps dependent formulae that depend on each other in the same shard" do
       dependency = formula "dependent-a" do
+        T.bind(self, T.class_of(Formula))
         url "https://brew.sh/dependent-a-1.0.tar.gz"
       end
       dependent = formula "dependent-b" do
+        T.bind(self, T.class_of(Formula))
         url "https://brew.sh/dependent-b-1.0.tar.gz"
         depends_on "dependent-a"
       end
       independent = formula "dependent-c" do
+        T.bind(self, T.class_of(Formula))
         url "https://brew.sh/dependent-c-1.0.tar.gz"
       end
 
@@ -47,6 +48,7 @@ RSpec.describe Homebrew::TestBot::FormulaeDependents do
 
     it "returns no formulae for an empty shard" do
       dependent = formula "dependent-a" do
+        T.bind(self, T.class_of(Formula))
         url "https://brew.sh/dependent-a-1.0.tar.gz"
       end
 

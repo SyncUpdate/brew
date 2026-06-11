@@ -4,18 +4,17 @@
 require "livecheck/livecheck"
 
 RSpec.describe Homebrew::Livecheck do
-  subject(:livecheck) { klass }
+  subject(:livecheck) { described_class }
 
-  let(:klass) { Homebrew::Livecheck }
   let(:cask_url) { "https://brew.sh/test-0.0.1.dmg" }
   let(:head_url) { "https://github.com/Homebrew/brew.git" }
   let(:homepage_url) { "https://brew.sh" }
   let(:livecheck_url) { "https://formulae.brew.sh/api/formula/ruby.json" }
   let(:stable_url) { "https://brew.sh/test-0.0.1.tgz" }
   let(:resource_url) { "https://brew.sh/foo-1.0.tar.gz" }
-  let(:brew_regex) { /href=.*?test[._-]v?(\d+(?:\.\d+)+)\.(?:t|dmg)/i }
   let(:f) do
     formula("test") do
+      T.bind(self, T.class_of(Formula))
       desc "Test formula"
       homepage "https://brew.sh"
       url "https://brew.sh/test-0.0.1.tgz"
@@ -41,6 +40,7 @@ RSpec.describe Homebrew::Livecheck do
     stable_url_s = stable_url
 
     formula("test_stable_url_only") do
+      T.bind(self, T.class_of(Formula))
       desc "Test formula with only a stable URL"
       url stable_url_s
     end
@@ -161,6 +161,7 @@ RSpec.describe Homebrew::Livecheck do
       resource_url_s = resource_url
 
       formula("test_livecheck_url") do
+        T.bind(self, T.class_of(Formula))
         desc "Test Livecheck URL formula"
         homepage homepage_url_s
         url stable_url_s
@@ -247,6 +248,7 @@ RSpec.describe Homebrew::Livecheck do
     let(:resource_url) { "https://brew.sh/foo-1.0.tar.gz" }
     let(:f_duplicate_urls) do
       formula("test_duplicate_urls") do
+        T.bind(self, T.class_of(Formula))
         desc "Test formula with a duplicate URL"
         homepage "https://github.com/Homebrew/brew.git"
         url "https://brew.sh/test-0.0.1.tgz"
@@ -269,6 +271,7 @@ RSpec.describe Homebrew::Livecheck do
 
     let(:f_homebrew_curl) do
       formula("test") do
+        T.bind(self, T.class_of(Formula))
         desc "Test formula"
         homepage "https://brew.sh"
         url "https://brew.sh/test-0.0.1.tgz", using: :homebrew_curl
@@ -332,6 +335,7 @@ RSpec.describe Homebrew::Livecheck do
   describe "::latest_version" do
     let(:f_throttle_rate) do
       formula("test_throttle_rate") do
+        T.bind(self, T.class_of(Formula))
         desc "Test formula"
         homepage "https://brew.sh"
         url "https://brew.sh/test-0.0.1.tgz"
@@ -346,6 +350,7 @@ RSpec.describe Homebrew::Livecheck do
 
     let(:f_throttle_days) do
       formula("test_throttle_days") do
+        T.bind(self, T.class_of(Formula))
         desc "Test formula"
         homepage "https://brew.sh"
         url "https://brew.sh/test-0.0.1.tgz"
@@ -360,6 +365,7 @@ RSpec.describe Homebrew::Livecheck do
 
     let(:f_throttle_rate_and_days) do
       formula("test_throttle_rate_and_days") do
+        T.bind(self, T.class_of(Formula))
         desc "Test formula"
         homepage "https://brew.sh"
         url "https://brew.sh/test-0.0.1.tgz"
@@ -445,7 +451,7 @@ RSpec.describe Homebrew::Livecheck do
         HTML
       })
 
-      f_result = nil
+      f_result = T.let(nil, T.nilable(T::Hash[Symbol, T.nilable(Version)]))
       expect { f_result = livecheck.latest_version(f_throttle_rate, debug: true, verbose: true) }
         .to output(
           a_string_matching(/Throttle: +4 versions/)
@@ -454,7 +460,7 @@ RSpec.describe Homebrew::Livecheck do
       expect(f_result[:latest]).to eq(Version.new("0.0.5"))
       expect(f_result[:latest_throttled]).to eq(Version.new("0.0.4"))
 
-      c_result = nil
+      c_result = T.let(nil, T.nilable(T::Hash[Symbol, T.nilable(Version)]))
       expect { c_result = livecheck.latest_version(c_throttle_rate, debug: true) }
         .to output(
           a_string_matching(/Throttle: +4 versions/)
@@ -469,7 +475,7 @@ RSpec.describe Homebrew::Livecheck do
       allow(livecheck).to receive(:throttle_interval_elapsed?).and_return(false)
       latest_version = Version.new("0.0.2")
 
-      f_result = nil
+      f_result = T.let(nil, T.nilable(T::Hash[Symbol, T.nilable(Version)]))
       expect { f_result = livecheck.latest_version(f_throttle_rate_and_days, debug: true) }
         .to output(a_string_matching(/Throttle: +4 versions or 1 day/)).to_stdout
       expect(f_result[:latest]).to eq(latest_version)
@@ -485,7 +491,7 @@ RSpec.describe Homebrew::Livecheck do
       allow(livecheck).to receive(:throttle_interval_elapsed?).and_return(true)
       latest_version = Version.new("0.0.2")
 
-      f_result = nil
+      f_result = T.let(nil, T.nilable(T::Hash[Symbol, T.nilable(Version)]))
       expect { f_result = livecheck.latest_version(f_throttle_days, debug: true) }
         .to output(
           a_string_matching(/Throttle: +1 day/)

@@ -241,6 +241,7 @@ module Cask
       @os_set_in_block = T.let(false, T::Boolean)
       @rename = T.let([], T::Array[DSL::Rename])
       @sha256 = T.let(nil, T.nilable(T.any(Checksum, Symbol)))
+      @sha256_set_for_linux = T.let(false, T::Boolean)
       @sha256_set_in_block = T.let(false, T::Boolean)
       @staged_path = T.let(nil, T.nilable(Pathname))
       @token = T.let(cask.token, String)
@@ -267,6 +268,9 @@ module Cask
 
     sig { returns(T::Boolean) }
     def on_os_blocks_exist? = @on_os_blocks_exist
+
+    sig { returns(T::Boolean) }
+    def sha256_set_for_linux? = @sha256_set_for_linux
 
     # Specifies the cask's name.
     #
@@ -531,6 +535,7 @@ module Cask
         if arm.present? || x86_64.present? || x86_64_linux.present? || arm64_linux.present?
           @on_system_blocks_exist = true
         end
+        @sha256_set_for_linux = true if x86_64_linux.present? || arm64_linux.present?
 
         val = arg || on_system_conditional(
           macos: on_arch_conditional(arm:, intel: x86_64),
@@ -919,7 +924,7 @@ module Cask
         raise CaskInvalidError.new(cask, "'no_autobump!' stanza may only appear once.")
       end
 
-      odeprecated "no_autobump! because: :requires_manual_review" if because == :requires_manual_review
+      odisabled "no_autobump! because: :requires_manual_review" if because == :requires_manual_review
 
       @no_autobump_defined = true
       @no_autobump_message = because

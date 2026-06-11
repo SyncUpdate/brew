@@ -8,18 +8,14 @@ require "cmd/shared_examples/args_parse"
 require "cmd/shared_examples/reinstall_pkgconf_if_needed"
 
 RSpec.describe Homebrew::Cmd::UpdateReport do
-  let(:klass) { Homebrew::Cmd::UpdateReport }
-
   it_behaves_like "parseable arguments"
 
   it_behaves_like "reinstall_pkgconf_if_needed"
 
   describe Reporter do
-    let(:klass) { Reporter }
-
     let(:tap) { CoreTap.instance }
     let(:reporter_class) do
-      Class.new(klass) do
+      Class.new(described_class) do
         def initialize(tap)
           @tap = tap
 
@@ -47,7 +43,7 @@ RSpec.describe Homebrew::Cmd::UpdateReport do
       ENV.delete_if { |k, _v| k.start_with? "HOMEBREW_UPDATE" }
 
       expect do
-        klass.new(tap)
+        described_class.new(tap)
       end.to raise_error(Reporter::ReporterRevisionUnsetError)
     end
 
@@ -158,13 +154,36 @@ RSpec.describe Homebrew::Cmd::UpdateReport do
       end
     end
 
+    describe "#ensure_trusted_tap_installed!" do
+      let(:other_tap) { Tap.fetch("foo", "bar") }
+
+      before { allow(other_tap).to receive(:installed?).and_return(false) }
+
+      it "recommends trusting just the migrated package then migrating a rename" do
+        expect(other_tap).not_to receive(:ensure_installed!)
+        expect { reporter.send(:ensure_trusted_tap_installed!, "oldfoo", "newfoo", other_tap) }
+          .to output(%r{brew trust foo/bar/newfoo.*brew migrate oldfoo}m).to_stderr
+      end
+
+      it "recommends a reinstall for an unchanged-name tap migration" do
+        expect { reporter.send(:ensure_trusted_tap_installed!, "foo", "foo", other_tap) }
+          .to output(/brew reinstall foo/).to_stderr
+      end
+
+      it "taps a trusted tap" do
+        allow(other_tap).to receive(:official?).and_return(true)
+        expect(other_tap).to receive(:ensure_installed!)
+        reporter.send(:ensure_trusted_tap_installed!, "foo", "foo", other_tap)
+      end
+    end
+
     describe "#diff" do
       context "when using the API" do
         subject(:reporter) do
-          klass.new(tap,
-                    api_names_txt:        Pathname("formula_names.txt"),
-                    api_names_before_txt: Pathname("formula_names_before.txt"),
-                    api_dir_prefix:       HOMEBREW_CACHE/"api")
+          described_class.new(tap,
+                              api_names_txt:        Pathname("formula_names.txt"),
+                              api_names_before_txt: Pathname("formula_names_before.txt"),
+                              api_dir_prefix:       HOMEBREW_CACHE/"api")
         end
 
         it "ignore lines that haven't changed" do
@@ -199,9 +218,7 @@ RSpec.describe Homebrew::Cmd::UpdateReport do
   end
 
   describe ReporterHub do
-    let(:klass) { ReporterHub }
-
-    let(:hub) { klass.new }
+    let(:hub) { described_class.new }
 
     before do
       ENV["HOMEBREW_NO_COLOR"] = "1"
@@ -285,6 +302,16 @@ RSpec.describe Homebrew::Cmd::UpdateReport do
       allow(Formula).to receive(:installed).and_return([])
       allow(Cask::Caskroom).to receive(:casks).and_return([])
       expect { hub.dump }.not_to output.to_stdout
+    end
+
+    it "merges frozen report arrays" do
+      first_reporter = instance_double(Reporter, report: { A: ["foo"].freeze })
+      second_reporter = instance_double(Reporter, report: { A: ["bar"] })
+
+      hub.add(first_reporter)
+      hub.add(second_reporter)
+
+      expect(hub.instance_variable_get(:@hash)[:A]).to eq(%w[foo bar])
     end
   end
 end

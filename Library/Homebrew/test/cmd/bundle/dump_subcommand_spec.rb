@@ -6,10 +6,9 @@ require "bundle/subcommand/dump"
 
 RSpec.describe Homebrew::Cmd::Bundle::DumpSubcommand do
   subject(:dump) do
-    klass.new(args_object, context:).run
+    described_class.new(args_object, context:).run
   end
 
-  let(:klass) { Homebrew::Cmd::Bundle::DumpSubcommand }
   let(:force) { false }
   let(:global) { false }
   let(:context) { bundle_subcommand_context(:dump, global:, force:, no_type_args: false) }
@@ -65,7 +64,7 @@ RSpec.describe Homebrew::Cmd::Bundle::DumpSubcommand do
       expect(extension_types[:vscode]).to be(true)
     end
 
-    klass.new(args_object, context:).run
+    described_class.new(args_object, context:).run
   end
 
   it "treats --no-tap as --no-dump-tap" do
@@ -76,7 +75,7 @@ RSpec.describe Homebrew::Cmd::Bundle::DumpSubcommand do
       expect(taps).to be(false)
     end
 
-    klass.new(args_object, context:).run
+    described_class.new(args_object, context:).run
   end
 
   it "does not dump types disabled by environment" do
@@ -92,7 +91,7 @@ RSpec.describe Homebrew::Cmd::Bundle::DumpSubcommand do
       expect(extension_types[:vscode]).to be(true)
     end
 
-    klass.new(args_object, context:).run
+    described_class.new(args_object, context:).run
   end
 
   context "when files existed and `--force` and `--global` are passed" do
@@ -101,7 +100,10 @@ RSpec.describe Homebrew::Cmd::Bundle::DumpSubcommand do
 
     before do
       ENV["HOMEBREW_BUNDLE_FILE"] = ""
-      stub_formula_loader formula("mas") { url "mas-1.0" }
+      stub_formula_loader formula("mas") {
+        T.bind(self, T.class_of(Formula))
+        url "mas-1.0"
+      }
       allow_any_instance_of(Pathname).to receive(:exist?).and_return(true)
       allow(Homebrew::Bundle).to receive(:cask_installed?).and_return(true)
       allow(Cask::Caskroom).to receive(:casks).and_return([])

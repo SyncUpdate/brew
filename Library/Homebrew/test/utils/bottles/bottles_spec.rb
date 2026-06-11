@@ -4,22 +4,20 @@
 require "utils/bottles"
 
 RSpec.describe Utils::Bottles do
-  let(:klass) { Utils::Bottles }
-
   describe "#tag", :needs_macos do
     it "returns :big_sur or :arm64_big_sur on Big Sur" do
       allow(MacOS).to receive(:version).and_return(MacOSVersion.new("11.0"))
       if Hardware::CPU.intel?
-        expect(klass.tag).to eq(:big_sur)
+        expect(described_class.tag).to eq(:big_sur)
       else
-        expect(klass.tag).to eq(:arm64_big_sur)
+        expect(described_class.tag).to eq(:arm64_big_sur)
       end
     end
   end
 
   describe ".extname_tag_rebuild" do
     it "returns an empty rebuild for bottles without rebuilds" do
-      expect(klass.extname_tag_rebuild("gh--2.93.0.arm64_sonoma.bottle.tar.gz"))
+      expect(described_class.extname_tag_rebuild("gh--2.93.0.arm64_sonoma.bottle.tar.gz"))
         .to eq([".arm64_sonoma.bottle.tar.gz", "arm64_sonoma", ""])
     end
   end
@@ -36,7 +34,7 @@ RSpec.describe Utils::Bottles do
             version "0.1"
           end
         RUBY
-        Formulary.cache.delete(dep_path)
+        Formulary.cache.delete(dep_path.to_s)
 
         # setup a testball2, that depends on testball1
         formula_name = "testball2"
@@ -48,14 +46,14 @@ RSpec.describe Utils::Bottles do
             depends_on "testball1"
           end
         RUBY
-        Formulary.cache.delete(formula_path)
+        Formulary.cache.delete(formula_path.to_s)
       end
 
       it "includes runtime_dependencies" do
         formula = Formula["testball2"]
         formula.prefix.mkpath
 
-        runtime_dependencies = klass.load_tab(formula).runtime_dependencies
+        runtime_dependencies = described_class.load_tab(formula).runtime_dependencies
 
         expect(runtime_dependencies).not_to be_nil
         expect(runtime_dependencies.size).to eq(1)

@@ -22,8 +22,6 @@ require "deprecate_disable"
 require "unlink"
 require "service"
 require "attestation"
-# odeprecated: load lazily in 5.2.0 when `HOMEBREW_SBOM` is required
-require "sbom"
 require "utils/fork"
 require "utils/output"
 require "utils/attestation"
@@ -978,7 +976,7 @@ on_request: installed_on_request?, options:)
 
     install_service
 
-    fix_dynamic_linkage(keg) if !@poured_bottle || !formula.bottle_specification.skip_relocation?
+    fix_dynamic_linkage(keg) if !@poured_bottle || !formula.bottle_specification.skip_relocation?(tab: keg.tab)
 
     require "install"
     Homebrew::Install.global_post_install
@@ -1020,9 +1018,9 @@ on_request: installed_on_request?, options:)
     tab.runtime_dependencies = Tab.runtime_deps_hash(formula, f_runtime_deps)
     tab.write
 
-    # odeprecated: require `HOMEBREW_SBOM` in 5.2.0
-    # write/update a SBOM file (if we aren't bottling)
-    unless build_bottle?
+    # write/update a SBOM file (if requested and we aren't bottling)
+    if Homebrew::EnvConfig.sbom? && !build_bottle?
+      require "sbom"
       sbom = SBOM.create(formula, tab)
       sbom.write(validate: Homebrew::EnvConfig.developer?)
     end
@@ -1564,11 +1562,11 @@ on_request: installed_on_request?, options:)
     tab.write
 
     keg = Keg.new(formula.prefix)
-    skip_linkage = formula.bottle_specification.skip_relocation?
+    skip_linkage = formula.bottle_specification.skip_relocation?(tab:)
     keg.replace_placeholders_with_locations(tab.changed_files, skip_linkage:)
 
     cellar = formula.bottle_specification.tag_to_cellar(Utils::Bottles.tag)
-    return if [:any, :any_skip_relocation].include?(cellar)
+    return if BottleSpecification::RELOCATABLE_CELLARS.include?(cellar)
 
     prefix = Pathname(cellar).parent.to_s
     return if cellar == HOMEBREW_CELLAR.to_s && prefix == HOMEBREW_PREFIX.to_s

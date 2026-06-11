@@ -4,9 +4,8 @@
 require "livecheck/strategy"
 
 RSpec.describe Homebrew::Livecheck::Strategy do
-  subject(:strategy) { klass }
+  subject(:strategy) { described_class }
 
-  let(:klass) { Homebrew::Livecheck::Strategy }
   let(:url) { "https://brew.sh/" }
   let(:redirection_url) { "https://brew.sh/redirection" }
   let(:post_hash) do
@@ -26,7 +25,10 @@ RSpec.describe Homebrew::Livecheck::Strategy do
       status_code: "200",
       status_text: "OK",
       headers:     {
-        "cache-control"  => "max-age=604800",
+        "cache-control"  => [
+          "max-age=604800, must-revalidate",
+          "public, no-transform",
+        ],
         "content-type"   => "text/html; charset=UTF-8",
         "date"           => "Wed, 1 Jan 2020 01:23:45 GMT",
         "expires"        => "Wed, 31 Jan 2020 01:23:45 GMT",
@@ -39,7 +41,10 @@ RSpec.describe Homebrew::Livecheck::Strategy do
       status_code: "301",
       status_text: "Moved Permanently",
       headers:     {
-        "cache-control"  => "max-age=604800",
+        "cache-control"  => [
+          "max-age=604800, must-revalidate",
+          "public, no-transform",
+        ],
         "content-type"   => "text/html; charset=UTF-8",
         "date"           => "Wed, 1 Jan 2020 01:23:45 GMT",
         "expires"        => "Wed, 31 Jan 2020 01:23:45 GMT",
@@ -395,6 +400,9 @@ RSpec.describe Homebrew::Livecheck::Strategy do
     it "returns an array of version strings when given a valid value" do
       expect(strategy.handle_block_return("1.2.3")).to eq(["1.2.3"])
       expect(strategy.handle_block_return(["1.2.3", "1.2.4"])).to eq(["1.2.3", "1.2.4"])
+      expect(strategy.handle_block_return([Version.new("1.2.3"), "1.2.4"])).to eq(["1.2.3", "1.2.4"])
+      expect(strategy.handle_block_return([Version.new("1.2.3"), nil, "1.2.4"])).to eq(["1.2.3", "1.2.4"])
+      expect(strategy.handle_block_return([Version.new("1.2.3"), "1.2.3", nil, "1.2.4"])).to eq(["1.2.3", "1.2.4"])
     end
 
     it "returns an empty array when given a nil value" do

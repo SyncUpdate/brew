@@ -41,10 +41,12 @@ module RuboCop
           stanzas.each do |stanza|
             next unless INSTALL_STEP_PAIRS.value?(stanza.stanza_name)
             next unless stanza.method_node.block_type?
-            next unless (offense_node = install_step_block_offense_node(T.cast(stanza.method_node,
-                                                                               RuboCop::AST::BlockNode)))
+            next unless (offense_node = install_step_block_offense_node(
+              T.cast(stanza.method_node, RuboCop::AST::BlockNode),
+              allowed_methods: FILE_PREPARATION_STEP_METHODS,
+            ))
 
-            add_offense(offense_node, message: STEP_BLOCK_MSG)
+            add_offense(offense_node, message: step_block_msg(FILE_PREPARATION_STEP_METHODS))
           end
         end
 
@@ -58,7 +60,8 @@ module RuboCop
           step_lines = simple_install_step_lines(block_node.body,
                                                  default_base:        :staged_path,
                                                  default_source_base: :staged_path,
-                                                 default_target_base: :staged_path)
+                                                 default_target_base: :staged_path,
+                                                 rebuild_actions:     false)
           return if step_lines.blank?
 
           add_offense(block_node.source_range,

@@ -5,15 +5,13 @@ require "bundle"
 require "bundle/dsl"
 
 RSpec.describe Homebrew::Bundle::Dsl do
-  let(:klass) { Homebrew::Bundle::Dsl }
-
   def dsl_from_string(string)
-    klass.new(StringIO.new(string))
+    Homebrew::Bundle::Dsl.new(StringIO.new(string))
   end
 
   context "with a DSL example" do
     subject(:dsl) do
-      dsl_from_string <<~EOS
+      dsl_from_string <<~RUBY
         # frozen_string_literal: true
         cask_args appdir: '/Applications'
         tap 'homebrew/cask'
@@ -31,11 +29,11 @@ RSpec.describe Homebrew::Bundle::Dsl do
         go 'github.com/charmbracelet/crush'
         cargo 'ripgrep'
         uv 'mkdocs', with: ['mkdocs-material<10']
-      EOS
+      RUBY
     end
 
     before do
-      allow_any_instance_of(klass).to receive(:system)
+      allow_any_instance_of(described_class).to receive(:system)
         .with("/usr/libexec/java_home --failfast")
         .and_return(false)
     end
@@ -70,11 +68,11 @@ RSpec.describe Homebrew::Bundle::Dsl do
 
   context "with multiple cask_args" do
     subject(:dsl) do
-      dsl_from_string <<~EOS
+      dsl_from_string <<~RUBY
         cask_args appdir: '/global-apps'
         cask_args require_sha: true
         cask_args appdir: '~/my-apps'
-      EOS
+      RUBY
     end
 
     it "merges the arguments" do
@@ -170,19 +168,20 @@ RSpec.describe Homebrew::Bundle::Dsl do
   end
 
   it ".sanitize_brew_name" do
-    expect(klass.send(:sanitize_brew_name, "homebrew/homebrew/foo")).to eql("foo")
-    expect(klass.send(:sanitize_brew_name, "homebrew/homebrew-bar/foo")).to eql("homebrew/bar/foo")
-    expect(klass.send(:sanitize_brew_name, "homebrew/bar/foo")).to eql("homebrew/bar/foo")
-    expect(klass.send(:sanitize_brew_name, "foo")).to eql("foo")
+    expect(described_class.send(:sanitize_brew_name, "homebrew/homebrew/foo")).to eql("foo")
+    expect(described_class.send(:sanitize_brew_name, "homebrew/homebrew-bar/foo")).to eql("homebrew/bar/foo")
+    expect(described_class.send(:sanitize_brew_name, "homebrew/bar/foo")).to eql("homebrew/bar/foo")
+    expect(described_class.send(:sanitize_brew_name, "foo")).to eql("foo")
   end
 
   it ".sanitize_tap_name" do
-    expect(klass.send(:sanitize_tap_name, "homebrew/homebrew-foo")).to eql("homebrew/foo")
-    expect(klass.send(:sanitize_tap_name, "homebrew/foo")).to eql("homebrew/foo")
+    expect(described_class.send(:sanitize_tap_name, "homebrew/homebrew-foo")).to eql("homebrew/foo")
+    expect(described_class.send(:sanitize_tap_name, "homebrew/foo")).to eql("homebrew/foo")
   end
 
   it ".sanitize_cask_name" do
-    expect(klass.send(:sanitize_cask_name, "homebrew/cask-versions/adoptopenjdk8")).to eql("adoptopenjdk8")
-    expect(klass.send(:sanitize_cask_name, "adoptopenjdk8")).to eql("adoptopenjdk8")
+    expect(described_class.send(:sanitize_cask_name,
+                                "homebrew/cask-versions/adoptopenjdk8")).to eql("adoptopenjdk8")
+    expect(described_class.send(:sanitize_cask_name, "adoptopenjdk8")).to eql("adoptopenjdk8")
   end
 end

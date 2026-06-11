@@ -4,9 +4,8 @@
 require "livecheck/strategy"
 
 RSpec.describe Homebrew::Livecheck::Strategy::Npm do
-  subject(:npm) { klass }
+  subject(:npm) { described_class }
 
-  let(:klass) { Homebrew::Livecheck::Strategy::Npm }
   let(:npm_urls) do
     {
       typical:    "https://registry.npmjs.org/abc/-/def-1.2.3.tgz",
@@ -27,12 +26,12 @@ RSpec.describe Homebrew::Livecheck::Strategy::Npm do
   # This is a limited subset of a `latest` response object, for the sake of
   # testing.
   let(:content) do
-    <<~EOS
+    <<~JSON
       {
         "name": "example",
         "version": "1.2.3"
       }
-    EOS
+    JSON
   end
   let(:matches) { ["1.2.3"] }
 

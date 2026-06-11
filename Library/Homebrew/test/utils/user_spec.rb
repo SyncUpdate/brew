@@ -4,15 +4,11 @@
 require "utils/user"
 
 RSpec.describe User do
-  subject(:user) { klass.current }
-
-  let(:klass) { User }
+  subject(:user) { described_class.current }
 
   it { is_expected.to eq ENV.fetch("USER") }
 
   describe "#gui?" do
-    # Required for Sorbet, but the actual value is set in the individual
-    # examples which provide their `let(:who_output)` value to `before`.
     let(:who_output) { "" }
 
     before do

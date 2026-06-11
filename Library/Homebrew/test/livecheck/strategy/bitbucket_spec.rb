@@ -4,9 +4,8 @@
 require "livecheck/strategy"
 
 RSpec.describe Homebrew::Livecheck::Strategy::Bitbucket do
-  subject(:bitbucket) { klass }
+  subject(:bitbucket) { described_class }
 
-  let(:klass) { Homebrew::Livecheck::Strategy::Bitbucket }
   let(:bitbucket_urls) do
     {
       get:       "https://bitbucket.org/abc/def/get/1.2.3.tar.gz",
@@ -28,7 +27,7 @@ RSpec.describe Homebrew::Livecheck::Strategy::Bitbucket do
   end
   # This example HTML omits table columns for the sake of brevity.
   let(:content) do
-    <<~EOS
+    <<~HTML
       <!DOCTYPE html>
       <html>
         <head>
@@ -80,7 +79,7 @@ RSpec.describe Homebrew::Livecheck::Strategy::Bitbucket do
             </tr>
         </body>
       </html>
-    EOS
+    HTML
   end
   let(:matches) { ["1.2.3", "1.2.2", "1.2.1"] }
 

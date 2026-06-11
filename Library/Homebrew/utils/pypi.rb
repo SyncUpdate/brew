@@ -1,6 +1,7 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "release_cooldown"
 require "utils/output"
 require "utils/ast"
 require "time"
@@ -233,7 +234,7 @@ module PyPI
       dependencies:             T.nilable(T::Array[String]),
       install_dependencies:     T.nilable(T::Boolean),
       print_only:               T.nilable(T::Boolean),
-      silent:                   T.nilable(T::Boolean),
+      quiet:                    T.nilable(T::Boolean),
       verbose:                  T.nilable(T::Boolean),
       ignore_errors:            T.nilable(T::Boolean),
       ignore_non_pypi_packages: T.nilable(T::Boolean),
@@ -241,7 +242,7 @@ module PyPI
   }
   def self.update_python_resources!(formula, version: nil, package_name: nil, extra_packages: nil,
                                     exclude_packages: nil, dependencies: nil, install_dependencies: false,
-                                    print_only: false, silent: false, verbose: false,
+                                    print_only: false, quiet: false, verbose: false,
                                     ignore_errors: false, ignore_non_pypi_packages: false)
     if [package_name, extra_packages, exclude_packages, dependencies].all?(&:blank?)
       list_entry = formula.pypi_packages_info
@@ -345,7 +346,7 @@ module PyPI
     Formula[python_name].ensure_installed!
 
     # Resolve the dependency tree of all input packages
-    show_info = !print_only && !silent
+    show_info = !print_only && !quiet
     ohai "Retrieving PyPI dependencies for \"#{input_packages.join(" ")}\"..." if show_info
 
     print_stderr = verbose && show_info
@@ -438,7 +439,7 @@ module PyPI
       Please update the resources manually.
     EOS
 
-    ohai "Updating resource blocks" unless silent
+    ohai "Updating resource blocks" unless quiet
     formula_ast = Utils::AST::FormulaAST.new(formula.path.read)
     if formula_ast.replace_resource_stanzas(
       resource_section,
@@ -495,7 +496,8 @@ module PyPI
     # likely to pick a freshly compromised PyPI release.
     command = [
       Formula[python_name].opt_libexec/"bin/python", "-m", "pip", "install", "-q", "--disable-pip-version-check",
-      "--dry-run", "--ignore-installed", "--uploaded-prior-to=#{(Time.now.utc - (24 * 60 * 60)).iso8601(0)}",
+      "--dry-run", "--ignore-installed",
+      "--uploaded-prior-to=#{(Time.now.utc - Homebrew::RELEASE_COOLDOWN_SECONDS).iso8601(0)}",
       "--report=/dev/stdout", *packages.map(&:to_s)
     ]
     options = {}

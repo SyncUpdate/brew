@@ -1,13 +1,11 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require "dependency_collector"
 require "sandbox"
 
 RSpec.describe DependencyCollector do
-  subject(:collector) { klass.new }
-
-  let(:klass) { DependencyCollector }
+  subject(:collector) { described_class.new }
 
   alias_matcher :be_a_build_requirement, :be_build
 

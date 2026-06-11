@@ -1,12 +1,12 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require "test/cask/dsl/shared_examples/base"
 
 RSpec.describe Cask::DSL::Container do
-  subject(:container) { klass.new(**params) }
+  subject(:container) { described_class.new(**params) }
 
-  let(:klass) { Cask::DSL::Container }
+  let(:params) { {} }
 
   describe "#pairs" do
     let(:params) { { nested: "NestedApp.dmg" } }

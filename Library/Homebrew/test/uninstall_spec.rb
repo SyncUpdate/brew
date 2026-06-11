@@ -1,15 +1,19 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require "uninstall"
 
 RSpec.describe Homebrew::Uninstall do
-  let(:klass) { Homebrew::Uninstall }
-
-  let(:dependency) { formula("dependency") { url "f-1" } }
+  let(:dependency) do
+    formula("dependency") do
+      T.bind(self, T.class_of(Formula))
+      url "f-1"
+    end
+  end
 
   let(:dependent_formula) do
     formula("dependent_formula") do
+      T.bind(self, T.class_of(Formula))
       url "f-1"
       depends_on "dependency"
     end
@@ -52,7 +56,7 @@ RSpec.describe Homebrew::Uninstall do
   describe "::handle_unsatisfied_dependents" do
     specify "when `ignore_dependencies` is false" do
       expect do
-        klass.handle_unsatisfied_dependents(kegs_by_rack)
+        described_class.handle_unsatisfied_dependents(kegs_by_rack)
       end.to output(/Error/).to_stderr
 
       expect(Homebrew).to have_failed
@@ -60,7 +64,7 @@ RSpec.describe Homebrew::Uninstall do
 
     specify "when `ignore_dependencies` is true" do
       expect do
-        klass.handle_unsatisfied_dependents(kegs_by_rack, ignore_dependencies: true)
+        described_class.handle_unsatisfied_dependents(kegs_by_rack, ignore_dependencies: true)
       end.not_to output.to_stderr
 
       expect(Homebrew).not_to have_failed

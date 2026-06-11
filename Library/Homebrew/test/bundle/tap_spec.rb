@@ -6,14 +6,12 @@ require "bundle/skipper"
 require "bundle/tap"
 
 RSpec.describe Homebrew::Bundle::Tap do
-  let(:klass) { Homebrew::Bundle::Tap }
-
   describe "dumping" do
-    subject(:dumper) { klass }
+    subject(:dumper) { described_class }
 
     context "when there is no tap" do
       before do
-        klass.reset!
+        described_class.reset!
         allow(Tap).to receive(:select).and_return []
       end
 
@@ -25,17 +23,21 @@ RSpec.describe Homebrew::Bundle::Tap do
 
     context "with taps" do
       before do
-        klass.reset!
+        described_class.reset!
 
         bar = instance_double(Tap, name: "bitbucket/bar", custom_remote?: true,
                               remote: "https://bitbucket.org/bitbucket/bar.git")
-        baz = instance_double(Tap, name: "homebrew/baz", custom_remote?: false)
-        foo = instance_double(Tap, name: "homebrew/foo", custom_remote?: false)
+        baz = instance_double(Tap, name: "homebrew/baz", custom_remote?: false, remote: nil)
+        foo = instance_double(Tap, name: "homebrew/foo", custom_remote?: false, remote: nil)
 
         ENV["HOMEBREW_GITHUB_API_TOKEN_BEFORE"] = ENV.fetch("HOMEBREW_GITHUB_API_TOKEN", nil)
         ENV["HOMEBREW_GITHUB_API_TOKEN"] = "some-token"
         private_tap = instance_double(Tap, name: "privatebrew/private", custom_remote?: true,
           remote: "https://#{ENV.fetch("HOMEBREW_GITHUB_API_TOKEN")}@github.com/privatebrew/homebrew-private")
+
+        [bar, baz, foo, private_tap].each do |tap|
+          allow(tap).to receive(:matches_reference?) { |reference| reference == tap.remote }
+        end
 
         allow(Tap).to receive(:select).and_return [bar, baz, foo, private_tap]
       end
@@ -50,13 +52,22 @@ RSpec.describe Homebrew::Bundle::Tap do
       end
 
       it "dumps output" do
-        expected_output = <<~EOS
+        expected_output = <<~RUBY
           tap "bitbucket/bar", "https://bitbucket.org/bitbucket/bar.git"
           tap "homebrew/baz"
           tap "homebrew/foo"
           tap "privatebrew/private", "https://\#{ENV.fetch("HOMEBREW_GITHUB_API_TOKEN")}@github.com/privatebrew/homebrew-private"
-        EOS
+        RUBY
         expect(dumper.dump).to eql(expected_output.chomp)
+      end
+
+      it "dumps trusted taps with trusted true" do
+        allow(Homebrew::Trust).to receive(:trusted_entries).with(:tap)
+                                                           .and_return(["https://bitbucket.org/bitbucket/bar.git"])
+
+        expect(dumper.dump).to include(
+          "tap \"bitbucket/bar\", \"https://bitbucket.org/bitbucket/bar.git\", trusted: true",
+        )
       end
     end
   end
@@ -64,35 +75,35 @@ RSpec.describe Homebrew::Bundle::Tap do
   describe "installing" do
     describe ".installed_taps" do
       before do
-        klass.reset!
+        described_class.reset!
       end
 
       it "calls Homebrew" do
-        expect { klass.installed_taps }.not_to raise_error
+        expect { described_class.installed_taps }.not_to raise_error
       end
     end
 
     context "when tap is installed" do
       before do
-        allow(klass).to receive(:installed_taps).and_return(["homebrew/cask"])
+        allow(described_class).to receive(:installed_taps).and_return(["homebrew/cask"])
       end
 
       it "skips" do
         expect(Homebrew::Bundle).not_to receive(:system)
-        expect(klass.preinstall!("homebrew/cask")).to be(false)
+        expect(described_class.preinstall!("homebrew/cask")).to be(false)
       end
     end
 
     context "when tap is not installed" do
       before do
-        allow(klass).to receive(:installed_taps).and_return([])
+        allow(described_class).to receive(:installed_taps).and_return([])
       end
 
       it "taps" do
         expect(Homebrew::Bundle).to receive(:system).with(HOMEBREW_BREW_FILE, "tap", "homebrew/cask",
                                                           verbose: false).and_return(true)
-        expect(klass.preinstall!("homebrew/cask")).to be(true)
-        expect(klass.install!("homebrew/cask")).to be(true)
+        expect(described_class.preinstall!("homebrew/cask")).to be(true)
+        expect(described_class.install!("homebrew/cask")).to be(true)
       end
 
       context "with clone target" do
@@ -100,16 +111,16 @@ RSpec.describe Homebrew::Bundle::Tap do
           expect(Homebrew::Bundle).to \
             receive(:system).with(HOMEBREW_BREW_FILE, "tap", "homebrew/cask", "clone_target_path",
                                   verbose: false).and_return(true)
-          expect(klass.preinstall!("homebrew/cask", clone_target: "clone_target_path")).to be(true)
-          expect(klass.install!("homebrew/cask", clone_target: "clone_target_path")).to be(true)
+          expect(described_class.preinstall!("homebrew/cask", clone_target: "clone_target_path")).to be(true)
+          expect(described_class.install!("homebrew/cask", clone_target: "clone_target_path")).to be(true)
         end
 
         it "fails" do
           expect(Homebrew::Bundle).to \
             receive(:system).with(HOMEBREW_BREW_FILE, "tap", "homebrew/cask", "clone_target_path",
                                   verbose: false).and_return(false)
-          expect(klass.preinstall!("homebrew/cask", clone_target: "clone_target_path")).to be(true)
-          expect(klass.install!("homebrew/cask", clone_target: "clone_target_path")).to be(false)
+          expect(described_class.preinstall!("homebrew/cask", clone_target: "clone_target_path")).to be(true)
+          expect(described_class.install!("homebrew/cask", clone_target: "clone_target_path")).to be(false)
         end
       end
     end

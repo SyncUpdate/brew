@@ -53,9 +53,9 @@ module Homebrew
         switch "--github",
                description: "Open the GitHub source page for <formula> and <cask> in a browser. " \
                             "To view the history locally: `brew log -p` <formula> or <cask>"
-        # odeprecated replace this with --verbose on next release
         switch "--fetch-manifest",
-               description: "Fetch GitHub Packages manifest for extra information when <formula> is not installed."
+               description: "Fetch GitHub Packages manifest for extra information when <formula> is not installed.",
+               odeprecated: true
         flag   "--json",
                description: "Print a JSON representation. Currently the default value for <version> is `v1` for " \
                             "<formula>. For <formula> and <cask> use `v2`. See the docs for examples of using the " \
@@ -63,13 +63,12 @@ module Homebrew
         switch "--installed",
                description: "Output a human-readable inventory of installed formulae and casks. If `--json` is " \
                             "passed, print JSON for installed formulae and, with `--json=v2`, installed casks."
-        # odeprecated: remove in a future release.
         switch "--eval-all",
                depends_on:  "--json",
                description: "Evaluate all available formulae and casks, whether installed or not, to print their " \
                             "JSON.",
                env:         :eval_all,
-               hidden:      true
+               odeprecated: true
         switch "--variations",
                depends_on:  "--json",
                description: "Include the variations hash in each formula's JSON output."
@@ -119,7 +118,7 @@ module Homebrew
           print_analytics
         elsif (json = args.json)
           eval_all = args.eval_all?
-          eval_all ||= args.no_named? && Homebrew::EnvConfig.tap_trust_configured?
+          eval_all ||= args.no_named? && !args.installed? && Homebrew::EnvConfig.tap_trust_configured?
           print_json(json, eval_all)
         elsif args.installed?
           T.let([
@@ -385,16 +384,21 @@ module Homebrew
 
       sig { params(quiet: T::Boolean).void }
       def print_info(quiet: false)
-        qualified_inputs = args.named.select { |name| name.include?("/") }.to_set
+        objects = args.named.to_formulae_and_casks_and_unavailable(uniq: false)
+        user_qualified = args.named.downcased_unique_named.map { |name| name.include?("/") }
 
-        args.named.to_formulae_and_casks_and_unavailable.each_with_index do |obj, i|
+        resolved = user_qualified.zip(objects).map do |qualified, obj|
+          if obj.is_a?(Formula)
+            display_resolution(obj, user_qualified: qualified)
+          else
+            [obj, nil]
+          end
+        end
+
+        unique_by_display_name(resolved).each_with_index do |(obj, shadowed_by), i|
           puts unless i.zero?
 
-          case obj
-          when Formula, Cask::Cask
-            user_qualified = formula_qualified_by_user?(obj, qualified_inputs)
-            info_formula_or_cask(obj, quiet:, user_qualified:)
-          when FormulaOrCaskUnavailableError
+          if obj.is_a?(FormulaOrCaskUnavailableError)
             # The formula/cask could not be found
             ofail obj.message
             # No formula with this name, try a missing formula lookup
@@ -402,9 +406,28 @@ module Homebrew
               $stderr.puts reason
             end
           else
-            raise
+            info_formula_or_cask(obj, quiet:, shadowed_by:)
           end
         end
+      end
+
+      sig {
+        params(resolved: T::Array[[T.untyped, T.nilable(Tap)]]).returns(T::Array[[T.untyped, T.nilable(Tap)]])
+      }
+      def unique_by_display_name(resolved)
+        resolved.uniq do |obj, _shadowed_by|
+          case obj
+          when Formula, Cask::Cask then obj.full_name
+          else obj
+          end
+        end
+      end
+
+      sig { params(formula: Formula, user_qualified: T::Boolean).returns([Formula, T.nilable(Tap)]) }
+      def display_resolution(formula, user_qualified:)
+        return [formula, nil] if user_qualified
+
+        installed_resolution(formula)
       end
 
       sig { params(formula_or_cask: T.any(Formula, Cask::Cask), qualified_inputs: T::Set[String]).returns(T::Boolean) }
@@ -418,33 +441,41 @@ module Homebrew
         names.any? { |n| qualified_inputs.include?(n) }
       end
 
-      sig {
-        params(formula_or_cask: T.any(Formula, Cask::Cask), quiet: T::Boolean, user_qualified: T::Boolean).void
-      }
-      def info_formula_or_cask(formula_or_cask, quiet:, user_qualified: false)
+      sig { params(formula_or_cask: T.any(Formula, Cask::Cask), quiet: T::Boolean, shadowed_by: T.nilable(Tap)).void }
+      def info_formula_or_cask(formula_or_cask, quiet:, shadowed_by: nil)
         case formula_or_cask
         when Formula
-          if user_qualified
-            quiet ? info_formula_summary(formula_or_cask) : info_formula(formula_or_cask)
+          if quiet
+            info_formula_summary(formula_or_cask)
           else
-            formula, shadowed_by = installed_resolution(formula_or_cask)
-            quiet ? info_formula_summary(formula) : info_formula(formula, shadowed_by:)
+            info_formula(formula_or_cask, shadowed_by:)
           end
         when Cask::Cask
-          quiet ? info_cask_summary(formula_or_cask) : info_cask(formula_or_cask)
+          if quiet
+            info_cask_summary(formula_or_cask)
+          else
+            info_cask(formula_or_cask)
+          end
         end
       end
 
       sig { params(formula: Formula).returns([Formula, T.nilable(Tap)]) }
       def installed_resolution(formula)
-        return [formula, nil] if formula.installed_kegs.empty?
+        keg = formula.installed_kegs.last
+        return [formula, nil] if keg.nil?
 
-        installed_tap = Tab.for_formula(formula).tap
+        installed_tap = keg.tab.tap
         return [formula, nil] if installed_tap.nil? || installed_tap == formula.tap
 
-        [Formulary.from_rack(formula.rack), formula.tap]
+        [Formulary.factory("#{installed_tap}/#{keg.name}"), formula.tap]
       rescue FormulaUnavailableError, TapFormulaAmbiguityError
         [formula, nil]
+      end
+
+      sig { params(formula: Formula).returns(T.nilable(Formula)) }
+      def shadowing_installed_formula(formula)
+        installed_formula, shadowed_by = installed_resolution(formula)
+        installed_formula if shadowed_by
       end
 
       sig { params(formula: Formula, qualified_inputs: T::Set[String]).returns(Formula) }
@@ -602,7 +633,8 @@ module Homebrew
         attrs = []
         attrs << "keg-only" if formula.keg_only?
 
-        kegs = formula.installed_kegs
+        shadowing_formula = shadowing_installed_formula(formula)
+        kegs = shadowing_formula ? [] : formula.installed_kegs
         installed = kegs.any?
         outdated = installed && formula.outdated?
         if outdated && (upgrade_version = specs.first.presence)
@@ -610,7 +642,13 @@ module Homebrew
                               kegs.max_by(&:scheme_and_version)&.version
           specs[0] = "#{installed_version} → #{upgrade_version}"
         end
-        title_name = shadowed_by ? formula.name : formula.full_name
+        title_name = if shadowing_formula && (formula_tap = formula.tap)
+          "#{formula_tap}/#{formula.name}"
+        elsif shadowed_by
+          formula.name
+        else
+          formula.full_name
+        end
         name_with_status = pretty_install_status(
           title_name,
           installed:,
@@ -637,9 +675,17 @@ module Homebrew
           puts deprecate_disable_info_string
         end
 
-        conflicts = formula.conflicts.map do |conflict|
+        conflicts = formula.conflicts.filter_map do |conflict|
+          resolved = begin
+            Formulary.factory(conflict.name)
+          rescue FormulaUnavailableError
+            nil
+          end
+          next if resolved && resolved.full_name == formula.full_name
+
+          conflict_name = resolved&.full_name || conflict.name
           reason = " (because #{conflict.reason})" if conflict.reason
-          "#{conflict.name}#{reason}"
+          "#{conflict_name}#{reason}"
         end.sort!
         unless conflicts.empty?
           puts <<~EOS
@@ -678,7 +724,7 @@ module Homebrew
         metadata = self.class.metadata_lines(formula)
         puts metadata if metadata.present?
 
-        installed_lines = installed_section_lines(formula, verbose: args.verbose?)
+        installed_lines = installed_section_lines(shadowing_formula || formula, verbose: args.verbose?)
         unless installed_lines.empty?
           ohai "Installed Kegs and Versions"
           installed_lines.each { |line| puts line }

@@ -5,9 +5,7 @@ require "diagnostic"
 require "sandbox"
 
 RSpec.describe Homebrew::Diagnostic::Checks do
-  subject(:checks) { klass.new }
-
-  let(:klass) { Homebrew::Diagnostic::Checks }
+  subject(:checks) { described_class.new }
 
   before do
     allow(OS::Linux).to receive(:inside_docker?).and_return(false)
@@ -50,7 +48,7 @@ RSpec.describe Homebrew::Diagnostic::Checks do
   specify "#check_linux_sandbox returns nil when Linux sandboxing is disabled" do
     expect(Sandbox).not_to receive(:failure_reason)
 
-    with_env(HOMEBREW_DEVELOPER: nil, HOMEBREW_SANDBOX_LINUX: nil) do
+    with_env(HOMEBREW_NO_SANDBOX_LINUX: "1") do
       expect(checks.check_linux_sandbox).to be_nil
     end
   end
@@ -59,7 +57,7 @@ RSpec.describe Homebrew::Diagnostic::Checks do
     allow(Sandbox).to receive(:state).and_return(:available)
     expect(Sandbox).not_to receive(:failure_reason)
 
-    with_env(HOMEBREW_NO_SANDBOX_LINUX: nil, HOMEBREW_SANDBOX_LINUX: "1") do
+    with_env(HOMEBREW_NO_SANDBOX_LINUX: nil) do
       expect(checks.check_linux_sandbox).to be_nil
     end
   end
@@ -68,7 +66,7 @@ RSpec.describe Homebrew::Diagnostic::Checks do
     allow(OS::Linux).to receive(:inside_docker?).and_return(true)
     expect(Sandbox).not_to receive(:state)
 
-    with_env(HOMEBREW_NO_SANDBOX_LINUX: nil, HOMEBREW_SANDBOX_LINUX: "1") do
+    with_env(HOMEBREW_NO_SANDBOX_LINUX: nil) do
       expect(checks.check_linux_sandbox).to be_nil
     end
   end
@@ -79,7 +77,7 @@ RSpec.describe Homebrew::Diagnostic::Checks do
       failure_reason: "Bubblewrap is required to use the Linux sandbox but was not found.",
     )
 
-    with_env(HOMEBREW_NO_SANDBOX_LINUX: nil, HOMEBREW_SANDBOX_LINUX: "1") do
+    with_env(HOMEBREW_NO_SANDBOX_LINUX: nil) do
       message = checks.check_linux_sandbox.to_s
 
       expect(message)
@@ -99,7 +97,7 @@ RSpec.describe Homebrew::Diagnostic::Checks do
       failure_reason: "All found `bwrap` executables are setuid.",
     )
 
-    with_env(HOMEBREW_NO_SANDBOX_LINUX: nil, HOMEBREW_SANDBOX_LINUX: "1") do
+    with_env(HOMEBREW_NO_SANDBOX_LINUX: nil) do
       message = checks.check_linux_sandbox.to_s
 
       expect(message)
@@ -120,7 +118,7 @@ RSpec.describe Homebrew::Diagnostic::Checks do
       failure_reason: "Bubblewrap is installed but cannot create a rootless sandbox.",
     )
 
-    with_env(HOMEBREW_NO_SANDBOX_LINUX: nil, HOMEBREW_SANDBOX_LINUX: "1") do
+    with_env(HOMEBREW_NO_SANDBOX_LINUX: nil) do
       message = checks.check_linux_sandbox.to_s
 
       expect(message)

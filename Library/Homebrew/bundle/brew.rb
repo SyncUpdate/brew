@@ -6,6 +6,7 @@ require "tsort"
 require "utils"
 require "utils/output"
 require "bundle/package_type"
+require "trust"
 
 module Homebrew
   module Bundle
@@ -131,18 +132,36 @@ module Homebrew
 
         sig { params(formula: String).returns(T::Boolean) }
         def formula_installed?(formula)
+          # Fully qualified tap formulae can be checked by their Cellar rack name
+          # without loading the formula from an untrusted tap.
+          return installed_formulae.include?(Utils.name_from_full_name(formula)) if Utils.full_name?(formula)
+
           formula_in_array?(formula, installed_formulae)
         end
 
         sig { params(formula: String).returns(T::Boolean) }
         def formula_upgradable?(formula)
+          return false unless formula_installed?(formula)
+
+          # Reading the formula is needed for authoritative outdated state, so
+          # report trust problems before the upgrade check tries to load it.
+          if Utils.full_name?(formula) && Homebrew::EnvConfig.require_tap_trust?
+            require "trust"
+
+            unless Homebrew::Trust.trusted?(:formula, formula)
+              opoo "Cannot check whether #{formula} is outdated because its tap is not trusted. " \
+                   "Run `brew trust --formula #{formula}` to trust it."
+              return true
+            end
+          end
+
           # Check local cache first and then authoritative Homebrew source.
           (formula_in_array?(formula, upgradable_formulae) && Formula[formula].outdated?) || false
         end
 
         sig { returns(T::Array[String]) }
         def installed_formulae
-          @installed_formulae ||= formulae.map { |f| f[:name] }
+          @installed_formulae ||= Formula.installed_formula_names
         end
 
         sig { returns(T::Array[String]) }
@@ -231,6 +250,7 @@ module Homebrew
           requested_formula = formulae.select do |f|
             f[:installed_on_request?]
           end
+          trusted_formulae = Homebrew::Trust.trusted_entries(:formula)
           requested_formula.map do |f|
             brewline = if describe && f[:desc].present?
               f[:desc].split("\n").map { |s| "# #{s}\n" }.join
@@ -243,6 +263,7 @@ module Homebrew
             brewline += ", args: [#{args}]" unless f[:args].empty?
             brewline += ", restart_service: :changed" if !no_restart && Services.started?(f[:full_name])
             brewline += ", link: #{f[:link?]}" unless f[:link?].nil?
+            brewline += ", trusted: true" if trusted_formulae.include?(f[:full_name])
             brewline
           end.join("\n")
         end
@@ -435,6 +456,7 @@ module Homebrew
         @link = T.let(options.fetch(:link, nil), T.nilable(T.any(Symbol, T::Boolean)))
         @postinstall = T.let(options.fetch(:postinstall, nil), T.nilable(String))
         @version_file = T.let(options.fetch(:version_file, nil), T.nilable(String))
+        @trusted = T.let(options.fetch(:trusted, false), T::Boolean)
         @changed = T.let(nil, T.nilable(T::Boolean))
       end
 
@@ -531,6 +553,13 @@ module Homebrew
       sig { params(no_upgrade: T::Boolean, verbose: T::Boolean, force: T::Boolean).returns(T::Boolean) }
       def install_change_state!(no_upgrade:, verbose:, force:)
         require "tap"
+
+        # Trust before tapping: installing the tap loads the formula, which
+        # triggers the trust check before any later step could grant trust.
+        # Only fully-qualified names map to a tap, so unqualified names cannot
+        # be meaningfully trusted.
+        Homebrew::Trust.trust!(:formula, @full_name) if @trusted && Utils.full_name?(@full_name)
+
         if (tap_with_name = ::Tap.with_formula_name(@full_name))
           tap, = tap_with_name
           tap.ensure_installed!

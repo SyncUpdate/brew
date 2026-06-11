@@ -6,7 +6,7 @@ require "formula"
 
 RSpec.describe Tab do
   subject(:tab) do
-    klass.new(
+    described_class.new(
       "homebrew_version"     => HOMEBREW_VERSION,
       "used_options"         => used_options.as_flags,
       "unused_options"       => unused_options.as_flags,
@@ -34,12 +34,16 @@ RSpec.describe Tab do
     )
   end
 
-  let(:klass) { Tab }
   let(:time) { Time.now.to_i }
   let(:unused_options) { Options.create(%w[--with-baz --without-qux]) }
   let(:used_options) { Options.create(%w[--with-foo --without-bar]) }
   let(:git_repo) { HOMEBREW_CACHE/"tab-spec-git-repo" }
-  let(:f) { formula { url "foo-1.0" } }
+  let(:f) do
+    formula do
+      T.bind(self, T.class_of(Formula))
+      url "foo-1.0"
+    end
+  end
   let(:f_tab_path) { f.prefix/"INSTALL_RECEIPT.json" }
   let(:f_tab_content) { (TEST_FIXTURE_DIR/"receipt.json").read }
 
@@ -98,7 +102,7 @@ RSpec.describe Tab do
     # < 1.1.7 runtime_dependencies were wrong so are ignored
     stub_const("HOMEBREW_VERSION", "1.1.7")
 
-    tab = klass.empty
+    tab = described_class.empty
 
     expect(tab.homebrew_version).to eq(HOMEBREW_VERSION)
     expect(tab.unused_options).to be_empty
@@ -140,10 +144,10 @@ RSpec.describe Tab do
   end
 
   specify "#parsed_homebrew_version" do
-    tab = klass.new
+    tab = described_class.new
     expect(tab.parsed_homebrew_version).to be Version::NULL
 
-    tab = klass.new(homebrew_version: "1.2.3")
+    tab = described_class.new(homebrew_version: "1.2.3")
     expect(tab.parsed_homebrew_version).to eq("1.2.3")
     expect(tab.parsed_homebrew_version).to be < "1.2.3-1-g12789abdf"
     expect(tab.parsed_homebrew_version).to be_a(Version)
@@ -153,14 +157,14 @@ RSpec.describe Tab do
     expect(tab.parsed_homebrew_version).to be > "1.2.4-566-g21789abdf"
     expect(tab.parsed_homebrew_version).to be < "1.2.4-568-g01789abdf"
 
-    tab = klass.new(homebrew_version: "2.0.0-134-gabcdefabc-dirty")
+    tab = described_class.new(homebrew_version: "2.0.0-134-gabcdefabc-dirty")
     expect(tab.parsed_homebrew_version).to be > "2.0.0"
     expect(tab.parsed_homebrew_version).to be > "2.0.0-133-g21789abdf"
     expect(tab.parsed_homebrew_version).to be < "2.0.0-135-g01789abdf"
   end
 
   specify "#runtime_dependencies" do
-    tab = klass.new
+    tab = described_class.new
     expect(tab.runtime_dependencies).to be_nil
 
     tab.homebrew_version = "1.1.6"
@@ -185,10 +189,13 @@ RSpec.describe Tab do
   describe "::runtime_deps_hash" do
     it "handles older Homebrew versions correctly" do
       runtime_deps = [Dependency.new("foo")]
-      foo = formula("foo") { url "foo-1.0" }
+      foo = formula("foo") do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+      end
       stub_formula_loader foo
-      runtime_deps_hash = klass.runtime_deps_hash(foo, runtime_deps)
-      tab = klass.new
+      runtime_deps_hash = described_class.runtime_deps_hash(foo, runtime_deps)
+      tab = described_class.new
       tab.homebrew_version = "1.1.6"
       tab.runtime_dependencies = runtime_deps_hash
       expect(tab.runtime_dependencies).to eql(
@@ -198,7 +205,10 @@ RSpec.describe Tab do
     end
 
     it "include declared dependencies" do
-      foo = formula("foo") { url "foo-1.0" }
+      foo = formula("foo") do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+      end
       stub_formula_loader foo
 
       runtime_deps = [Dependency.new("foo")]
@@ -213,12 +223,18 @@ RSpec.describe Tab do
           "declared_directly" => true,
         },
       ]
-      expect(klass.runtime_deps_hash(formula, runtime_deps)).to eq(expected_output)
+      expect(described_class.runtime_deps_hash(formula, runtime_deps)).to eq(expected_output)
     end
 
     it "includes recursive dependencies" do
-      foo = formula("foo") { url "foo-1.0" }
-      bar = formula("bar") { url "bar-2.0" }
+      foo = formula("foo") do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+      end
+      bar = formula("bar") do
+        T.bind(self, T.class_of(Formula))
+        url "bar-2.0"
+      end
       stub_formula_loader foo
       stub_formula_loader bar
 
@@ -243,11 +259,12 @@ RSpec.describe Tab do
           "declared_directly" => false,
         },
       ]
-      expect(klass.runtime_deps_hash(formula, formula_recursive_deps)).to eq(expected_output)
+      expect(described_class.runtime_deps_hash(formula, formula_recursive_deps)).to eq(expected_output)
     end
 
     it "includes compatibility_version when set" do
       foo = formula("foo") do
+        T.bind(self, T.class_of(Formula))
         url "foo-1.0"
         compatibility_version 1
       end
@@ -267,14 +284,14 @@ RSpec.describe Tab do
           "compatibility_version" => 1,
         },
       ]
-      expect(klass.runtime_deps_hash(formula, formula_recursive_deps)).to eq(expected_output)
+      expect(described_class.runtime_deps_hash(formula, formula_recursive_deps)).to eq(expected_output)
     end
   end
 
   describe "::from_file" do
     it "parses a formula Tab from a file" do
       path = Pathname.new("#{TEST_FIXTURE_DIR}/receipt.json")
-      tab = klass.from_file(path)
+      tab = described_class.from_file(path)
       source_path = "/usr/local/Library/Taps/homebrew/homebrew-core/Formula/foo.rb"
       runtime_dependencies = [{ "full_name" => "foo", "version" => "1.0" }]
       changed_files = %w[INSTALL_RECEIPT.json bin/foo].map { Pathname.new(it) }
@@ -304,7 +321,7 @@ RSpec.describe Tab do
   describe "::from_file_content" do
     it "parses a formula Tab from a file" do
       path = Pathname.new("#{TEST_FIXTURE_DIR}/receipt.json")
-      tab = klass.from_file_content(path.read, path)
+      tab = described_class.from_file_content(path.read, path)
       source_path = "/usr/local/Library/Taps/homebrew/homebrew-core/Formula/foo.rb"
       runtime_dependencies = [{ "full_name" => "foo", "version" => "1.0" }]
       changed_files = %w[INSTALL_RECEIPT.json bin/foo].map { Pathname.new(it) }
@@ -332,7 +349,7 @@ RSpec.describe Tab do
 
     it "can parse an old formula Tab file" do
       path = Pathname.new("#{TEST_FIXTURE_DIR}/receipt_old.json")
-      tab = klass.from_file_content(path.read, path)
+      tab = described_class.from_file_content(path.read, path)
 
       expect(tab.used_options.sort).to eq(used_options.sort)
       expect(tab.unused_options.sort).to eq(unused_options.sort)
@@ -352,7 +369,7 @@ RSpec.describe Tab do
     end
 
     it "raises a parse exception message including the Tab filename" do
-      expect { klass.from_file_content("''", "receipt.json") }.to raise_error(
+      expect { described_class.from_file_content("''", "receipt.json") }.to raise_error(
         JSON::ParserError,
         /receipt.json:/,
       )
@@ -368,6 +385,7 @@ RSpec.describe Tab do
       allow(DevelopmentTools).to receive_messages(needs_libc_formula?: false, needs_compiler_formula?: false)
 
       f = formula do
+        T.bind(self, T.class_of(Formula))
         url "foo-1.0"
         depends_on "bar"
         depends_on "user/repo/from_tap"
@@ -376,17 +394,28 @@ RSpec.describe Tab do
 
       tap = Tap.fetch("user", "repo")
       from_tap = formula("from_tap", path: tap.path/"Formula/from_tap.rb") do
+        T.bind(self, T.class_of(Formula))
         url "from_tap-1.0"
         revision 1
       end
       stub_formula_loader from_tap
 
-      stub_formula_loader formula("bar") { url "bar-2.0" }
-      stub_formula_loader formula("baz") { url "baz-3.0" }
+      stub_formula_loader(
+        formula("bar") do
+          T.bind(self, T.class_of(Formula))
+          url "bar-2.0"
+        end,
+      )
+      stub_formula_loader(
+        formula("baz") do
+          T.bind(self, T.class_of(Formula))
+          url "baz-3.0"
+        end,
+      )
 
       compiler = DevelopmentTools.default_compiler
       stdlib = :libcxx
-      tab = klass.create(f, compiler, stdlib)
+      tab = described_class.create(f, compiler, stdlib)
 
       runtime_dependencies = [
         { "full_name" => "bar", "version" => "2.0", "revision" => 0, "pkg_version" => "2.0",
@@ -402,10 +431,13 @@ RSpec.describe Tab do
 
     it "can create a formula Tab from an alias" do
       alias_path = CoreTap.instance.alias_dir/"bar"
-      f = formula(alias_path:) { url "foo-1.0" }
+      f = formula(alias_path:) do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+      end
       compiler = DevelopmentTools.default_compiler
       stdlib = :libcxx
-      tab = klass.create(f, compiler, stdlib)
+      tab = described_class.create(f, compiler, stdlib)
 
       expect(tab.source["path"]).to eq(f.alias_path.to_s)
     end
@@ -416,19 +448,20 @@ RSpec.describe Tab do
       commit = git_repo.cd { Utils.popen_read("git", "rev-parse", "HEAD").chomp }
       repo = git_repo
       f = formula("tab-spec-git") do
+        T.bind(self, T.class_of(Formula))
         url "file://#{repo}", using: :git, branch: "master"
         version "1.0"
       end
       f.public_send(f.active_spec_sym).fetch
 
-      tab = klass.create(f, DevelopmentTools.default_compiler, :libcxx)
+      tab = described_class.create(f, DevelopmentTools.default_compiler, :libcxx)
 
       expect(tab.source["scm_revision"]).to eq(commit)
     end
   end
 
   describe "::for_keg" do
-    subject(:tab_for_keg) { klass.for_keg(f.prefix) }
+    subject(:tab_for_keg) { described_class.for_keg(f.prefix) }
 
     it "creates a Tab for a given Keg" do
       f.prefix.mkpath
@@ -446,15 +479,18 @@ RSpec.describe Tab do
 
   describe "::for_formula" do
     it "creates a Tab for a given Formula" do
-      tab = klass.for_formula(f)
+      tab = described_class.for_formula(f)
       expect(tab.source["path"]).to eq(f.path.to_s)
     end
 
     it "can create a Tab for for a Formula from an alias" do
       alias_path = CoreTap.instance.alias_dir/"bar"
-      f = formula(alias_path:) { url "foo-1.0" }
+      f = formula(alias_path:) do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+      end
 
-      tab = klass.for_formula(f)
+      tab = described_class.for_formula(f)
       expect(tab.source["path"]).to eq(alias_path.to_s)
     end
 
@@ -462,14 +498,14 @@ RSpec.describe Tab do
       f.prefix.mkpath
       f_tab_path.write f_tab_content
 
-      tab = klass.for_formula(f)
+      tab = described_class.for_formula(f)
       expect(tab.tabfile).to eq(f_tab_path)
     end
 
     it "can create a Tab for a non-existent Formula" do
       f.prefix.mkpath
 
-      tab = klass.for_formula(f)
+      tab = described_class.for_formula(f)
       expect(tab.tabfile).to be_nil
     end
 
@@ -477,13 +513,16 @@ RSpec.describe Tab do
       f.prefix.mkpath
       f_tab_path.write f_tab_content
 
-      f2 = formula { url "foo-2.0" }
+      f2 = formula do
+        T.bind(self, T.class_of(Formula))
+        url "foo-2.0"
+      end
       f2.prefix.mkpath
 
       expect(f2.rack).to eq(f.rack)
       expect(f.installed_prefixes.length).to eq(2)
 
-      tab = klass.for_formula(f)
+      tab = described_class.for_formula(f)
       expect(tab.tabfile).to eq(f_tab_path)
     end
 
@@ -491,18 +530,21 @@ RSpec.describe Tab do
       f.prefix.mkpath
       f_tab_path.write f_tab_content
 
-      f2 = formula { url "foo-2.0" }
+      f2 = formula do
+        T.bind(self, T.class_of(Formula))
+        url "foo-2.0"
+      end
 
       expect(f2.rack).to eq(f.rack)
       expect(f.installed_prefixes.length).to eq(1)
 
-      tab = klass.for_formula(f)
+      tab = described_class.for_formula(f)
       expect(tab.tabfile).to eq(f_tab_path)
     end
   end
 
   specify "#to_json" do
-    json_tab = klass.new(JSON.parse(tab.to_json))
+    json_tab = described_class.new(JSON.parse(tab.to_json))
     expect(json_tab.homebrew_version).to eq(tab.homebrew_version)
     expect(json_tab.used_options.sort).to eq(tab.used_options.sort)
     expect(json_tab.unused_options.sort).to eq(tab.unused_options.sort)
@@ -524,7 +566,7 @@ RSpec.describe Tab do
   end
 
   specify "#to_bottle_hash" do
-    json_tab = klass.new(JSON.parse(tab.to_bottle_hash.to_json))
+    json_tab = described_class.new(JSON.parse(tab.to_bottle_hash.to_json))
     expect(json_tab.homebrew_version).to eq(tab.homebrew_version)
     expect(json_tab.changed_files).to eq(tab.changed_files)
     expect(json_tab.source_modified_time).to eq(tab.source_modified_time)
@@ -540,7 +582,7 @@ RSpec.describe Tab do
     let(:time_string) { Time.at(1_720_189_863).strftime("%Y-%m-%d at %H:%M:%S") }
 
     it "returns install information for the Tab" do
-      tab = klass.new(
+      tab = described_class.new(
         poured_from_bottle:       true,
         loaded_from_api:          true,
         loaded_from_internal_api: false,
@@ -553,59 +595,59 @@ RSpec.describe Tab do
     end
 
     it "includes 'Poured from bottle' if the formula was installed from a bottle" do
-      tab = klass.new(poured_from_bottle: true)
+      tab = described_class.new(poured_from_bottle: true)
       expect(tab.to_s).to include("Poured from bottle")
     end
 
     it "includes 'Built from source' if the formula was not installed from a bottle" do
-      tab = klass.new(poured_from_bottle: false)
+      tab = described_class.new(poured_from_bottle: false)
       expect(tab.to_s).to include("Built from source")
     end
 
     it "includes 'using the formulae.brew.sh API' if the formula was installed from the API" do
-      tab = klass.new(loaded_from_api: true)
+      tab = described_class.new(loaded_from_api: true)
       expect(tab.to_s).to include("using the formulae.brew.sh API")
     end
 
     it "includes 'using the internal formulae.brew.sh API' if the formula was installed from the internal API" do
-      tab = klass.new(loaded_from_api: true, loaded_from_internal_api: true)
+      tab = described_class.new(loaded_from_api: true, loaded_from_internal_api: true)
       expect(tab.to_s).to include("using the internal formulae.brew.sh API")
     end
 
     it "does not include 'using the formulae.brew.sh API' if the formula was not installed from the API" do
-      tab = klass.new(loaded_from_api: false)
+      tab = described_class.new(loaded_from_api: false)
       expect(tab.to_s).not_to include("using the formulae.brew.sh API")
     end
 
     it "doesn't include 'using the internal formulae.brew.sh API' if the formula wasn't installed via internal API" do
-      tab = klass.new(loaded_from_api: true, loaded_from_internal_api: false)
+      tab = described_class.new(loaded_from_api: true, loaded_from_internal_api: false)
       expect(tab.to_s).not_to include("using the internal formulae.brew.sh API")
     end
 
     it "includes the time value if specified" do
-      tab = klass.new(time: 1_720_189_863)
+      tab = described_class.new(time: 1_720_189_863)
       expect(tab.to_s).to include("on #{time_string}")
     end
 
     it "does not include the time value if not specified" do
-      tab = klass.new(time: nil)
+      tab = described_class.new(time: nil)
       expect(tab.to_s).not_to match(/on %d+-%d+-%d+ at %d+:%d+:%d+/)
     end
 
     it "includes options if specified" do
-      tab = klass.new(used_options: %w[--with-foo --without-bar])
+      tab = described_class.new(used_options: %w[--with-foo --without-bar])
       expect(tab.to_s).to include("with: --with-foo --without-bar")
     end
 
     it "not to include options if not specified" do
-      tab = klass.new(used_options: [])
+      tab = described_class.new(used_options: [])
       expect(tab.to_s).not_to include("with: ")
     end
   end
 
   specify "::remap_deprecated_options" do
     deprecated_options = [DeprecatedOption.new("with-foo", "with-foo-new")]
-    remapped_options = klass.remap_deprecated_options(deprecated_options, tab.used_options)
+    remapped_options = described_class.remap_deprecated_options(deprecated_options, tab.used_options)
     expect(remapped_options).to include(Option.new("without-bar"))
     expect(remapped_options).to include(Option.new("with-foo-new"))
   end

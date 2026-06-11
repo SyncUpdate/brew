@@ -1,4 +1,4 @@
-# typed: true
+# typed: strict
 # frozen_string_literal: true
 
 require "extend/ENV"
@@ -6,8 +6,6 @@ require "cmd/reinstall"
 require "cmd/shared_examples/args_parse"
 
 RSpec.describe Homebrew::Cmd::Reinstall do
-  let(:klass) { Homebrew::Cmd::Reinstall }
-
   it_behaves_like "parseable arguments"
 
   it "reports unavailable names via ofail and continues reinstalling" do
@@ -15,7 +13,7 @@ RSpec.describe Homebrew::Cmd::Reinstall do
     formula = instance_double(Formula, full_name: "testball", pinned?: false)
     allow(formula).to receive(:latest_formula).and_return(formula)
 
-    cmd = klass.new(["testball", "nonexistent"])
+    cmd = described_class.new(["testball", "nonexistent"])
     allow(cmd.args.named).to receive(:to_formulae_and_casks_and_unavailable)
       .with(method: :resolve)
       .and_return([formula, error])
@@ -32,7 +30,7 @@ RSpec.describe Homebrew::Cmd::Reinstall do
     cask = Cask::Cask.new("local-caffeine")
     allow(cask).to receive_messages(pinned?: true, full_name: "local-caffeine")
 
-    cmd = klass.new(["local-caffeine"])
+    cmd = described_class.new(["local-caffeine"])
     allow(cmd.args.named).to receive(:to_formulae_and_casks_and_unavailable)
       .with(method: :resolve)
       .and_return([cask])
@@ -45,8 +43,11 @@ RSpec.describe Homebrew::Cmd::Reinstall do
   end
 
   it "asks for casks before shared prefetch when reinstalling formulae and casks" do
-    cmd = klass.new(["--ask", "testball", "local-caffeine"])
-    formula = formula("testball") { url "https://brew.sh/testball-0.1.tar.gz" }
+    cmd = described_class.new(["testball", "local-caffeine"])
+    formula = formula("testball") do
+      T.bind(self, T.class_of(Formula))
+      url "https://brew.sh/testball-0.1.tar.gz"
+    end
     formula_installer = FormulaInstaller.new(formula)
     dependants = Homebrew::Upgrade::Dependents.new(upgradeable: [], pinned: [], skipped: [])
     cask = Cask::CaskLoader.load(cask_path("local-caffeine"))
@@ -103,7 +104,7 @@ RSpec.describe Homebrew::Cmd::Reinstall do
 
     FileUtils.rm_r(formula_bin)
 
-    expect { brew "reinstall", "--ask", formula_name }
+    expect { brew "reinstall", formula_name }
       .to output(/.*Would reinstall 1 formula:\s*#{formula_name}.*/).to_stdout
       .and output(/✔︎.*/m).to_stderr
       .and be_a_success

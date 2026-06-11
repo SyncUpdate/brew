@@ -1,12 +1,10 @@
-# typed: true
+# typed: strict
 # frozen_string_literal: true
 
 require "cmd/shared_examples/args_parse"
 require "dev-cmd/livecheck"
 
 RSpec.describe Homebrew::DevCmd::LivecheckCmd do
-  let(:klass) { Homebrew::DevCmd::LivecheckCmd }
-
   it_behaves_like "parseable arguments"
 
   it "reports the latest version of a Formula", :integration_test, :needs_network do
@@ -27,8 +25,8 @@ RSpec.describe Homebrew::DevCmd::LivecheckCmd do
     allow(Homebrew).to receive(:install_bundler_gems!)
 
     with_env("HOMEBREW_LIVECHECK_WATCHLIST" => ".this_should_not_exist") do
-      expect { klass.new([]).run }
-        .to raise_error(UsageError, /`brew livecheck` with no arguments needs a watchlist file/)
+      expect { described_class.new([]).run }
+        .to raise_error(UsageError, /No formulae or casks to check/)
     end
   end
 end

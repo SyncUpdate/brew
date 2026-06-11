@@ -5,7 +5,7 @@ require "utils/ast"
 
 RSpec.describe Utils::AST::FormulaAST do
   subject(:formula_ast) do
-    klass.new <<~RUBY
+    described_class.new <<~RUBY
       class Foo < Formula
         url "https://brew.sh/foo-1.0.tar.gz"
         license all_of: [
@@ -17,7 +17,51 @@ RSpec.describe Utils::AST::FormulaAST do
     RUBY
   end
 
-  let(:klass) { Utils::AST::FormulaAST }
+  describe "#resource" do
+    it "finds resource block in a formula" do
+      formula_ast = described_class.new <<~RUBY
+        class Foo < Formula
+          url "https://brew.sh/foo-1.0.tar.gz"
+
+          resource "foo" do
+            url "https://brew.sh/foo-1.0.tar.gz"
+          end
+        end
+      RUBY
+
+      expect(formula_ast.resource("foo").children[2].children[2].value).to eq("https://brew.sh/foo-1.0.tar.gz")
+    end
+
+    it "finds resource in `stable` block" do
+      formula_ast = described_class.new <<~RUBY
+        class Foo < Formula
+          stable do
+            url "https://brew.sh/foo-1.0.tar.gz"
+
+            resource "foo" do
+              url "https://brew.sh/foo-1.1.tar.gz"
+            end
+          end
+
+          resource "foo" do
+            url "https://brew.sh/foo-1.0.tar.gz"
+          end
+        end
+      RUBY
+
+      expect(formula_ast.resource("foo").children[2].children[2].value).to eq("https://brew.sh/foo-1.1.tar.gz")
+    end
+
+    it "raises an exception when resource block does not exist" do
+      formula_ast = described_class.new <<~RUBY
+        class Foo < Formula
+          url "https://brew.sh/foo-1.0.tar.gz"
+        end
+      RUBY
+
+      expect { formula_ast.resource("foo") }.to raise_error("Could not find resource 'foo' block!")
+    end
+  end
 
   describe "#replace_stanza" do
     it "replaces the specified stanza in a formula" do
@@ -67,7 +111,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
   describe "#replace_stable_stanza_hash_value" do
     subject(:formula_ast) do
-      klass.new <<~RUBY
+      described_class.new <<~RUBY
         class Foo < Formula
           url "https://brew.sh/foo.git",
               tag:      "v1.0",
@@ -85,30 +129,6 @@ RSpec.describe Utils::AST::FormulaAST do
           url "https://brew.sh/foo.git",
               tag:      "v2.0",
               revision: "def456"
-        end
-      RUBY
-    end
-  end
-
-  describe "#remove_stanzas" do
-    subject(:formula_ast) do
-      klass.new <<~RUBY
-        class Foo < Formula
-          url "https://brew.sh/foo-1.0.tar.gz"
-          mirror "https://example.com/foo-1.0.tar.gz"
-          mirror "https://mirror.example.com/foo-1.0.tar.gz"
-          sha256 "#{"e" * 64}"
-        end
-      RUBY
-    end
-
-    it "removes all matching stanzas" do
-      formula_ast.remove_stanzas(:mirror)
-
-      expect(formula_ast.process).to eq <<~RUBY
-        class Foo < Formula
-          url "https://brew.sh/foo-1.0.tar.gz"
-          sha256 "#{"e" * 64}"
         end
       RUBY
     end
@@ -133,7 +153,7 @@ RSpec.describe Utils::AST::FormulaAST do
     end
 
     it "adds stanzas after comments following a multi-line stanza" do
-      formula_ast = klass.new <<~RUBY
+      formula_ast = described_class.new <<~RUBY
         class Foo < Formula
           url "https://brew.sh/foo.git",
               tag:      "v1.0",
@@ -160,7 +180,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
   describe "#replace_resource_stanza_value" do
     subject(:formula_ast) do
-      klass.new <<~RUBY
+      described_class.new <<~RUBY
         class Foo < Formula
           url "https://brew.sh/foo-1.0.tar.gz"
 
@@ -196,7 +216,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
   describe "#replace_resource_stanzas" do
     it "inserts resource stanzas before the install method" do
-      formula_ast = klass.new <<~RUBY
+      formula_ast = described_class.new <<~RUBY
         class Foo < Formula
           url "https://brew.sh/foo-1.0.tar.gz"
 
@@ -232,7 +252,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
     context "when resource stanzas already exist" do
       subject(:formula_ast) do
-        klass.new <<~RUBY
+        described_class.new <<~RUBY
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz"
 
@@ -277,7 +297,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
     context "when resource stanzas are split into multiple groups" do
       subject(:formula_ast) do
-        klass.new <<~RUBY
+        described_class.new <<~RUBY
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz"
 
@@ -305,7 +325,7 @@ RSpec.describe Utils::AST::FormulaAST do
   describe "#remove_stanza" do
     context "when stanza to be removed is a single line followed by a blank line" do
       subject(:formula_ast) do
-        klass.new <<~RUBY.chomp
+        described_class.new <<~RUBY.chomp
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz"
             license :cannot_represent
@@ -337,7 +357,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
     context "when stanza to be removed is a multiline block followed by a blank line" do
       subject(:formula_ast) do
-        klass.new <<~RUBY.chomp
+        described_class.new <<~RUBY.chomp
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz"
             license all_of: [
@@ -373,7 +393,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
     context "when stanza to be removed has a comment on the same line" do
       subject(:formula_ast) do
-        klass.new <<~RUBY.chomp
+        described_class.new <<~RUBY.chomp
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz"
             license :cannot_represent # comment
@@ -406,7 +426,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
     context "when stanza to be removed has a comment on the next line" do
       subject(:formula_ast) do
-        klass.new <<~RUBY.chomp
+        described_class.new <<~RUBY.chomp
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz"
             license :cannot_represent
@@ -440,7 +460,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
     context "when stanza to be removed has newlines before and after" do
       subject(:formula_ast) do
-        klass.new <<~RUBY.chomp
+        described_class.new <<~RUBY.chomp
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz"
 
@@ -477,7 +497,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
     context "when stanza to be removed is at the end of the formula" do
       subject(:formula_ast) do
-        klass.new <<~RUBY.chomp
+        described_class.new <<~RUBY.chomp
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz"
             license :cannot_represent
@@ -516,7 +536,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
     context "when `license` is a string" do
       subject(:formula_ast) do
-        klass.new <<~RUBY.chomp
+        described_class.new <<~RUBY.chomp
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz"
             license "MIT"
@@ -545,7 +565,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
     context "when `license` is a symbol" do
       subject(:formula_ast) do
-        klass.new <<~RUBY.chomp
+        described_class.new <<~RUBY.chomp
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz"
             license :cannot_represent
@@ -574,7 +594,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
     context "when `license` is multiline" do
       subject(:formula_ast) do
-        klass.new <<~RUBY.chomp
+        described_class.new <<~RUBY.chomp
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz"
             license all_of: [
@@ -611,7 +631,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
     context "when `head` is a string" do
       subject(:formula_ast) do
-        klass.new <<~RUBY.chomp
+        described_class.new <<~RUBY.chomp
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz"
             head "https://brew.sh/foo.git", branch: "develop"
@@ -640,7 +660,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
     context "when `head` is a block" do
       subject(:formula_ast) do
-        klass.new <<~RUBY.chomp
+        described_class.new <<~RUBY.chomp
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz"
 
@@ -677,7 +697,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
     context "when there is a comment on the same line" do
       subject(:formula_ast) do
-        klass.new <<~RUBY.chomp
+        described_class.new <<~RUBY.chomp
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz" # comment
           end
@@ -704,7 +724,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
     context "when the next line is a comment" do
       subject(:formula_ast) do
-        klass.new <<~RUBY.chomp
+        described_class.new <<~RUBY.chomp
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz"
             # comment
@@ -733,7 +753,7 @@ RSpec.describe Utils::AST::FormulaAST do
 
     context "when the next line is blank and the one after it is a comment" do
       subject(:formula_ast) do
-        klass.new <<~RUBY.chomp
+        described_class.new <<~RUBY.chomp
           class Foo < Formula
             url "https://brew.sh/foo-1.0.tar.gz"
 

@@ -16,6 +16,7 @@ require "digest"
 require "json"
 require "formula_auditor"
 require "tap_auditor"
+require "utils/git"
 
 module Homebrew
   module DevCmd
@@ -39,18 +40,17 @@ module Homebrew
                description: "Run additional, slower style checks that require a network connection."
         switch "--installed",
                description: "Only check formulae and casks that are currently installed."
-        # odeprecated: remove in a future release.
         switch "--eval-all",
                description: "Evaluate all available formulae and casks, whether installed or not, to audit them.",
                env:         :eval_all,
-               hidden:      true
+               odeprecated: true
         switch "--new",
                description: "Run various additional style checks to determine if a new formula or cask is eligible " \
                             "for Homebrew. This should be used when creating new formulae or casks and implies " \
                             "`--strict` and `--online`."
-        # odeprecated: remove in a future release.
         switch "--[no-]signing",
-               description: "Audit for app signatures, which are required by macOS on ARM."
+               description: "Audit for app signatures, which are required by macOS on ARM.",
+               odeprecated: true
         switch "--changed",
                description: "Check files that were changed from the `main` branch."
         flag   "--tap=",
@@ -129,8 +129,7 @@ module Homebrew
             audit_formulae = []
             audit_casks = []
 
-            changed_files = Utils.popen_read("git", "diff", "--name-only", "--no-relative", "main")
-            changed_files.split("\n").each do |file|
+            Utils::Git.changed_files(tap.path).each do |file|
               next unless file.end_with?(".rb")
 
               absolute_file = File.expand_path(file, tap.path)

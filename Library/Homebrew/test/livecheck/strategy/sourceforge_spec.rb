@@ -4,9 +4,8 @@
 require "livecheck/strategy"
 
 RSpec.describe Homebrew::Livecheck::Strategy::Sourceforge do
-  subject(:sourceforge) { klass }
+  subject(:sourceforge) { described_class }
 
-  let(:klass) { Homebrew::Livecheck::Strategy::Sourceforge }
   let(:sourceforge_urls) do
     {
       typical:       "https://downloads.sourceforge.net/project/abc/def-1.2.3.tar.gz",
@@ -27,7 +26,7 @@ RSpec.describe Homebrew::Livecheck::Strategy::Sourceforge do
     }
   end
   let(:content) do
-    <<~EOS
+    <<~XML
       <?xml version="1.0" encoding="utf-8"?>
       <rss xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:files="https://sourceforge.net/api/files.rdf#" xmlns:media="http://video.search.yahoo.com/mrss/" xmlns:doap="http://usefulinc.com/ns/doap#" xmlns:sf="https://sourceforge.net/api/sfelements.rdf#" version="2.0">
         <channel xmlns:files="https://sourceforge.net/api/files.rdf#" xmlns:media="http://video.search.yahoo.com/mrss/" xmlns:doap="http://usefulinc.com/ns/doap#" xmlns:sf="https://sourceforge.net/api/sfelements.rdf#">
@@ -49,7 +48,7 @@ RSpec.describe Homebrew::Livecheck::Strategy::Sourceforge do
           </item>
         </channel>
       </rss>
-    EOS
+    XML
   end
   let(:matches) { ["1.2.3"] }
 

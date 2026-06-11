@@ -89,6 +89,12 @@ module Homebrew::EnvConfig
     def bundle_cleanup_no_winget?; end
 
     sig { returns(T::Boolean) }
+    def bundle_describe?; end
+
+    sig { returns(T::Boolean) }
+    def bundle_dump_describe?; end
+
+    sig { returns(T::Boolean) }
     def bundle_dump_no_brew?; end
 
     sig { returns(T::Boolean) }
@@ -137,6 +143,9 @@ module Homebrew::EnvConfig
     def bundle_no_jobs?; end
 
     sig { returns(T::Boolean) }
+    def bundle_no_secrets?; end
+
+    sig { returns(T::Boolean) }
     def bundle_secrets?; end
 
     sig { returns(T.nilable(::String)) }
@@ -144,6 +153,12 @@ module Homebrew::EnvConfig
 
     sig { returns(String) }
     def cache; end
+
+    sig { returns(T.nilable(::String)) }
+    def cask_opts_binaries; end
+
+    sig { returns(T.nilable(::String)) }
+    def cask_opts_require_sha; end
 
     sig { returns(Integer) }
     def cleanup_max_age_days; end
@@ -198,6 +213,9 @@ module Homebrew::EnvConfig
 
     sig { returns(T::Boolean) }
     def env_sync_strict?; end
+
+    sig { returns(T::Boolean) }
+    def eval_all?; end
 
     sig { returns(Integer) }
     def fail_log_lines; end

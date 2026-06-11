@@ -2,20 +2,18 @@
 # frozen_string_literal: true
 
 RSpec.describe Cask::Artifact::Artifact, :cask do
-  let(:klass) { Cask::Artifact::Artifact }
-
   let(:cask) { Cask::CaskLoader.load(cask_path("with-generic-artifact")) }
 
   let(:install_phase) do
     lambda do
-      cask.artifacts.grep(klass).each do |artifact|
+      cask.artifacts.grep(described_class).each do |artifact|
         artifact.install_phase(command: NeverSudoSystemCommand, force: false)
       end
     end
   end
 
   let(:source_path) { cask.staged_path.join("Caffeine.app") }
-  let(:target_path) { cask.config.appdir.join("Caffeine.app") }
+  let(:target_path) { Pathname(cask.config.appdir).join("Caffeine.app") }
 
   before do
     InstallHelper.install_without_artifacts(cask)

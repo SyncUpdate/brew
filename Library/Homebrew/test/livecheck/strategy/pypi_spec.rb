@@ -4,9 +4,8 @@
 require "livecheck/strategy"
 
 RSpec.describe Homebrew::Livecheck::Strategy::Pypi do
-  subject(:pypi) { klass }
+  subject(:pypi) { described_class }
 
-  let(:klass) { Homebrew::Livecheck::Strategy::Pypi }
   let(:pypi_url) { "https://files.pythonhosted.org/packages/ab/cd/efg/example-package-1.2.3.tar.gz" }
   let(:non_pypi_url) { "https://brew.sh/test" }
   let(:regex) { /^v?(\d+(?:\.\d+)+)/i }
@@ -28,18 +27,6 @@ RSpec.describe Homebrew::Livecheck::Strategy::Pypi do
     JSON
   end
   let(:matches) { ["1.2.3-456"] }
-  let(:find_versions_return_hash) do
-    {
-      matches: {
-        "1.2.3-456" => Version.new("1.2.3-456"),
-      },
-      regex:,
-      url:     generated[:url],
-    }
-  end
-  let(:find_versions_cached_return_hash) do
-    find_versions_return_hash.merge({ cached: true })
-  end
 
   describe "::match?" do
     it "returns true for a PyPI URL" do

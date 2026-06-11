@@ -2,12 +2,10 @@
 # frozen_string_literal: true
 
 RSpec.describe Cask::Download, :cask do
-  let(:klass) { Cask::Download }
-
   describe "#download_name" do
-    subject(:download_name) { klass.new(cask).send(:download_name) }
+    subject(:download_name) { described_class.new(cask).send(:download_name) }
 
-    let(:download) { klass.new(cask) }
+    let(:download) { described_class.new(cask) }
     let(:token) { "example-cask" }
     let(:full_token) { token }
     let(:url) { instance_double(URL, to_s: url_to_s, specs: {}) }
@@ -55,15 +53,36 @@ RSpec.describe Cask::Download, :cask do
   describe "#fetch" do
     it "fails before downloading if sha256 :no_check is used with --require-sha" do
       no_checksum = Cask::CaskLoader.load(cask_path("no-checksum"))
-      download = klass.new(no_checksum, require_sha: true)
+      download = described_class.new(no_checksum, require_sha: true)
 
       expect(download).not_to receive(:downloader)
       expect { download.fetch }.to raise_error(/--require-sha/)
     end
   end
 
+  describe "#downloaded_and_valid?" do
+    it "quarantines valid cached downloads" do
+      cached_download = HOMEBREW_CACHE/"downloads/cask.zip"
+      cached_download.dirname.mkpath
+      cached_download.write("already downloaded")
+      checksum = Checksum.new(cached_download.sha256)
+      cask = instance_double(Cask::Cask, sha256: checksum)
+      download = described_class.new(cask, quarantine: true)
+
+      allow(download).to receive(:cached_download).and_return(cached_download)
+      allow(download).to receive(:verify_download_integrity) do |filename|
+        filename.verify_checksum(checksum)
+      end
+      allow(Cask::Quarantine).to receive(:available?).and_return(true)
+
+      expect(Cask::Quarantine).to receive(:cask!).with(cask:, download_path: cached_download)
+
+      expect(download.downloaded_and_valid?).to be(true)
+    end
+  end
+
   describe "#verify_download_integrity" do
-    subject(:verification) { klass.new(cask).verify_download_integrity(downloaded_path) }
+    subject(:verification) { described_class.new(cask).verify_download_integrity(downloaded_path) }
 
     let(:tap) { nil }
     let(:cask) { instance_double(Cask::Cask, token: "cask", sha256: expected_sha256, tap:) }

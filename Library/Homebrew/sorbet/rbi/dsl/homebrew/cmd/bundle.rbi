@@ -126,6 +126,9 @@ class Homebrew::Cmd::Bundle::Args < Homebrew::CLI::Args
   def no_cleanup_winget?; end
 
   sig { returns(T::Boolean) }
+  def no_describe?; end
+
+  sig { returns(T::Boolean) }
   def no_dump_brew?; end
 
   sig { returns(T::Boolean) }

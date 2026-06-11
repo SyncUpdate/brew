@@ -4,7 +4,6 @@
 require "cask/audit"
 
 RSpec.describe Cask::Audit, :cask do
-  let(:klass) { Cask::Audit }
   let(:cask) { instance_double(Cask::Cask) }
   let(:new_cask) { nil }
   let(:online) { nil }
@@ -13,12 +12,12 @@ RSpec.describe Cask::Audit, :cask do
   let(:strict) { nil }
   let(:signing) { nil }
   let(:audit) do
-    klass.new(cask, online:,
-                    strict:,
-                    new_cask:,
-                    signing:,
-                    only:,
-                    except:)
+    described_class.new(cask, online:,
+                              strict:,
+                              new_cask:,
+                              signing:,
+                              only:,
+                              except:)
   end
 
   def include_msg?(problems, msg)
@@ -454,7 +453,6 @@ RSpec.describe Cask::Audit, :cask do
       let(:only) { ["signing"] }
       let(:tap) { CoreCaskTap.instance }
       let(:download_double) { instance_double(Cask::Download) }
-      let(:unpack_double) { instance_double(UnpackStrategy::Zip) }
 
       before do
         allow(audit).to receive_messages(download: download_double, signing?: true)
@@ -1068,7 +1066,11 @@ RSpec.describe Cask::Audit, :cask do
         context "when it isn't in the official Homebrew tap" do
           let(:cask_token) { "pharo" }
 
-          it { is_expected.to pass }
+          it do
+            allow(Homebrew::Trust).to receive(:trusted?).and_return(true)
+
+            expect(run).to pass
+          end
         end
       end
     end
@@ -1129,6 +1131,10 @@ RSpec.describe Cask::Audit, :cask do
       end
 
       it { is_expected.to pass }
+
+      it "normalizes 10.16.0 minimum macOS to Big Sur" do
+        expect(audit.send(:normalize_min_os, "10.16.0")).to eq(MacOSVersion.from_symbol(:big_sur))
+      end
     end
 
     describe "preferred download URL formats" do

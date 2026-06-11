@@ -4,10 +4,9 @@
 require "dependencies_helpers"
 
 RSpec.describe DependenciesHelpers do
-  let(:klass) { DependenciesHelpers }
-
   specify "#dependents" do
     foo = formula "foo" do
+      T.bind(self, T.class_of(Formula))
       url "foo"
       version "1.0"
     end
@@ -18,6 +17,7 @@ RSpec.describe DependenciesHelpers do
     RUBY
 
     bar = formula "bar" do
+      T.bind(self, T.class_of(Formula))
       url "bar-url"
       version "1.0"
     end
@@ -38,7 +38,7 @@ RSpec.describe DependenciesHelpers do
       :any_version_installed?,
     ]
 
-    dependents = Class.new.extend(klass).dependents([foo, foo_cask, bar, bar_cask])
+    dependents = Class.new.extend(described_class).dependents([foo, foo_cask, bar, bar_cask])
 
     dependents.each do |dependent|
       methods.each do |method|

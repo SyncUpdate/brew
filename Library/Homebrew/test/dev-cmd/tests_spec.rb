@@ -5,12 +5,10 @@ require "cmd/shared_examples/args_parse"
 require "dev-cmd/tests"
 
 RSpec.describe Homebrew::DevCmd::Tests do
-  let(:klass) { Homebrew::DevCmd::Tests }
-
   it_behaves_like "parseable arguments"
 
   describe "#check_test_environment!", :needs_linux do
-    subject(:tests) { klass.new([]) }
+    subject(:tests) { described_class.new([]) }
 
     before do
       require "extend/os/linux/dev-cmd/tests"
@@ -24,7 +22,7 @@ RSpec.describe Homebrew::DevCmd::Tests do
       expect(Sandbox).not_to receive(:ensure_sandbox_installed!)
       expect(Sandbox).not_to receive(:configure!)
 
-      with_env(HOMEBREW_DEVELOPER: nil, HOMEBREW_SANDBOX_LINUX: nil) do
+      with_env(HOMEBREW_NO_SANDBOX_LINUX: "1") do
         expect { tests.send(:check_test_environment!) }.not_to raise_error
       end
     end
@@ -34,19 +32,15 @@ RSpec.describe Homebrew::DevCmd::Tests do
                                          failure_reason: "Bubblewrap is not working.")
       expect(Sandbox).to receive(:ensure_sandbox_installed!).with(install_from_tests: true)
 
-      with_env(HOMEBREW_SANDBOX_LINUX: "1") do
-        expect { tests.send(:check_test_environment!) }
-          .to raise_error(UsageError, "Invalid usage: Bubblewrap is not working.")
-      end
+      expect { tests.send(:check_test_environment!) }
+        .to raise_error(UsageError, "Invalid usage: Bubblewrap is not working.")
     end
 
     it "installs and probes sandbox availability when Linux sandboxing is enabled" do
       allow(Sandbox).to receive(:available?).and_return(true)
       expect(Sandbox).to receive(:ensure_sandbox_installed!).with(install_from_tests: true)
 
-      with_env(HOMEBREW_SANDBOX_LINUX: "1") do
-        expect { tests.send(:check_test_environment!) }.not_to raise_error
-      end
+      expect { tests.send(:check_test_environment!) }.not_to raise_error
     end
 
     it "configures the sandbox on GitHub Actions when Linux sandboxing is enabled" do
@@ -55,23 +49,20 @@ RSpec.describe Homebrew::DevCmd::Tests do
       expect(Sandbox).to receive(:configure!)
       expect(Sandbox).not_to receive(:ensure_sandbox_installed!)
 
-      with_env(HOMEBREW_SANDBOX_LINUX: "1") do
-        expect { tests.send(:check_test_environment!) }.not_to raise_error
-      end
+      expect { tests.send(:check_test_environment!) }.not_to raise_error
     end
   end
 
   describe "#changed_test_files" do
     subject(:changed_test_files) { tests.send(:changed_test_files) }
 
-    let(:tests) { klass.new([]) }
+    let(:tests) { described_class.new([]) }
 
     context "when a spec file changed" do
       let(:changed_file) { "Library/Homebrew/test/cmd/help_spec.rb\n" }
 
       before do
-        allow(Utils).to receive(:popen_read).with("git", "diff", "--name-only", "main")
-                                            .and_return(changed_file)
+        allow(Utils::Git).to receive(:changed_files).and_return(changed_file.split("\n"))
       end
 
       it "includes the changed spec file" do
@@ -83,8 +74,7 @@ RSpec.describe Homebrew::DevCmd::Tests do
       let(:changed_file) { "Library/Homebrew/cmd/help.rb\n" }
 
       before do
-        allow(Utils).to receive(:popen_read).with("git", "diff", "--name-only", "main")
-                                            .and_return(changed_file)
+        allow(Utils::Git).to receive(:changed_files).and_return(changed_file.split("\n"))
       end
 
       it "maps the file to its corresponding spec" do
@@ -98,8 +88,7 @@ RSpec.describe Homebrew::DevCmd::Tests do
       end
 
       before do
-        allow(Utils).to receive(:popen_read).with("git", "diff", "--name-only", "main")
-                                            .and_return(changed_file)
+        allow(Utils::Git).to receive(:changed_files).and_return(changed_file.split("\n"))
       end
 
       it "includes integration tests and excludes unrelated tests", :aggregate_failures do
@@ -114,8 +103,7 @@ RSpec.describe Homebrew::DevCmd::Tests do
       end
 
       before do
-        allow(Utils).to receive(:popen_read).with("git", "diff", "--name-only", "main")
-                                            .and_return(changed_file)
+        allow(Utils::Git).to receive(:changed_files).and_return(changed_file.split("\n"))
       end
 
       it "includes cask tests and excludes non-cask tests", :aggregate_failures do

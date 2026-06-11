@@ -336,6 +336,8 @@ auto-update() {
   [[ -z "${HOMEBREW_AUTO_UPDATING}" ]] || return
   [[ -z "${HOMEBREW_UPDATE_AUTO}" ]] || return
   [[ -z "${HOMEBREW_AUTO_UPDATE_CHECKED}" ]] || return
+  # Worktrees may share Git metadata with another checkout, so skip background updates.
+  [[ ! -f "${HOMEBREW_REPOSITORY}/.git" ]] || return
 
   # If we've checked for updates, we don't need to check again.
   export HOMEBREW_AUTO_UPDATE_CHECKED="1"
@@ -932,6 +934,15 @@ case "${HOMEBREW_COMMAND}" in
   tc) HOMEBREW_COMMAND="typecheck" ;;
   x) HOMEBREW_COMMAND="exec" ;;
 esac
+# `update.sh` assumes normal repositories, so fail before it mutates a worktree.
+if [[ "${HOMEBREW_COMMAND}" == "update" && -z "${HOMEBREW_HELP}" && -f "${HOMEBREW_REPOSITORY}/.git" ]]
+then
+  for arg in "$@"
+  do
+    [[ "${arg}" == "--auto-update" ]] && exit 0
+  done
+  odie "Cannot \`brew update\` in a Homebrew/brew Git worktree."
+fi
 if [[ ("${HOMEBREW_COMMAND}" == "audit" || "${HOMEBREW_COMMAND}" == "lgtm" ||
       "${HOMEBREW_COMMAND}" == "style" || "${HOMEBREW_COMMAND}" == "tests") &&
       "${HOMEBREW_CACHE}" != "${HOMEBREW_REPOSITORY}/tmp/cache" ]]
@@ -1056,19 +1067,13 @@ fi
 # Enable features for developers and CI before they become the default for everyone.
 if [[ -n "${HOMEBREW_DEVELOPER}" ]]
 then
-  export HOMEBREW_ASK="1"
-  export HOMEBREW_BUNDLE_DESCRIBE="1"
-  export HOMEBREW_BUNDLE_JOBS="auto"
-  export HOMEBREW_BUNDLE_NO_SECRETS="1"
-  export HOMEBREW_UPGRADE_AUTO_UPDATES_CASKS="1"
-  export HOMEBREW_SANDBOX_LINUX="1"
+  :
 fi
 
 # Enable features for users who have run a devcmd before they become the default for everyone.
 if [[ -n "${HOMEBREW_DEVELOPER}" || -n "${HOMEBREW_DEV_CMD_RUN}" ]]
 then
-  # odeprecated: make default next release
-  export HOMEBREW_USE_INTERNAL_API="1"
+  :
 fi
 
 # Only enable runtime typechecking for commands where correctness matters more
@@ -1077,13 +1082,6 @@ if [[ "${HOMEBREW_COMMAND}" == "test" || "${HOMEBREW_COMMAND}" == "test-bot" ||
       "${HOMEBREW_COMMAND}" == "tests" ]]
 then
   export HOMEBREW_SORBET_RUNTIME="1"
-fi
-
-# Provide a (temporary, undocumented) way to disable Sorbet globally if needed
-# to override any earlier environment setting.
-if [[ -n "${HOMEBREW_NO_SORBET_RUNTIME}" ]]
-then
-  unset HOMEBREW_SORBET_RUNTIME
 fi
 
 if [[ -z "${HOMEBREW_FORCE_RUBY_COMMAND:-}" && -f "${HOMEBREW_LIBRARY}/Homebrew/cmd/${HOMEBREW_COMMAND}.sh" ]]

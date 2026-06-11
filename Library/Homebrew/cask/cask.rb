@@ -132,6 +132,13 @@ module Cask
     sig { returns(T::Boolean) }
     def loaded_from_internal_api? = @loaded_from_internal_api
 
+    sig { returns(T.any(String, Pathname)) }
+    def reloadable_ref
+      return full_name if loaded_from_api?
+
+      sourcefile_path || raise("unexpected nil cask sourcefile_path")
+    end
+
     sig { returns(T.nilable(T::Hash[String, T.untyped])) }
     attr_reader :api_source
 
@@ -221,6 +228,9 @@ module Cask
     def installed?
       installed_caskfile&.exist? || false
     end
+
+    sig { returns(T::Boolean) }
+    def any_version_installed? = installed?
 
     sig { returns(T::Boolean) }
     def font?
@@ -606,7 +616,7 @@ module Cask
       if dsl!.on_system_blocks_exist?
         begin
           OnSystem::VALID_OS_ARCH_TAGS.each do |bottle_tag|
-            next if bottle_tag.linux? && dsl!.os.nil?
+            next if bottle_tag.linux? && dsl!.os.nil? && !dsl!.sha256_set_for_linux?
 
             macos_requirements = [depends_on.macos, depends_on.maximum_macos].compact
             next if bottle_tag.macos? &&

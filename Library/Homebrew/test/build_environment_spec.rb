@@ -1,10 +1,10 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require "build_environment"
 
 RSpec.describe BuildEnvironment do
-  let(:env) { BuildEnvironment.new }
+  let(:env) { described_class.new }
 
   describe "#<<" do
     it "returns itself" do
@@ -31,7 +31,7 @@ RSpec.describe BuildEnvironment do
 
   describe BuildEnvironment::DSL do
     let(:build_environment_dsl) do
-      klass = BuildEnvironment::DSL
+      klass = described_class
       Class.new do
         extend(klass)
       end
@@ -40,6 +40,7 @@ RSpec.describe BuildEnvironment do
     context "with a single argument" do
       subject(:build_env) do
         Class.new(build_environment_dsl) do
+          T.bind(self, BuildEnvironment::DSL)
           env :std
         end
       end

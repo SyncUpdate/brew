@@ -4,9 +4,8 @@
 require "livecheck/strategy"
 
 RSpec.describe Homebrew::Livecheck::Strategy::Hackage do
-  subject(:hackage) { klass }
+  subject(:hackage) { described_class }
 
-  let(:klass) { Homebrew::Livecheck::Strategy::Hackage }
   let(:hackage_urls) do
     {
       package:   "https://hackage.haskell.org/package/abc-1.2.3/abc-1.2.3.tar.gz",
@@ -21,7 +20,7 @@ RSpec.describe Homebrew::Livecheck::Strategy::Hackage do
     }
   end
   let(:content) do
-    <<~EOS
+    <<~HTML
       <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
       <html xmlns="http://www.w3.org/1999/xhtml">
       <head>
@@ -47,7 +46,7 @@ RSpec.describe Homebrew::Livecheck::Strategy::Hackage do
         </div>
       </body>
       </html>
-    EOS
+    HTML
   end
   let(:matches) { ["1.2.3"] }
 

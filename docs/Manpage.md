@@ -112,27 +112,6 @@ Show an alias's command. If no alias is given, print the whole list.
 : Edit aliases in a text editor. Either one or all aliases may be opened at
   once. If the given alias doesn't exist it'll be pre-populated with a template.
 
-### `analytics` \[*`subcommand`*\]
-
-Control Homebrew's anonymous aggregate user behaviour analytics. Read more at
-<https://docs.brew.sh/Analytics>.
-
-`brew analytics` \[`state`\]
-
-: Display the current state of Homebrew's analytics.
-
-`brew analytics regenerate-uuid`
-
-: Delete Homebrew's legacy analytics UUID.
-
-`brew analytics on`
-
-: Turn Homebrew's analytics on.
-
-`brew analytics off`
-
-: Turn Homebrew's analytics off.
-
 ### `as-console-user` *`command`* \[*`args`* ...\]
 
 Run a Homebrew command as the active macOS console user.
@@ -191,7 +170,6 @@ Note: Flatpak support is only available on Linux.
 `--no-secrets`
 
 : Attempt to remove secrets from the environment before starting the shell.
-  Enabled by default if `$HOMEBREW_BUNDLE_NO_SECRETS` is set.
 
 `brew bundle remove` *`name`* \[...\]
 
@@ -361,11 +339,6 @@ to one or more of the following environment variables:
 
 : Run with `--force`/`--overwrite`.
 
-`--cleanup`
-
-: Ask to perform cleanup after installing dependencies. Requires `--force`,
-  `--force-cleanup` or `$HOMEBREW_ASK`.
-
 `--force-cleanup`
 
 : Perform cleanup after installing dependencies without asking. Enabled by
@@ -405,7 +378,6 @@ flags which will help with finding keg-only dependencies like `openssl`,
 `--no-secrets`
 
 : Attempt to remove secrets from the environment before executing the command.
-  Enabled by default if `$HOMEBREW_BUNDLE_NO_SECRETS` is set.
 
 `brew bundle env` \[`--check`\] \[`--no-secrets`\]
 
@@ -423,8 +395,7 @@ flags which will help with finding keg-only dependencies like `openssl`,
 
 `--no-secrets`
 
-: Attempt to remove secrets from the environment before printing it. Enabled by
-  default if `$HOMEBREW_BUNDLE_NO_SECRETS` is set.
+: Attempt to remove secrets from the environment before printing it.
 
 `brew bundle edit`
 
@@ -617,10 +588,10 @@ flags which will help with finding keg-only dependencies like `openssl`,
 : `dump` without npm packages. Enabled by default if
   `$HOMEBREW_BUNDLE_DUMP_NO_NPM` is set.
 
-`--describe`
+`--no-describe`
 
-: Add a description comment above each line, unless the dependency does not have
-  a description. Enabled by default if `$HOMEBREW_BUNDLE_DESCRIBE` is set.
+: Do not add description comments above each line. Description comments are the
+  default. Enabled by default if `$HOMEBREW_BUNDLE_NO_DESCRIBE` is set.
 
 `--no-restart`
 
@@ -891,10 +862,10 @@ useful for scripting. Use `--verbose` to list unmet dependencies.
 
 : Add entries for npm packages.
 
-`--describe`
+`--no-describe`
 
-: Add a description comment above each line, unless the dependency does not have
-  a description. Enabled by default if `$HOMEBREW_BUNDLE_DESCRIBE` is set.
+: Do not add description comments above each line. Description comments are the
+  default. Enabled by default if `$HOMEBREW_BUNDLE_NO_DESCRIBE` is set.
 
 ### `casks`
 
@@ -1244,14 +1215,10 @@ binaries for *`cask`*s. For files, also print SHA-256 checksums.
 
 List all locally installable formulae including short names.
 
-### `gist-logs` \[*`options`*\] *`formula`*
+### `gist-logs` \[`--new-issue`\] \[`--private`\] *`formula`*
 
 Upload logs for a failed build of *`formula`* to a new Gist. Presents an error
 message if no logs are found.
-
-`--with-hostname`
-
-: Include the hostname in the Gist.
 
 `-n`, `--new-issue`
 
@@ -1307,11 +1274,6 @@ Display brief statistics for your Homebrew installation. If a *`formula`* or
 
 : Open the GitHub source page for *`formula`* and *`cask`* in a browser. To view
   the history locally: `brew log -p` *`formula`* or *`cask`*
-
-`--fetch-manifest`
-
-: Fetch GitHub Packages manifest for extra information when *`formula`* is not
-  installed.
 
 `--json`
 
@@ -1385,13 +1347,10 @@ upgrade *`formula`* if it is already installed but outdated.
 
 : Show what would be installed, but do not actually install anything.
 
-`--ask`
+`-y`, `--no-ask`
 
-: Ask for confirmation before downloading and installing. Print the same plan as
-  `--dry-run` before prompting. Only prompts if the plan includes dependencies
-  or dependants; if the requested formulae or casks are the only things to
-  install, it only prints the plan. The confirmation prompt is skipped without a
-  TTY. Enabled by default if `$HOMEBREW_ASK` is set.
+: Do not ask for confirmation before downloading and installing. Ask mode is the
+  default. Enabled by default if `$HOMEBREW_NO_ASK` is set.
 
 `--formula`
 
@@ -1592,10 +1551,6 @@ paths within its current keg. If *`cask`* is provided, list its artifacts.
 
 : List the formulae installed on request.
 
-`--installed-as-dependency`
-
-: List the formulae installed as dependencies.
-
 `--poured-from-bottle`
 
 : List the formulae installed from a bottle.
@@ -1707,7 +1662,7 @@ Create symlinks for Homebrew's installed NodeJS versions in
 Note that older version symlinks will also be created so e.g. NodeJS 19.1.0 will
 also be symlinked to 19.0.0.
 
-### `options` \[*`options`*\] \[*`formula`* ...\]
+### `options` \[`--compact`\] \[`--installed`\] \[*`formula`* ...\]
 
 Show install options specific to *`formula`*.
 
@@ -1718,10 +1673,6 @@ Show install options specific to *`formula`*.
 `--installed`
 
 : Show options for formulae that are currently installed.
-
-`--command`
-
-: Show options for the specified *`command`*.
 
 ### `outdated` \[*`options`*\] \[*`formula`*\|*`cask`* ...\]
 
@@ -1873,13 +1824,10 @@ for the reinstalled formulae or, every 30 days, for all formulae.
 
 : Print the verification and post-install steps.
 
-`--ask`
+`-y`, `--no-ask`
 
-: Ask for confirmation before downloading and reinstalling. Print what would be
-  reinstalled before prompting. Only prompts if the plan includes dependencies
-  or dependants; if the requested formulae or casks are the only things to
-  reinstall, it only prints the plan. The confirmation prompt is skipped without
-  a TTY. Enabled by default if `$HOMEBREW_ASK` is set.
+: Do not ask for confirmation before downloading and reinstalling. Ask mode is
+  the default. Enabled by default if `$HOMEBREW_NO_ASK` is set.
 
 `--formula`
 
@@ -2238,6 +2186,11 @@ when `$HOMEBREW_REQUIRE_TAP_TRUST` is set. Trusted entries are stored in
 
 : Trust the named external command.
 
+`--json`
+
+: Print trusted entries as JSON. A *`version`* number is required. The only
+  accepted value for *`version`* is `v1`.
+
 ### `unalias` *`alias`* \[...\]
 
 Remove aliases.
@@ -2328,10 +2281,6 @@ or `~/.homebrew/trust.json` otherwise.
 Fetch the newest version of Homebrew and all formulae from GitHub using `git`(1)
 and perform any necessary migrations.
 
-`--merge`
-
-: Use `git merge` to apply updates (rather than `git rebase`).
-
 `--auto-update`
 
 : Run on auto-updates (e.g. before `brew install`). Skips some slower steps.
@@ -2404,15 +2353,10 @@ for the upgraded formulae or, every 30 days, for all formulae.
 : Only upgrade a named formula or cask with an installed version below the given
   minimum version.
 
-`--ask`
+`-y`, `--no-ask`
 
-: Ask for confirmation before downloading and upgrading. Print the same plan as
-  `--dry-run`, including available download sizes. When named arguments are
-  provided, only prompts if the plan includes packages other than those
-  arguments; if the requested formulae or casks are the only things to upgrade,
-  it only prints the plan. With no named arguments, prompts if anything would be
-  upgraded. The confirmation prompt is skipped without a TTY. Enabled by default
-  if `$HOMEBREW_ASK` is set.
+: Do not ask for confirmation before downloading and upgrading. Ask mode is the
+  default. Enabled by default if `$HOMEBREW_NO_ASK` is set.
 
 `--formula`
 
@@ -2701,10 +2645,6 @@ checks. Will exit with a non-zero status if any errors are found.
   eligible for Homebrew. This should be used when creating new formulae or casks
   and implies `--strict` and `--online`.
 
-`--[no-]signing`
-
-: Audit for app signatures, which are required by macOS on ARM.
-
 `--changed`
 
 : Check files that were changed from the `main` branch.
@@ -2814,10 +2754,6 @@ at its original value, while `--no-rebuild` will remove it.
 `--no-all-checks`
 
 : Don't try to create an `all` bottle or stop a no-change upload.
-
-`--committer`
-
-: Specify a committer name and email in `git`'s standard author format.
 
 `--root-url`
 
@@ -3256,47 +3192,6 @@ For example: `brew debugger -- list --formula`.
 
 : Start remote debugging over a Unix socket.
 
-### `dispatch-build-bottle` \[*`options`*\] *`formula`* \[...\]
-
-Build bottles for these formulae with GitHub Actions.
-
-`--tap`
-
-: Target tap repository (default: `homebrew/core`).
-
-`--timeout`
-
-: Build timeout (in minutes, default: 60).
-
-`--issue`
-
-: If specified, post a comment to this issue number if the job fails.
-
-`--macos`
-
-: macOS version (or comma-separated list of versions) the bottle should be built
-  for.
-
-`--workflow`
-
-: Dispatch specified workflow (default: `dispatch-build-bottle.yml`).
-
-`--upload`
-
-: Upload built bottles.
-
-`--linux`
-
-: Dispatch bottle for Linux x86\_64 (using GitHub runners).
-
-`--linux-arm64`
-
-: Dispatch bottle for Linux arm64 (using GitHub runners).
-
-`--linux-self-hosted`
-
-: Dispatch bottle for Linux x86\_64 (using self-hosted runner).
-
 ### `edit` \[*`options`*\] \[*`formula`*\|*`cask`*\|*`tap`* ...\]
 
 Open a *`formula`*, *`cask`* or *`tap`* in the editor set by `$EDITOR` or
@@ -3340,108 +3235,6 @@ form of *`user`*`/`*`repo`*`/`*`formula`*.
 ### `formula` *`formula`* \[...\]
 
 Display the path where *`formula`* is located.
-
-### `formula-analytics`
-
-Query Homebrew's analytics.
-
-`--days-ago`
-
-: Query from the specified days ago until the present. The default is 30 days.
-
-`--install`
-
-: Output the number of specifically requested installations or installation as
-  dependencies of formulae. This is the default.
-
-`--install-on-request`
-
-: Output the number of specifically requested installations of formulae.
-
-`--cask-install`
-
-: Output the number of installations of casks.
-
-`--build-error`
-
-: Output the number of build errors for formulae.
-
-`--os-version`
-
-: Output the number of events by OS name and version.
-
-`--homebrew-devcmdrun-developer`
-
-: Output the number of devcmdrun/HOMEBREW\_DEVELOPER events.
-
-`--homebrew-os-arch-ci`
-
-: Output the number of OS/Architecture/CI events.
-
-`--homebrew-prefixes`
-
-: Output Homebrew prefixes.
-
-`--homebrew-versions`
-
-: Output Homebrew versions.
-
-`--brew-command-run`
-
-: Output `brew` commands run.
-
-`--brew-command-run-options`
-
-: Output `brew` commands run with options.
-
-`--brew-test-bot-test`
-
-: Output `brew test-bot` steps run.
-
-`--json`
-
-: Output JSON. This is required: plain text support has been removed.
-
-`--all-core-formulae-json`
-
-: Output a different JSON format containing the JSON data for all
-  Homebrew/homebrew-core formulae.
-
-`--setup`
-
-: Install the necessary gems, require them and exit without running a query.
-
-### `generate-analytics-api`
-
-Generates analytics API data files for <https://formulae.brew.sh>. The generated
-files are written to the current directory.
-
-### `generate-cask-api` \[`--dry-run`\]
-
-Generate `homebrew/cask` API data files for <https://formulae.brew.sh>. The
-generated files are written to the current directory.
-
-`-n`, `--dry-run`
-
-: Generate API data without writing it to files.
-
-### `generate-formula-api` \[`--dry-run`\]
-
-Generate `homebrew/core` API data files for <https://formulae.brew.sh>. The
-generated files are written to the current directory.
-
-`-n`, `--dry-run`
-
-: Generate API data without writing it to files.
-
-### `generate-internal-api` \[`--dry-run`\]
-
-Generate internal API data files for <https://formulae.brew.sh>. The generated
-files are written to the current directory.
-
-`-n`, `--dry-run`
-
-: Generate internal API data without writing it to files.
 
 ### `generate-man-completions` \[`--no-exit-code`\]
 
@@ -3585,206 +3378,6 @@ set or `~/.homebrew/livecheck_watchlist.txt` otherwise.
 : Include packages that are autobumped by BrewTestBot. By default these are
   skipped.
 
-### `pr-automerge` \[*`options`*\]
-
-Find pull requests that can be automatically merged using `brew pr-publish`.
-
-`--tap`
-
-: Target tap repository (default: `homebrew/core`).
-
-`--workflow`
-
-: Workflow file to use with `brew pr-publish`.
-
-`--with-label`
-
-: Pull requests must have this label.
-
-`--without-labels`
-
-: Pull requests must not have these labels (default: `do not merge`, `new
-  formula`, `automerge-skip`, `pre-release`, `CI-published-bottle-commits`).
-
-`--without-approval`
-
-: Pull requests do not require approval to be merged.
-
-`--publish`
-
-: Run `brew pr-publish` on matching pull requests.
-
-`--autosquash`
-
-: Instruct `brew pr-publish` to automatically reformat and reword commits in the
-  pull request to the preferred format.
-
-`--ignore-failures`
-
-: Include pull requests that have failing status checks.
-
-### `pr-publish` \[*`options`*\] *`pull_request`* \[...\]
-
-Publish bottles for a pull request with GitHub Actions. Requires write access to
-the repository.
-
-`--autosquash`
-
-: If supported on the target tap, automatically reformat and reword commits to
-  our preferred format.
-
-`--large-runner`
-
-: Run the upload job on a large runner.
-
-`--branch`
-
-: Branch to use the workflow from (default: `main`).
-
-`--message`
-
-: Message to include when autosquashing revision bumps, deletions and rebuilds.
-
-`--tap`
-
-: Target tap repository (default: `homebrew/core`).
-
-`--workflow`
-
-: Target workflow filename (default: `publish-commit-bottles.yml`).
-
-### `pr-pull` \[*`options`*\] *`pull_request`* \[...\]
-
-Download and publish bottles and apply the bottle commit from a pull request
-with artifacts generated by GitHub Actions. Requires write access to the
-repository.
-
-`--no-upload`
-
-: Download the bottles but don't upload them.
-
-`--no-commit`
-
-: Do not generate a new commit before uploading.
-
-`--no-cherry-pick`
-
-: Do not cherry-pick commits from the pull request branch.
-
-`-n`, `--dry-run`
-
-: Print what would be done rather than doing it.
-
-`--clean`
-
-: Do not amend the commits from pull requests.
-
-`--keep-old`
-
-: If the formula specifies a rebuild version, attempt to preserve its value in
-  the generated DSL.
-
-`--autosquash`
-
-: Automatically reformat and reword commits in the pull request to our preferred
-  format.
-
-`--branch-okay`
-
-: Do not warn if pulling to a branch besides the repository default (useful for
-  testing).
-
-`--resolve`
-
-: When a patch fails to apply, leave in progress and allow user to resolve,
-  instead of aborting.
-
-`--warn-on-upload-failure`
-
-: Warn instead of raising an error if the bottle upload fails. Useful for
-  repairing bottle uploads that previously failed.
-
-`--retain-bottle-dir`
-
-: Does not clean up the tmp directory for the bottle so it can be used later.
-
-`--committer`
-
-: Specify a committer name and email in `git`'s standard author format.
-
-`--message`
-
-: Message to include when autosquashing revision bumps, deletions and rebuilds.
-
-`--artifact-pattern`
-
-: Download artifacts with the specified pattern (default: `bottles{,_*}`).
-
-`--tap`
-
-: Target tap repository (default: `homebrew/core`).
-
-`--root-url`
-
-: Use the specified *`URL`* as the root of the bottle's URL instead of
-  Homebrew's default.
-
-`--root-url-using`
-
-: Use the specified download strategy class for downloading the bottle's URL
-  instead of Homebrew's default.
-
-`--workflows`
-
-: Retrieve artifacts from the specified workflow (default: `tests.yml`). Can be
-  a comma-separated list to include multiple workflows.
-
-`--ignore-missing-artifacts`
-
-: Comma-separated list of workflows which can be ignored if they have not been
-  run.
-
-### `pr-upload` \[*`options`*\]
-
-Apply the bottle commit and publish bottles to a host.
-
-`--keep-old`
-
-: If the formula specifies a rebuild version, attempt to preserve its value in
-  the generated DSL. When using GitHub Packages, this also appends the manifest
-  to the existing list.
-
-`-n`, `--dry-run`
-
-: Print what would be done rather than doing it.
-
-`--no-commit`
-
-: Do not generate a new commit before uploading.
-
-`--warn-on-upload-failure`
-
-: Warn instead of raising an error if the bottle upload fails. Useful for
-  repairing bottle uploads that previously failed.
-
-`--upload-only`
-
-: Skip running `brew bottle` before uploading.
-
-`--committer`
-
-: Specify a committer name and email in `git`'s standard author format.
-
-`--root-url`
-
-: Use the specified *`URL`* as the root of the bottle's URL instead of
-  Homebrew's default.
-
-`--root-url-using`
-
-: Use the specified download strategy class for downloading the bottle's URL
-  instead of Homebrew's default.
-
 ### `prof` \[`--stackprof`\] \[`--vernier`\] *`command`* \[...\]
 
 Run Homebrew with a Ruby profiler. For example, `brew prof readall`.
@@ -3796,34 +3389,6 @@ Run Homebrew with a Ruby profiler. For example, `brew prof readall`.
 `--vernier`
 
 : Use `vernier` instead of `ruby-prof` (the default).
-
-### `release` \[*`options`*\]
-
-Create a new draft Homebrew/brew release with the appropriate version number and
-release notes.
-
-By default, `brew release` will bump the patch version number. Pass `--major` or
-`--minor` to bump the major or minor version numbers, respectively. The command
-will fail if the previous major or minor release was made less than one month
-ago.
-
-Without `--force`, this command will just output the release notes without
-creating the release or triggering the workflow.
-
-*Note:* Requires write access to the Homebrew/brew repository.
-
-`--major`
-
-: Create a major release.
-
-`--minor`
-
-: Create a minor release.
-
-`--force`
-
-: Actually create the release and trigger the workflow. Without this, just show
-  what would be done.
 
 ### `rubocop`
 
@@ -4307,25 +3872,13 @@ current working directory.
 
 : Treat all named arguments as casks.
 
-### `update-license-data`
-
-Update SPDX license data in the Homebrew repository.
-
-### `update-maintainers`
-
-Update the list of maintainers in the `Homebrew/brew` README.
-
-### `update-perl-resources` \[*`options`*\] *`formula`* \[...\]
+### `update-perl-resources` \[`--print-only`\] \[`--ignore-errors`\] *`formula`* \[...\]
 
 Update versions for CPAN resource blocks in *`formula`*.
 
 `-p`, `--print-only`
 
 : Print the updated resource blocks instead of changing *`formula`*.
-
-`-s`, `--silent`
-
-: Suppress any output.
 
 `--ignore-errors`
 
@@ -4338,10 +3891,6 @@ Update versions for PyPI resource blocks in *`formula`*.
 `-p`, `--print-only`
 
 : Print the updated resource blocks instead of changing *`formula`*.
-
-`-s`, `--silent`
-
-: Suppress any output.
 
 `--ignore-errors`
 
@@ -4374,10 +3923,6 @@ Update versions for PyPI resource blocks in *`formula`*.
 `--exclude-packages`
 
 : Exclude these packages when finding resources.
-
-### `update-sponsors`
-
-Update the list of GitHub Sponsors in the `Homebrew/brew` README.
 
 ### `update-test` \[*`options`*\]
 
@@ -4621,7 +4166,9 @@ command execution (e.g. `$(cat file)`).
 
 : A space-separated list of taps. Homebrew will refuse to install a formula
   unless it and all of its dependencies are in an official tap or in a tap on
-  this list.
+  this list. Each entry is a `user/repository` name (which matches only taps
+  using the default GitHub remote) or a remote URL (required to match taps with
+  a custom remote).
 
 `HOMEBREW_API_AUTO_UPDATE_SECS`
 
@@ -4662,15 +4209,6 @@ command execution (e.g. `$(cat file)`).
 : When `$HOMEBREW_ARTIFACT_DOMAIN` and `$HOMEBREW_ARTIFACT_DOMAIN_NO_FALLBACK`
   are both set, if the request to `$HOMEBREW_ARTIFACT_DOMAIN` fails then
   Homebrew will error rather than trying any other/default URLs.
-
-`HOMEBREW_ASK`
-
-: If set, pass `--ask` to `brew install`, `brew upgrade` and `brew reinstall`
-  commands. Enabled by default if `$HOMEBREW_DEVELOPER` is set. This will become
-  the default behaviour in the next release. Ask mode prints the plan before
-  proceeding and prompts only if the plan includes dependencies, dependants or
-  packages other than named arguments. Otherwise, it only prints the plan. The
-  confirmation prompt is skipped without a TTY.
 
 `HOMEBREW_AUTO_UPDATE_SECS`
 
@@ -4769,13 +4307,6 @@ command execution (e.g. `$(cat file)`).
 
 : If set, `brew bundle cleanup` will not clean up WinGet packages.
 
-`HOMEBREW_BUNDLE_DESCRIBE`
-
-: If set, add a description comment above each line in `brew bundle dump` and
-  `brew bundle add`, unless the dependency does not have a description. Enabled
-  by default if `$HOMEBREW_DEVELOPER` is set. This will become the default
-  behaviour in a later minor release.
-
 `HOMEBREW_BUNDLE_DUMP_NO_BREW`
 
 : If set, `brew bundle dump` will not dump formula dependencies.
@@ -4832,33 +4363,25 @@ command execution (e.g. `$(cat file)`).
 `HOMEBREW_BUNDLE_JOBS`
 
 : Use this value as the number of formula installations to run in parallel for
-  `brew bundle install`. Use `auto` for the number of CPU cores (max 4). Enabled
-  by default with a value of `auto` if `$HOMEBREW_DEVELOPER` is set. This will
-  become the default behaviour in a later minor release.
+  `brew bundle install`. Use `auto` for the number of CPU cores (max 4).
+  
+  *Default:* `auto`.
 
 `HOMEBREW_BUNDLE_NO_DESCRIBE`
 
 : If set, do not enable bundle description comments from
-  `$HOMEBREW_BUNDLE_DESCRIBE` or the `$HOMEBREW_DEVELOPER` default. This does
-  not disable an explicit `--describe`.
+  `$HOMEBREW_BUNDLE_DESCRIBE` or the default. This does not disable an explicit
+  `--describe`.
 
 `HOMEBREW_BUNDLE_NO_JOBS`
 
-: If set, do not enable parallel jobs from `$HOMEBREW_BUNDLE_JOBS` or the
-  `$HOMEBREW_DEVELOPER` default. This does not disable an explicit `--jobs`.
-
-`HOMEBREW_BUNDLE_NO_SECRETS`
-
-: If set, `brew bundle exec`, `brew bundle env` and `brew bundle sh` will
-  attempt to remove secrets from the environment. Enabled by default if
-  `$HOMEBREW_DEVELOPER` is set. This will become the default behaviour in a
-  later minor release.
+: If set, do not enable parallel jobs from `$HOMEBREW_BUNDLE_JOBS` or its
+  default. This does not disable an explicit `--jobs`.
 
 `HOMEBREW_BUNDLE_SECRETS`
 
-: If set, do not enable secret scrubbing from `$HOMEBREW_BUNDLE_NO_SECRETS` or
-  the `$HOMEBREW_DEVELOPER` default. This does not disable an explicit
-  `--no-secrets`.
+: If set, do not enable the default secret scrubbing. This does not disable an
+  explicit `--no-secrets`.
 
 `HOMEBREW_BUNDLE_USER_CACHE`
 
@@ -5039,7 +4562,9 @@ command execution (e.g. `$(cat file)`).
 `HOMEBREW_FORBIDDEN_TAPS`
 
 : A space-separated list of taps. Homebrew will refuse to install a formula if
-  it or any of its dependencies is in a tap on this list.
+  it or any of its dependencies is in a tap on this list. Each entry is a
+  `user/repository` name (which matches only taps using the default GitHub
+  remote) or a remote URL (required to match taps with a custom remote).
 
 `HOMEBREW_FORBID_CASKS`
 
@@ -5198,8 +4723,8 @@ command execution (e.g. `$(cat file)`).
 
 `HOMEBREW_NO_ASK`
 
-: If set, do not enable ask mode from `$HOMEBREW_ASK` or the
-  `$HOMEBREW_DEVELOPER` default. This does not disable an explicit `--ask`.
+: If set, do not enable default ask mode. This does not disable an explicit
+  `--ask`.
 
 `HOMEBREW_NO_AUTOREMOVE`
 
@@ -5238,13 +4763,6 @@ command execution (e.g. `$(cat file)`).
 
 : If set, do not print any hints about changing Homebrew's behaviour with
   environment variables.
-
-`HOMEBREW_NO_EVAL_ENV_SCRUBBING`
-
-: If set, sensitive environment variables are available while evaluating
-  formulae and casks. `$HOMEBREW_GITHUB_API_TOKEN` is still available during
-  evaluation when this is unset. This setting will be removed in a later
-  release.
 
 `HOMEBREW_NO_FORCE_BREW_WRAPPER`
 
@@ -5302,11 +4820,6 @@ command execution (e.g. `$(cat file)`).
   trusted. This is not recommended and will be removed in a later release. Also
   enables commands that evaluate all formulae and casks.
 
-`HOMEBREW_NO_SANDBOX_CASK`
-
-: If set, disable sandboxing for cask artifacts that generate files by running
-  executables.
-
 `HOMEBREW_NO_SANDBOX_LINUX`
 
 : If set, disable the Linux sandbox.
@@ -5314,6 +4827,11 @@ command execution (e.g. `$(cat file)`).
 `HOMEBREW_NO_UPDATE_REPORT_NEW`
 
 : If set, `brew update` will not show the list of newly added formulae/casks.
+
+`HOMEBREW_NO_UPGRADE_AUTO_UPDATES_CASKS`
+
+: If set, `brew upgrade` will not automatically upgrade casks with `auto_updates
+  true`. Does not affect `--greedy` or `--greedy-auto-updates` upgrades.
 
 `HOMEBREW_NO_UPGRADE_QUIT_CASKS`
 
@@ -5339,20 +4857,16 @@ command execution (e.g. `$(cat file)`).
 `HOMEBREW_REQUIRE_TAP_TRUST`
 
 : If set, require non-official tap formulae, casks and commands to be trusted
-  with `brew trust` before Homebrew loads them. Also enables commands that
-  evaluate all formulae and casks.
-
-`HOMEBREW_SANDBOX_LINUX`
-
-: If set, use the `bwrap`(1) sandbox for formula installation and testing on
-  Linux. Enabled by default if `$HOMEBREW_DEVELOPER` is set. This will be the
-  default in Homebrew 5.2.0.
+  with `brew trust` before Homebrew loads them. This is the default unless
+  `$HOMEBREW_NO_REQUIRE_TAP_TRUST` is set. Also enables commands that evaluate
+  all formulae and casks.
+  
+  *Default:* `true`.
 
 `HOMEBREW_SBOM`
 
 : If set, Homebrew will write SBOM files and run SBOM-related installation
-  logic. This is a no-op until Homebrew 5.2.0, when it will become required for
-  that behaviour.
+  logic.
 
 `HOMEBREW_SIMULATE_MACOS_ON_LINUX`
 
@@ -5414,14 +4928,6 @@ command execution (e.g. `$(cat file)`).
 : If set, always use the latest stable tag (even if developer commands have been
   run).
 
-`HOMEBREW_UPGRADE_AUTO_UPDATES_CASKS`
-
-: If set, `brew upgrade` will automatically upgrade casks with `auto_updates
-  true` when Homebrew detects that the version in the app bundle is older than
-  the version in the tap. Does not affect `--greedy` or `--greedy-auto-updates`
-  upgrades. Enabled by default if `$HOMEBREW_DEVELOPER` is set. This will become
-  the default behavior in Homebrew 5.2.0.
-
 `HOMEBREW_UPGRADE_GREEDY`
 
 : If set, pass `--greedy` to all cask upgrade commands.
@@ -5430,10 +4936,6 @@ command execution (e.g. `$(cat file)`).
 
 : A space-separated list of casks. Homebrew will act as if `--greedy` was passed
   when upgrading any cask on this list.
-
-`HOMEBREW_USE_INTERNAL_API`
-
-: If set, test the new beta internal API for fetching formula and cask data.
 
 `HOMEBREW_VERBOSE`
 
@@ -5514,14 +5016,6 @@ Zhong, Sam Ford, Sean Molenaar and Thierry Moisan.
 Homebrew's other Maintainers are Anton Melnikov, Caleb Xu, Daeho Ro, Douglas
 Eichelberger, Eric Knibbe, Klaus Hipp, Markus Reiter, Rylan Polster, Štefan
 Baebler and William Woodruff.
-
-Former Maintainers with significant contributions include Alexander Bayandin,
-Miccal Matthews, Misty De Méo, Shaun Jackman, Vítor Galvão, Claudia Pellegrino,
-Seeker, Jan Viljanen, JCount, commitay, Dominyk Tiller, Tim Smith, Baptiste
-Fontaine, Xu Cheng, Martin Afanasjew, Brett Koonce, Charlie Sharpsteen, Jack
-Nagel, Adam Vandenberg, Andrew Janke, Alex Dunn, neutric, Tomasz Pajor,
-Uladzislau Shablinski, Alyssa Ross, ilovezfs, Chongyu Zhu and Homebrew's
-creator: Max Howell.
 
 ## BUGS
 

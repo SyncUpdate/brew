@@ -16,7 +16,10 @@ source "${HOMEBREW_LIBRARY}/Homebrew/utils/lock.sh"
 
 macos_version_name() {
   # NOTE: Changes to this list must match `SYMBOLS` in `macos_version.rb`.
-  if [[ "${HOMEBREW_MACOS_VERSION_NUMERIC}" -ge "260000" ]]
+  if [[ "${HOMEBREW_MACOS_VERSION_NUMERIC}" -ge "270000" ]]
+  then
+    echo "golden_gate"
+  elif [[ "${HOMEBREW_MACOS_VERSION_NUMERIC}" -ge "260000" ]]
   then
     echo "tahoe"
   elif [[ "${HOMEBREW_MACOS_VERSION_NUMERIC}" -ge "150000" ]]
@@ -420,7 +423,7 @@ fetch_api_file() {
     echo "Checking if we need to fetch ${filename}..."
   fi
 
-  local arg json_url
+  local arg json_url last_json_url
   while read -r json_url
   do
     time_cond=()
@@ -437,6 +440,7 @@ fetch_api_file() {
       --user-agent "${HOMEBREW_USER_AGENT_CURL}" \
       "${json_url}"
     curl_exit_code=$?
+    last_json_url="${json_url}"
     [[ ${curl_exit_code} -eq 0 ]] && break
   done < <(api_urls "${filename}")
 
@@ -469,7 +473,7 @@ fetch_api_file() {
       fi
     fi
   else
-    echo "Failed to download ${json_url}!" >>"${update_failed_file}"
+    echo "Failed to download ${last_json_url}!" >>"${update_failed_file}"
   fi
 }
 
@@ -981,12 +985,7 @@ EOS
 
   if [[ -z "${HOMEBREW_NO_INSTALL_FROM_API}" ]]
   then
-    if [[ -n "${HOMEBREW_USE_INTERNAL_API}" ]]
-    then
-      api_files=("internal/packages.$(bottle_tag)")
-    else
-      api_files=(formula cask formula_tap_migrations cask_tap_migrations)
-    fi
+    api_files=("internal/packages.$(bottle_tag)")
 
     for json in "${api_files[@]}"
     do
@@ -994,15 +993,8 @@ EOS
       fetch_api_file "${filename}" "${update_failed_file}"
     done
 
-    if [[ -n "${HOMEBREW_USE_INTERNAL_API}" ]]
-    then
-      # Remove files only downloaded by the regular API
-      rm -f "${HOMEBREW_CACHE}/api/formula.jws.json" "${HOMEBREW_CACHE}/api/cask.jws.json"
-      rm -f "${HOMEBREW_CACHE}/api/formula_tap_migrations.jws.json" "${HOMEBREW_CACHE}/api/cask_tap_migrations.jws.json"
-    else
-      # Remove files only downloaded by the internal API
-      rm -f "${HOMEBREW_CACHE}/api/internal/packages.$(bottle_tag).jws.json"
-    fi
+    rm -f "${HOMEBREW_CACHE}/api/formula.jws.json" "${HOMEBREW_CACHE}/api/cask.jws.json"
+    rm -f "${HOMEBREW_CACHE}/api/formula_tap_migrations.jws.json" "${HOMEBREW_CACHE}/api/cask_tap_migrations.jws.json"
 
     # Not a typo, these are the files we used to download that no longer need so should cleanup.
     rm -f "${HOMEBREW_CACHE}/api/formula.json" "${HOMEBREW_CACHE}/api/cask.json"

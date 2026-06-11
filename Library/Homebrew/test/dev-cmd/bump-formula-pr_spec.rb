@@ -1,4 +1,4 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require "cmd/shared_examples/args_parse"
@@ -6,11 +6,11 @@ require "dev-cmd/bump-formula-pr"
 require "utils/pypi"
 
 RSpec.describe Homebrew::DevCmd::BumpFormulaPr do
-  subject(:bump_formula_pr) { klass.new(["test"]) }
+  subject(:bump_formula_pr) { described_class.new(["test"]) }
 
-  let(:klass) { Homebrew::DevCmd::BumpFormulaPr }
   let(:f) do
     formula("test") do
+      T.bind(self, T.class_of(Formula))
       url "https://brew.sh/test-1.2.3.tgz"
     end
   end
@@ -36,7 +36,7 @@ RSpec.describe Homebrew::DevCmd::BumpFormulaPr do
       resource_path = mktmpdir/"apache-couchdb-3.5.2.tar.gz"
       resource_path.write("couchdb")
       updated_mirror = "https://archive.apache.org/dist/couchdb/source/3.5.2/apache-couchdb-3.5.2.tar.gz"
-      command = klass.new(["--write-only", "--no-audit", "--version=3.5.2", "couchdb"])
+      command = described_class.new(["--write-only", "--no-audit", "--version=3.5.2", "couchdb"])
 
       allow(Homebrew).to receive(:install_bundler_gems!)
       allow(CoreTap.instance).to receive_messages(allow_bump?: true, git?: true,
@@ -67,6 +67,7 @@ RSpec.describe Homebrew::DevCmd::BumpFormulaPr do
 
     let(:f_throttle) do
       formula("throttle-test") do
+        T.bind(self, T.class_of(Formula))
         url "https://brew.sh/test-1.2.3.tgz"
 
         livecheck do
@@ -77,6 +78,7 @@ RSpec.describe Homebrew::DevCmd::BumpFormulaPr do
 
     let(:f_throttle_days) do
       formula("throttle-days-test") do
+        T.bind(self, T.class_of(Formula))
         url "https://brew.sh/test-1.2.3.tgz"
 
         livecheck do
@@ -87,6 +89,7 @@ RSpec.describe Homebrew::DevCmd::BumpFormulaPr do
 
     let(:f_throttle_rate_and_days) do
       formula("throttle-rate-and-days-test") do
+        T.bind(self, T.class_of(Formula))
         url "https://brew.sh/test-1.2.3.tgz"
 
         livecheck do

@@ -4,9 +4,8 @@
 require "livecheck/strategy"
 
 RSpec.describe Homebrew::Livecheck::Strategy::Launchpad do
-  subject(:launchpad) { klass }
+  subject(:launchpad) { described_class }
 
-  let(:klass) { Homebrew::Livecheck::Strategy::Launchpad }
   let(:launchpad_urls) do
     {
       version_dir:    "https://launchpad.net/abc/1.2/1.2.3/+download/abc-1.2.3.tar.gz",
@@ -23,7 +22,7 @@ RSpec.describe Homebrew::Livecheck::Strategy::Launchpad do
   # The whitespace in a real response is a bit looser and this has been
   # reformatted for the sake of brevity.
   let(:content) do
-    <<~EOS
+    <<~HTML
       <!DOCTYPE html>
       <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en" dir="ltr">
         <head>
@@ -51,7 +50,7 @@ RSpec.describe Homebrew::Livecheck::Strategy::Launchpad do
           </div>
         </body>
       </html>
-    EOS
+    HTML
   end
   let(:matches) { ["1.2.3"] }
 

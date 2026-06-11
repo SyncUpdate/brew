@@ -5,16 +5,15 @@ require "formula"
 require "livecheck"
 
 RSpec.describe Livecheck do
-  let(:klass) { Livecheck }
-
   let(:f) do
     formula do
+      T.bind(self, T.class_of(Formula))
       homepage "https://brew.sh"
       url "https://brew.sh/test-0.0.1.tgz"
       head "https://github.com/Homebrew/brew.git", branch: "main"
     end
   end
-  let(:livecheck_f) { klass.new(f.class) }
+  let(:livecheck_f) { described_class.new(f.class) }
 
   let(:c) do
     Cask::CaskLoader.load(+<<-RUBY)
@@ -28,7 +27,7 @@ RSpec.describe Livecheck do
       end
     RUBY
   end
-  let(:livecheck_c) { klass.new(c) }
+  let(:livecheck_c) { described_class.new(c) }
 
   let(:post_hash) do
     {
@@ -271,6 +270,7 @@ RSpec.describe Livecheck do
 
     let(:f_version) do
       formula do
+        T.bind(self, T.class_of(Formula))
         homepage "https://brew.sh"
         url "https://brew.sh/test-0.0.1.tgz"
 

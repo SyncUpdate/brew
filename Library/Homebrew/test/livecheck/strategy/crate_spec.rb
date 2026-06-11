@@ -4,9 +4,8 @@
 require "livecheck/strategy"
 
 RSpec.describe Homebrew::Livecheck::Strategy::Crate do
-  subject(:crate) { klass }
+  subject(:crate) { described_class }
 
-  let(:klass) { Homebrew::Livecheck::Strategy::Crate }
   let(:crate_url) { "https://static.crates.io/crates/example/example-0.1.0.crate" }
   let(:non_crate_url) { "https://brew.sh/test" }
   # This only differs from the `DEFAULT_REGEX` so we can distinguish between a
@@ -18,7 +17,7 @@ RSpec.describe Homebrew::Livecheck::Strategy::Crate do
   # This is a limited subset of a `versions` response object, for the sake of
   # testing.
   let(:content) do
-    <<~EOS
+    <<~JSON
       {
         "versions": [
           {
@@ -44,22 +43,9 @@ RSpec.describe Homebrew::Livecheck::Strategy::Crate do
           }
         ]
       }
-    EOS
+    JSON
   end
   let(:matches) { ["1.0.0", "1.0.1"] }
-  let(:find_versions_return_hash) do
-    {
-      matches: {
-        "1.0.1" => Version.new("1.0.1"),
-        "1.0.0" => Version.new("1.0.0"),
-      },
-      regex:   Homebrew::Livecheck::Strategy::Crate::DEFAULT_REGEX,
-      url:     generated[:url],
-    }
-  end
-  let(:find_versions_cached_return_hash) do
-    find_versions_return_hash.merge({ cached: true })
-  end
 
   describe "::match?" do
     it "returns true for a crate URL" do

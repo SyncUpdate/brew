@@ -202,7 +202,12 @@ module Homebrew
       # @param url [String] the URL to fetch
       # @param options [Options] options to modify behavior
       # @return [Array]
-      sig { params(url: String, options: Options).returns(T::Array[T::Hash[String, String]]) }
+      sig {
+        params(
+          url:     String,
+          options: Options,
+        ).returns(T::Array[T::Hash[String, T.any(String, T::Array[String])]])
+      }
       def self.page_headers(url, options: Options.new)
         headers = []
 
@@ -310,10 +315,10 @@ module Homebrew
       sig { params(value: T.untyped).returns(T::Array[String]) }
       def self.handle_block_return(value)
         case value
-        when String
-          [value]
+        when String, Version
+          [value.to_s]
         when Array
-          value.compact.uniq
+          value.compact.map(&:to_s).uniq
         when nil
           []
         else
