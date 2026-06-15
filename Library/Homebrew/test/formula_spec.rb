@@ -1140,6 +1140,27 @@ RSpec.describe Formula do
     expect(f2).not_to have_post_install_defined
   end
 
+  specify "#run_post_install prevents build tools from reading user configuration" do
+    env = {}
+    f = formula do
+      T.bind(self, T.class_of(Formula))
+      url "foo-1.0"
+    end
+
+    allow(Tab).to receive(:for_formula).with(f).and_return(f.build)
+    allow(f).to receive(:post_install) { env = ENV.to_hash }
+
+    f.run_post_install
+
+    expect(env).to include(
+      "GIT_CONFIG_GLOBAL"     => Utils::Git.no_global_config_file,
+      "GOENV"                 => "off",
+      "NPM_CONFIG_USERCONFIG" => File::NULL,
+      "PIP_CONFIG_FILE"       => File::NULL,
+      "XDG_CONFIG_HOME"       => "#{env.fetch("HOME")}/.config",
+    )
+  end
+
   specify "#post_install_steps" do
     f = formula do
       T.bind(self, T.class_of(Formula))
@@ -1563,6 +1584,14 @@ RSpec.describe Formula do
 
     it "returns empty when dep is present in cellar" do
       (HOMEBREW_CELLAR/"bar").mkpath
+      allow(keg).to receive(:runtime_dependencies).and_return([{ "full_name" => "bar" }])
+      expect(f.missing_dependencies).to be_empty
+    end
+
+    it "returns empty when dep is present as alias or oldname" do
+      (HOMEBREW_CELLAR/"bar@2/2.0").mkpath
+      (HOMEBREW_PREFIX/"opt").mkpath
+      FileUtils.ln_sf HOMEBREW_CELLAR/"bar@2/2.0", HOMEBREW_PREFIX/"opt/bar"
       allow(keg).to receive(:runtime_dependencies).and_return([{ "full_name" => "bar" }])
       expect(f.missing_dependencies).to be_empty
     end
@@ -3085,7 +3114,28 @@ RSpec.describe Formula do
     end
   end
 
-  describe "#common_stage_test_env" do
+  describe "#std_zig_args" do
+    let(:f) do
+      formula do
+        url "foo-1.0"
+      end
+    end
+
+    it "raises an error when provided an unknown release mode" do
+      expect { f.std_zig_args(release_mode: :test) }.to raise_error(ArgumentError)
+    end
+
+    it "includes equivalent Zig CPU for known target arch" do
+      allow(ENV).to receive(:effective_arch).and_return(:arm_vortex_tempest)
+      expect(f.std_zig_args).to include("-Dcpu=apple_m1")
+    end
+
+    it "allows overriding Zig CPU" do
+      expect(f.std_zig_args(cpu: :generic)).to include("-Dcpu=generic")
+    end
+  end
+
+  describe "#common_sandbox_env" do
     let(:f) do
       formula do
         url "foo-1.0"
@@ -3093,7 +3143,19 @@ RSpec.describe Formula do
     end
 
     it "sets Bundler cooldown for RubyGems dependencies" do
-      expect(f.send(:common_stage_test_env, mktmpdir)[:BUNDLE_COOLDOWN]).to eq("1")
+      expect(f.send(:common_sandbox_env, mktmpdir)[:BUNDLE_COOLDOWN]).to eq("1")
+    end
+
+    it "prevents build tools from reading user configuration" do
+      home = mktmpdir
+
+      expect(f.send(:common_sandbox_env, home)).to include(
+        GIT_CONFIG_GLOBAL:     Utils::Git.no_global_config_file,
+        GOENV:                 "off",
+        NPM_CONFIG_USERCONFIG: File::NULL,
+        PIP_CONFIG_FILE:       File::NULL,
+        XDG_CONFIG_HOME:       (home/".config").to_s,
+      )
     end
   end
 

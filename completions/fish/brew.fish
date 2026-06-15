@@ -178,6 +178,25 @@ function __fish_brew_suggest_taps_installed -d "List all available taps"
     | string replace (brew --repo)/Library/Taps/ ""
 end
 
+function __fish_brew_suggest_aliases -d "Lists user-defined aliases"
+    set -l aliases_dir "$HOME/.config/brew-aliases"
+    test -d $aliases_dir; or set aliases_dir "$HOME/.brew-aliases"
+    test -d $aliases_dir; or return
+
+    for file in $aliases_dir/*
+        test -f $file; and not string match -q '*~' -- $file; or continue
+        set -l alias_name (string replace -r '^.*/' '' -- $file)
+        begin
+            read -l line
+            if read -l line
+                set -l match (string match -rg 'alias: brew ([^[:space:]]+)' -- $line)
+                test -n "$match"; and set alias_name $match[1]
+            end
+        end < $file
+        echo $alias_name
+    end
+end
+
 function __fish_brew_suggest_commands -d "Lists all command names"
     set -l commands
     if test -f (brew --cache)/all_commands_list.txt
@@ -189,6 +208,7 @@ function __fish_brew_suggest_commands -d "Lists all command names"
         set -l expanded_command (__fish_brew_expand_alias $command)
         test "$expanded_command" = "$command"; and echo $command
     end
+    __fish_brew_suggest_aliases
 end
 
 function __fish_brew_suggest_diagnostic_checks -d "List available diagnostic checks"
@@ -590,12 +610,14 @@ __fish_brew_complete_sub_arg 'bundle' 'install upgrade' -l verbose -d 'Print out
 __fish_brew_complete_sub_arg 'bundle' 'install upgrade' -l zap -d 'Use `zap` instead of `uninstall` when cleaning up casks after installing dependencies'
 __fish_brew_complete_sub_arg 'bundle' 'exec' -l check -d 'Check that all dependencies in the Brewfile are installed before executing the command. Enabled by default if `$HOMEBREW_BUNDLE_CHECK` is set'
 __fish_brew_complete_sub_arg 'bundle' 'exec' -l debug -d 'Display any debugging information'
+__fish_brew_complete_sub_arg 'bundle' 'exec' -l deny-network -d 'Deny network access from inside the sandbox'
 __fish_brew_complete_sub_arg 'bundle' 'exec' -l file -d 'Read from or write to the `Brewfile` from this location. Use `--file=-` to pipe to stdin/stdout'
 __fish_brew_complete_sub_arg 'bundle' 'exec' -l global -d 'Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set), `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise'
 __fish_brew_complete_sub_arg 'bundle' 'exec' -l help -d 'Show this message'
 __fish_brew_complete_sub_arg 'bundle' 'exec' -l install -d 'Run `install` before executing the command'
 __fish_brew_complete_sub_arg 'bundle' 'exec' -l no-secrets -d 'Attempt to remove secrets from the environment before executing the command'
 __fish_brew_complete_sub_arg 'bundle' 'exec' -l quiet -d 'Make some output more quiet'
+__fish_brew_complete_sub_arg 'bundle' 'exec' -l sandbox -d 'Run command in Homebrew\'s sandbox, allowing writes to path and Homebrew\'s temporary and cache directories'
 __fish_brew_complete_sub_arg 'bundle' 'exec' -l services -d 'Temporarily start services while executing the command. Enabled by default if `$HOMEBREW_BUNDLE_SERVICES` is set'
 __fish_brew_complete_sub_arg 'bundle' 'exec' -l verbose -d 'Make some output more verbose'
 __fish_brew_complete_sub_arg 'bundle' 'exec' -a '(__fish_brew_suggest_commands)'
@@ -995,9 +1017,11 @@ __fish_brew_complete_arg 'edit' -a '(__fish_brew_suggest_taps_installed)'
 
 __fish_brew_complete_cmd 'exec' 'Run command in an environment populated by Homebrew formulae'
 __fish_brew_complete_arg 'exec' -l debug -d 'Display any debugging information'
+__fish_brew_complete_arg 'exec' -l deny-network -d 'Deny network access from inside the sandbox'
 __fish_brew_complete_arg 'exec' -l formulae -d 'Comma-separated formulae to install and add to `PATH` before running command'
 __fish_brew_complete_arg 'exec' -l help -d 'Show this message'
 __fish_brew_complete_arg 'exec' -l quiet -d 'Make some output more quiet'
+__fish_brew_complete_arg 'exec' -l sandbox -d 'Run command in Homebrew\'s sandbox, allowing writes to path and Homebrew\'s temporary and cache directories'
 __fish_brew_complete_arg 'exec' -l verbose -d 'Make some output more verbose'
 
 
@@ -1611,6 +1635,14 @@ __fish_brew_complete_arg 'rubydoc' -l quiet -d 'Make some output more quiet'
 __fish_brew_complete_arg 'rubydoc' -l verbose -d 'Make some output more verbose'
 
 
+__fish_brew_complete_cmd 'sandbox-exec' 'Run command in Homebrew\'s sandbox, allowing writes to writable-path and Homebrew\'s temporary and cache directories'
+__fish_brew_complete_arg 'sandbox-exec' -l debug -d 'Display any debugging information'
+__fish_brew_complete_arg 'sandbox-exec' -l deny-network -d 'Deny network access from inside the sandbox'
+__fish_brew_complete_arg 'sandbox-exec' -l help -d 'Show this message'
+__fish_brew_complete_arg 'sandbox-exec' -l quiet -d 'Make some output more quiet'
+__fish_brew_complete_arg 'sandbox-exec' -l verbose -d 'Make some output more verbose'
+
+
 __fish_brew_complete_cmd 'search' 'Perform a substring search of cask tokens and formula names for text'
 __fish_brew_complete_arg 'search' -l alpine -d 'Search for text in the given database'
 __fish_brew_complete_arg 'search' -l archlinux -d 'Search for text in the given database'
@@ -1733,6 +1765,13 @@ __fish_brew_complete_arg 'setup-ruby' -l help -d 'Show this message'
 __fish_brew_complete_arg 'setup-ruby' -l quiet -d 'Make some output more quiet'
 __fish_brew_complete_arg 'setup-ruby' -l verbose -d 'Make some output more verbose'
 __fish_brew_complete_arg 'setup-ruby' -a '(__fish_brew_suggest_commands)'
+
+
+__fish_brew_complete_cmd 'setup-sandbox' 'Run any necessary commands to setup the Homebrew sandbox'
+__fish_brew_complete_arg 'setup-sandbox' -l debug -d 'Display any debugging information'
+__fish_brew_complete_arg 'setup-sandbox' -l help -d 'Show this message'
+__fish_brew_complete_arg 'setup-sandbox' -l quiet -d 'Make some output more quiet'
+__fish_brew_complete_arg 'setup-sandbox' -l verbose -d 'Make some output more verbose'
 
 
 __fish_brew_complete_cmd 'sh' 'Enter an interactive shell for Homebrew\'s build environment'

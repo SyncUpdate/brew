@@ -873,6 +873,60 @@ RSpec.describe FormulaInstaller do
   end
 
   describe "#prelude_fetch" do
+    it "uses API bottle metadata for API-loaded formula manifests" do
+      formula = formula("deno") do
+        T.bind(self, T.class_of(Formula))
+        url "https://brew.sh/deno-2.7.11.tar.gz"
+      end
+      formula_struct = Homebrew::API::FormulaStruct.new(
+        bottle_checksums:     [
+          {
+            cellar:                  :any_skip_relocation,
+            Utils::Bottles.tag.to_sym => "d7b9f4e8bf83608b71fe958a99f19f2e5e68bb2582965d32e41759c24f1aef97",
+          },
+        ],
+        bottle_present:       true,
+        desc:                 "deno",
+        homepage:             "https://brew.sh",
+        license:              "MIT",
+        ruby_source_checksum: "abc123",
+        stable_present:       true,
+        stable_version:       "2.7.11",
+      )
+      installer = described_class.new(formula, ignore_deps: true)
+      installer.download_queue = instance_double(Homebrew::DownloadQueue)
+
+      allow(formula).to receive_messages(
+        bottle_tag?:               true,
+        core_formula?:             true,
+        loaded_from_internal_api?: true,
+        pour_bottle?:              true,
+      )
+      allow(Homebrew::API::Internal).to receive(:formula_struct).with("deno").and_return(formula_struct)
+      expect(formula).not_to receive(:bottle_for_tag)
+      expect(formula).not_to receive(:bottle)
+      expect(installer.download_queue).to receive(:enqueue).with(an_instance_of(Resource::BottleManifest))
+
+      installer.prelude_fetch
+    end
+
+    it "does not repeat source download prelude work" do
+      f = formula("homebrew-prelude-fetch-once") do
+        T.bind(self, T.class_of(Formula))
+        url "https://brew.sh/prelude-fetch-once-0.1.tar.gz"
+      end
+      allow(f).to receive(:loaded_from_api?).and_return(true)
+      fi = described_class.new(f, ignore_deps: true)
+      fi.download_queue = instance_double(Homebrew::DownloadQueue)
+
+      expect(Homebrew::API::Formula).to receive(:source_download)
+        .with(f, download_queue: fi.download_queue, enqueue: true)
+        .once
+
+      fi.prelude_fetch
+      fi.prelude_fetch
+    end
+
     it "raises on forbidden formula tap before fetching the source from the API" do
       homebrew_forbidden = Tap.fetch("homebrew/forbidden")
       allow(Tap).to receive_messages(allowed_taps: [], forbidden_taps: [homebrew_forbidden.name])

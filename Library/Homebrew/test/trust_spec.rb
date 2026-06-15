@@ -67,6 +67,27 @@ RSpec.describe Homebrew::Trust, :trust_store do
     described_class.clear!(:tap)
   end
 
+  it "invalidates old tap trust entries after a redirect" do
+    described_class.trust!(:tap, "thirdparty/foo")
+    described_class.trust!(:tap, "https://gitlab.com/old/repo")
+    described_class.trust!(:formula, "thirdparty/foo/bar")
+    described_class.trust!(:cask, "thirdparty/foo/baz")
+    described_class.trust!(:command, "thirdparty/foo/hello")
+
+    expect(described_class.invalidate_tap_references!("thirdparty/foo",
+                                                      remote: "https://gitlab.com/old/repo")).to be(true)
+
+    expect(described_class.trusted_entries(:tap)).to be_empty
+    expect(described_class.trusted_entries(:formula)).to be_empty
+    expect(described_class.trusted_entries(:cask)).to be_empty
+    expect(described_class.trusted_entries(:command)).to be_empty
+  ensure
+    described_class.clear!(:tap)
+    described_class.clear!(:formula)
+    described_class.clear!(:cask)
+    described_class.clear!(:command)
+  end
+
   it "infers tap type for a remote URL argument" do
     result = described_class.target("https://gitlab.com/other/repo")
     expect(result).to eq([:tap, "https://gitlab.com/other/repo"])
@@ -89,17 +110,22 @@ RSpec.describe Homebrew::Trust, :trust_store do
     expect(described_class.trusted_entries(:tap)).to be_empty
   end
 
-  it "refuses new per-item trust for a custom-remote tap but still resolves existing entries to untrust" do
+  it "trusts custom-remote tap items by remote but still resolves existing entries to untrust" do
     tap = Tap.fetch("thirdparty", "custom")
     tap.path.mkpath
     system "git", "-C", tap.path.to_s, "init"
     system "git", "-C", tap.path.to_s, "remote", "add", "origin", "https://gitlab.com/other/repo"
 
-    expect { described_class.target("thirdparty/custom/bar", type: :formula) }
-      .to raise_error(UsageError, /custom remote/)
-    expect(described_class.target("thirdparty/custom/bar", type: :formula, include_existing: true))
-      .to eq([:formula, "thirdparty/custom/bar"])
+    described_class.trust!(*described_class.target("thirdparty/custom/bar", type: :formula))
+
+    expect(described_class.trusted?(:formula, "thirdparty/custom/bar")).to be(true)
+    expect(described_class.trusted_entries(:formula)).to contain_exactly("https://gitlab.com/other/repo/bar")
+
+    described_class.trust!(:formula, "thirdparty/custom/legacy")
+    expect(described_class.target("thirdparty/custom/legacy", type: :formula, include_existing: true))
+      .to eq([:formula, "thirdparty/custom/legacy"])
   ensure
+    described_class.clear!(:formula)
     FileUtils.rm_rf HOMEBREW_TAP_DIRECTORY/"thirdparty"
   end
 
@@ -201,7 +227,9 @@ RSpec.describe Homebrew::Trust, :trust_store do
 
   it "does not report taps with trusted entries as wholly untrusted" do
     allow(described_class).to receive(:untrusted_taps)
-      .and_return([instance_double(Tap, name: "thirdparty/foo")])
+      .and_return([
+        instance_double(Tap, name: "thirdparty/foo", reference: "thirdparty/foo", uses_custom_remote?: false),
+      ])
     described_class.trust!(:formula, "thirdparty/foo/bar")
 
     expect(described_class.wholly_untrusted_taps).to be_empty
