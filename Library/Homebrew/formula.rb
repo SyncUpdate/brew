@@ -46,6 +46,7 @@ require "api_hashable"
 require "release_cooldown"
 require "trust"
 require "utils/output"
+require "utils/path"
 require "pypi_packages"
 require "time"
 
@@ -83,6 +84,7 @@ class Formula
   include Utils::Shebang
   include Utils::Shell
   include Utils::Output::Mixin
+  include Utils::Path
   include Context
   include OnSystem::MacOSAndLinux
   include Homebrew::Livecheck::Constants
@@ -1091,12 +1093,7 @@ class Formula
 
   # All currently installed prefix directories.
   sig { returns(T::Array[Pathname]) }
-  def installed_prefixes
-    possible_names.map { |name| HOMEBREW_CELLAR/name }
-                  .select(&:directory?)
-                  .flat_map(&:subdirs)
-                  .sort_by(&:basename)
-  end
+  def installed_prefixes = Utils::Path.formula_installed_prefixes(possible_names)
 
   # All currently installed kegs.
   sig { returns(T::Array[Keg]) }
@@ -1533,7 +1530,7 @@ class Formula
   #
   # @api public
   sig { returns(Pathname) }
-  def opt_prefix = HOMEBREW_PREFIX/"opt"/name
+  def opt_prefix = formula_opt_prefix(name)
 
   # Same as {#bin}, but relative to {#opt_prefix} instead of {#prefix}.
   #
@@ -3757,6 +3754,7 @@ class Formula
       _JAVA_OPTIONS:           "-Duser.home=#{HOMEBREW_CACHE}/java_cache",
       GOCACHE:                 "#{HOMEBREW_CACHE}/go_cache",
       GIT_CONFIG_GLOBAL:       Utils::Git.no_global_config_file,
+      GIT_TERMINAL_PROMPT:     "0",
       GOENV:                   "off",
       GOPATH:                  "#{HOMEBREW_CACHE}/go_mod_cache",
       CARGO_HOME:              "#{HOMEBREW_CACHE}/cargo_cache",
@@ -4287,8 +4285,11 @@ class Formula
       namespace = T.must(to_s.split("::")[0..-2]).join("::")
       return [] if namespace.empty?
 
+      # The namespace is derived dynamically from the formula's own name.
+      # rubocop:disable Sorbet/ConstantsFromStrings
       mod = const_get(namespace)
       mod.const_get(:BUILD_FLAGS)
+      # rubocop:enable Sorbet/ConstantsFromStrings
     end
 
     # Allows adding {.depends_on} and {Patch}es just to the {.stable} {SoftwareSpec}.

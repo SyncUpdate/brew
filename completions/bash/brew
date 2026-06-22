@@ -1999,6 +1999,7 @@ _brew_list() {
       --installed-on-request
       --json
       --multiple
+      --no-installed-on-request
       --pinned
       --poured-from-bottle
       --quiet
@@ -2282,6 +2283,7 @@ _brew_pr_pull() {
       --clean
       --debug
       --dry-run
+      --head-sha
       --help
       --ignore-missing-artifacts
       --keep-old
@@ -2914,7 +2916,6 @@ _brew_tap_new() {
       --github-packages
       --help
       --no-git
-      --pull-label
       --quiet
       --verbose
       "

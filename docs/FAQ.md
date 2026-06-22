@@ -136,7 +136,7 @@ Homebrew refuses to work using sudo.
 You should only ever sudo a tool you trust. Of course, you can trust Homebrew 😉 — but do you trust the multi-megabyte Makefile that Homebrew runs? Developers often understand C++ far better than they understand `make` syntax. It’s too high a risk to sudo such stuff. It could modify (or upload) any files on your system. And indeed, we’ve seen some build scripts try to modify `/usr` even when the prefix was specified as something else entirely.
 
 We use the macOS sandbox to stop this but this doesn't work when run as the `root` user (which also has read and write access to almost everything on the system).
-The sandbox is part of Homebrew's wider [Software Supply Chain Security](Supply-Chain-Security.md) measures.
+The sandbox is part of Homebrew's wider [Software Supply Chain Security](Homebrew-Security-and-Supply-Chain.md) measures.
 
 Did you `chown root /Applications/TextMate.app`? Probably not. So is it that important to `chown root wget`?
 
@@ -214,24 +214,6 @@ You can [modify a tool's build configuration](How-to-Build-Software-Outside-Home
 ## How can I specify different configure arguments for a formula?
 
 `brew edit <formula>` and edit the formula directly. Currently there is no other way to do this.
-
-## Why can’t I open a Mac app from an "unidentified developer"?
-
-Chances are that certain apps will give you a popup message like this:
-
-<img src="assets/img/docs/gatekeeper-unidentified-message.png" width="532" alt="Gatekeeper unidentified developer message">
-
-This is a [security feature from Apple](https://support.apple.com/en-us/HT202491). The single most important thing to know is that __you can allow individual apps to be exempt from this feature.__ This allows the app to run while the rest of the system remains under protection.
-
-__Always leave system-wide protection enabled,__ and disable it only for specific apps as needed.
-
-If you're sure you want to trust the app, you can disable protection for it by right-clicking its icon and choosing *Open*:
-
-<img src="assets/img/docs/right-click-choose-open.png" width="312" style="margin-left:60px" alt="Right-click the app and choose Open">
-
-In the resulting dialog, click the *Open* button to have macOS permanently allow the app to run on this Mac. __Don’t do this unless you’re sure you trust the app.__
-
-<img src="assets/img/docs/gatekeeper-unidentified-open.png" width="532" alt="Gatekeeper unidentified developer open prompt">
 
 ## Why aren’t some apps included during `brew upgrade`?
 

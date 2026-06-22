@@ -1569,6 +1569,10 @@ paths within its current keg. If *`cask`* is provided, list its artifacts.
 
 : List the formulae installed on request.
 
+`--no-installed-on-request`
+
+: List the formulae not installed on request (i.e. installed as dependencies).
+
 `--poured-from-bottle`
 
 : List the formulae installed from a bottle.
@@ -3531,10 +3535,6 @@ Generate the template files for a new tap.
 
 : Don't initialize a Git repository for the tap.
 
-`--pull-label`
-
-: Label name for pull requests ready to be pulled (default: `pr-pull`).
-
 `--branch`
 
 : Initialize Git repository and setup GitHub Actions workflows with the
@@ -4252,6 +4252,14 @@ command execution (e.g. `$(cat file)`).
   
   *Default:* `86400` (24 hours), `3600` (1 hour) if a developer command has been
   run or `300` (5 minutes) if `$HOMEBREW_NO_INSTALL_FROM_API` is set.
+
+`HOMEBREW_AVOID_NESTED_SANDBOXING`
+
+: If set, skip Homebrew's sandbox when it is itself running inside another
+  sandbox, for an unprivileged user outside the default prefix. This trades
+  Homebrew's build-time network and filesystem denial for trust in the outer
+  sandbox. Homebrew errors out if the prefix or group makes skipping
+  unsupported.
 
 `HOMEBREW_BAT`
 

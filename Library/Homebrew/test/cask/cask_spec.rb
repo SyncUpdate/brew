@@ -85,6 +85,31 @@ RSpec.describe Cask::Cask, :cask do
         expect(described_class.all).to eq([])
       end
     end
+
+    it "skips invalid casks instead of aborting" do
+      tap = Tap.fetch("thirdparty", "foo")
+      cask_path = tap.cask_dir/"mismatch.rb"
+      cask_path.dirname.mkpath
+      cask_path.write <<~RUBY
+        cask "not-mismatch" do
+          version "1.0"
+          sha256 :no_check
+          url "https://example.com/foo.zip"
+          name "Foo"
+          app "Foo.app"
+        end
+      RUBY
+
+      allow(CoreCaskTap.instance).to receive(:cask_tokens).and_return([])
+      allow(Tap).to receive(:reject).and_return([tap])
+
+      with_env(HOMEBREW_NO_REQUIRE_TAP_TRUST: "1") do
+        expect { expect(described_class.all).to eq([]) }
+          .to output(/Cask 'mismatch' definition is invalid/).to_stderr
+      end
+    ensure
+      FileUtils.rm_rf HOMEBREW_TAP_DIRECTORY/"thirdparty"
+    end
   end
 
   describe "#any_version_installed?" do
@@ -99,17 +124,21 @@ RSpec.describe Cask::Cask, :cask do
     describe "#installed_version" do
       context "when there are duplicate versions" do
         it "uses the last unique version" do
-          allow(cask).to receive(:timestamped_versions).and_return([
-            ["1.2.2", "0999"],
-            ["1.2.3", "1000"],
-            ["1.2.2", "1001"],
-          ])
+          Dir.mktmpdir do |dir|
+            allow(Cask::Caskroom).to receive(:path).and_return(Pathname(dir))
+            [
+              ["1.2.2", "0999"],
+              ["1.2.3", "1000"],
+              ["1.2.2", "1001"],
+            ].each do |version, timestamp|
+              casks_dir = Pathname(dir)/"versioned-cask/.metadata/#{version}/#{timestamp}/Casks"
+              casks_dir.mkpath
+              # Installed caskfile must exist to count as installed.
+              (casks_dir/"versioned-cask.rb").write("cask \"versioned-cask\"\n")
+            end
 
-          # Installed caskfile must exist to count as installed.
-          allow_any_instance_of(Pathname).to receive(:exist?).and_return(true)
-
-          expect(cask).to receive(:timestamped_versions)
-          expect(cask.installed_version).to eq("1.2.2")
+            expect(cask.installed_version).to eq("1.2.2")
+          end
         end
       end
     end
@@ -277,6 +306,16 @@ RSpec.describe Cask::Cask, :cask do
         write_info_plist(cask.config.appdir/"MyFancyApp.app", short_version: "2.57", bundle_version: "2057")
 
         expect(cask.outdated_version).to eq("2.57")
+      end
+
+      it "is not outdated when auto-update upgrades are disabled" do
+        allow(Homebrew::EnvConfig).to receive(:upgrade_auto_updates_casks?).and_return(false)
+        tap_version = "2.61"
+        cask = write_auto_updates_cask(cask_file, version: tap_version, artifacts:)
+        allow(cask).to receive(:installed_version).and_return("2.57")
+        write_info_plist(cask.config.appdir/"MyFancyApp.app", short_version: "2.57", bundle_version: "2057")
+
+        expect(cask.outdated_version).to be_nil
       end
 
       it "is not outdated when the short version matches and the bundle version is lower than a CSV candidate" do

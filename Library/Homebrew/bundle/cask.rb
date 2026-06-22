@@ -11,10 +11,13 @@ module Homebrew
     class Cask < Homebrew::Bundle::PackageType
       extend ::Utils::Output::Mixin
 
-      PACKAGE_TYPE = :cask
-      PACKAGE_TYPE_NAME = "Cask"
-
       class << self
+        sig { override.returns(Symbol) }
+        def type = :cask
+
+        sig { override.returns(String) }
+        def check_label = "Cask"
+
         sig { override.void }
         def reset!
           @casks = T.let(nil, T.nilable(T::Array[::Cask::Cask]))
@@ -24,26 +27,6 @@ module Homebrew
           @outdated_casks = T.let(nil, T.nilable(T::Array[String]))
         end
 
-        private
-
-        sig { params(no_upgrade: T::Boolean, name: String, options: Homebrew::Bundle::EntryOptions).returns(T::Boolean) }
-        def upgrading?(no_upgrade, name, options)
-          return false if no_upgrade
-          return true if cask_upgradable?(name)
-          return false unless options[:greedy]
-
-          cask_is_outdated_using_greedy?(name)
-        end
-
-        sig { params(name: String, options: Homebrew::Bundle::EntryOptions, verbose: T::Boolean).returns(T::Boolean) }
-        def postinstall_change_state!(name:, options:, verbose:)
-          postinstall = T.cast(options.fetch(:postinstall, nil), T.nilable(String))
-          return true if postinstall.blank?
-
-          puts "Running postinstall for #{name}: #{postinstall}" if verbose
-          Kernel.system(postinstall) || false
-        end
-
         sig { returns(T::Array[::Cask::Cask]) }
         def casks
           return [] unless Bundle.cask_installed?
@@ -51,20 +34,6 @@ module Homebrew
           require "cask/caskroom"
           @casks ||= T.let(::Cask::Caskroom.casks, T.nilable(T::Array[::Cask::Cask]))
         end
-
-        sig { params(cask_config: ::Cask::Config).returns(String) }
-        def explicit_s(cask_config)
-          cask_config.explicit.map do |key, value|
-            # inverse of #env - converts :languages config key back to --language flag
-            if key == :languages
-              key = "language"
-              value = Array(cask_config.explicit.fetch(:languages, [])).join(",")
-            end
-            "#{key}: \"#{value.to_s.sub(/^#{Dir.home}/, "~")}\""
-          end.join(", ")
-        end
-
-        public
 
         # Override makes `name` a required argument unlike the parent's default-argument signature.
         # rubocop:disable Sorbet/AllowIncompatibleOverride
@@ -258,14 +227,56 @@ module Homebrew
 
         sig { params(cask_list: T::Array[String]).returns(T::Array[String]) }
         def formula_dependencies(cask_list)
-          return [] unless Bundle.cask_installed?
           return [] if cask_list.blank?
 
-          casks.flat_map do |cask|
-            next unless cask_list.include?(cask.to_s)
+          require "cask/cask_loader"
+
+          installed_cask_objects = casks
+          cask_list.flat_map do |cask_name|
+            cask = installed_cask_objects.find do |installed_cask|
+              cask_name == installed_cask.to_s || cask_name == installed_cask.full_name
+            end
+            cask ||= begin
+              ::Cask::CaskLoader.load(cask_name)
+            rescue ::Cask::CaskUnavailableError
+              nil
+            end
+            next unless cask
 
             cask.depends_on[:formula]
           end.compact
+        end
+
+        private
+
+        sig { params(no_upgrade: T::Boolean, name: String, options: Homebrew::Bundle::EntryOptions).returns(T::Boolean) }
+        def upgrading?(no_upgrade, name, options)
+          return false if no_upgrade
+          return true if cask_upgradable?(name)
+          return false unless options[:greedy]
+
+          cask_is_outdated_using_greedy?(name)
+        end
+
+        sig { params(name: String, options: Homebrew::Bundle::EntryOptions, verbose: T::Boolean).returns(T::Boolean) }
+        def postinstall_change_state!(name:, options:, verbose:)
+          postinstall = T.cast(options.fetch(:postinstall, nil), T.nilable(String))
+          return true if postinstall.blank?
+
+          puts "Running postinstall for #{name}: #{postinstall}" if verbose
+          Kernel.system(postinstall) || false
+        end
+
+        sig { params(cask_config: ::Cask::Config).returns(String) }
+        def explicit_s(cask_config)
+          cask_config.explicit.map do |key, value|
+            # inverse of #env - converts :languages config key back to --language flag
+            if key == :languages
+              key = "language"
+              value = Array(cask_config.explicit.fetch(:languages, [])).join(",")
+            end
+            "#{key}: \"#{value.to_s.sub(/^#{Dir.home}/, "~")}\""
+          end.join(", ")
         end
       end
 

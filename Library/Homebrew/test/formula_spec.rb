@@ -654,6 +654,16 @@ RSpec.describe Formula do
     expect(f).to have_any_version_installed
   end
 
+  specify "#formula_opt_bin" do
+    f = formula do
+      T.bind(self, T.class_of(Formula))
+      url "foo"
+      version "1.0"
+    end
+
+    expect(f.formula_opt_bin("foo")).to eq(HOMEBREW_PREFIX/"opt/foo/bin")
+  end
+
   specify "#migration_needed" do
     f = Testball.new("newname")
     f.instance_variable_set(:@oldnames, ["oldname"])
@@ -1154,6 +1164,7 @@ RSpec.describe Formula do
 
     expect(env).to include(
       "GIT_CONFIG_GLOBAL"     => Utils::Git.no_global_config_file,
+      "GIT_TERMINAL_PROMPT"   => "0",
       "GOENV"                 => "off",
       "NPM_CONFIG_USERCONFIG" => File::NULL,
       "PIP_CONFIG_FILE"       => File::NULL,
@@ -3151,6 +3162,7 @@ RSpec.describe Formula do
 
       expect(f.send(:common_sandbox_env, home)).to include(
         GIT_CONFIG_GLOBAL:     Utils::Git.no_global_config_file,
+        GIT_TERMINAL_PROMPT:   "0",
         GOENV:                 "off",
         NPM_CONFIG_USERCONFIG: File::NULL,
         PIP_CONFIG_FILE:       File::NULL,

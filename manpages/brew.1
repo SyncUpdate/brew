@@ -1002,6 +1002,9 @@ List only pinned packages, or only the specified (pinned) packages if \fIformula
 \fB\-\-installed\-on\-request\fP
 List the formulae installed on request\.
 .TP
+\fB\-\-no\-installed\-on\-request\fP
+List the formulae not installed on request (i\.e\. installed as dependencies)\.
+.TP
 \fB\-\-poured\-from\-bottle\fP
 List the formulae installed from a bottle\.
 .TP
@@ -2235,9 +2238,6 @@ Generate the template files for a new tap\.
 \fB\-\-no\-git\fP
 Don\[u2019]t initialize a Git repository for the tap\.
 .TP
-\fB\-\-pull\-label\fP
-Label name for pull requests ready to be pulled (default: \fBpr\-pull\fP)\.
-.TP
 \fB\-\-branch\fP
 Initialize Git repository and setup GitHub Actions workflows with the specified branch name (default: \fBmain\fP)\.
 .TP
@@ -2717,6 +2717,9 @@ Run \fBbrew update\fP once every \fB$HOMEBREW_AUTO_UPDATE_SECS\fP seconds before
 .P
 \fIDefault:\fP \fB86400\fP (24 hours), \fB3600\fP (1 hour) if a developer command has been run or \fB300\fP (5 minutes) if \fB$HOMEBREW_NO_INSTALL_FROM_API\fP is set\.
 .RE
+.TP
+\fBHOMEBREW_AVOID_NESTED_SANDBOXING\fP
+If set, skip Homebrew\[u2019]s sandbox when it is itself running inside another sandbox, for an unprivileged user outside the default prefix\. This trades Homebrew\[u2019]s build\-time network and filesystem denial for trust in the outer sandbox\. Homebrew errors out if the prefix or group makes skipping unsupported\.
 .TP
 \fBHOMEBREW_BAT\fP
 If set, use \fBbat\fP for the \fBbrew cat\fP command\.

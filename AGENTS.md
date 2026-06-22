@@ -33,6 +33,7 @@ Do not use conventional commit prefixes such as `feat:`, `fix:`, `chore:`, `refa
   Write fast tests by preferring a single `expect` per unit test and combine expectations in a single test when it is an integration test or has non-trivial `before` for test setup.
 - When adding or tightening tests, verify them with a red/green cycle using the exact `--only=file:line` target for the example you changed.
 - Formula classes created in specs may be frozen; avoid stubbing class methods on them with RSpec mocks and prefer instance-level stubs or test setup that does not require class-method stubbing.
+- RSpec snapshots and restores `ENV` around every example via the global `config.around` hook in `Library/Homebrew/test/spec_helper.rb` (it saves `ENV.to_hash` before `example.run` and calls `ENV.replace` in the `ensure`), so specs can set environment variables directly without a `with_env` wrapper or manual cleanup.
 - Keep comments minimal; prefer self-documenting code through strings, variable names, etc. over more comments.
 - Put a comment immediately above each `shellcheck disable` explaining why it is needed.
 - Aim to wrap human-written user-facing terminal output at around 80 characters; this does not apply to generated output or code.
@@ -61,8 +62,8 @@ Do not use conventional commit prefixes such as `feat:`, `fix:`, `chore:`, `refa
 7. Keep diffs as minimal as possible.
 8. Prefer shelling out via `HOMEBREW_BREW_FILE` instead of requiring `cmd/` or `dev-cmd` when composing brew commands.
 9. Inline new or existing methods as methods or local variables unless they are reused 2+ times or needed for unit tests.
-10. Avoid `T.must`; prefer explicit nil checks or APIs that return non-nil values.
+10. Avoid `T.must`, `T.cast`, `T.let`, `T.untyped` and `T.anything` where possible while maintaining `typed: strict`; prefer explicit nil checks, precise types and APIs that return non-nil values. If a generic top type is unavoidable, prefer `T.anything` over `T.untyped`.
 11. Avoid `T.unsafe(self)` whenever possible; prefer `requires_ancestor` or similar typed module patterns.
-12. Avoid `.send` in tests; call methods directly and make the method public or, for dynamic calls, use `.public_send`.
+12. Prefer `.public_send` over `.send` where possible; call methods directly when practical. Use `.send` only when a private API must be invoked.
 13. Keep `extend/os/*` prepends as thin as possible; put the `prepend` in the OS-specific `linux` or `macos` file rather than the shared `extend/os/*` loader with an inline `if`, and prefer putting substantive logic in shared code outside `extend/` when practical so it can be tested on all platforms instead of relying on `:needs_linux` or `:needs_macos` specs.
 14. When Bash logic mirrors Ruby logic, keep both implementations in sync and add two-way comments naming the matching Ruby and Bash locations; keep matching helper filenames aligned where practical.

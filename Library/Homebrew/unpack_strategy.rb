@@ -4,6 +4,7 @@
 require "mktemp"
 require "system_command"
 require "utils/output"
+require "utils/path"
 
 # Module containing all available strategies for unpacking archives.
 module UnpackStrategy
@@ -80,7 +81,10 @@ module UnpackStrategy
     }.fetch(type, type)
 
     begin
+      # The strategy class name is derived dynamically from the type.
+      # rubocop:disable Sorbet/ConstantsFromStrings
       const_get(type.to_s.split("_").map(&:capitalize).join.gsub(/\d+[a-z]/, &:upcase))
+      # rubocop:enable Sorbet/ConstantsFromStrings
     rescue NameError
       nil
     end
