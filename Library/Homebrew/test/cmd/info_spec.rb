@@ -60,6 +60,45 @@ RSpec.describe Homebrew::Cmd::Info do
       .and be_a_success
   end
 
+  it "does not include installed casks in formula JSON" do
+    formula = installed_info_formula
+
+    allow(Formula).to receive(:installed).and_return([formula])
+    expect(Cask::Caskroom).not_to receive(:casks)
+
+    output = +""
+    expect { described_class.new(["--json=v2", "--installed", "--formula"]).run }
+      .to output(satisfy { |s|
+        output << s
+        true
+      }).to_stdout
+        .and not_to_output.to_stderr
+
+    json = JSON.parse(output)
+    expect(json["formulae"].length).to eq(1)
+    expect(json["casks"]).to be_empty
+  end
+
+  it "does not include eval-all casks in formula JSON" do
+    formula = installed_info_formula
+
+    allow(Formula).to receive(:all).and_return([formula])
+    allow(Homebrew::EnvConfig).to receive(:tap_trust_configured?).and_return(true)
+    expect(Cask::Cask).not_to receive(:all)
+
+    output = +""
+    expect { described_class.new(["--json=v2", "--formula"]).run }
+      .to output(satisfy { |s|
+        output << s
+        true
+      }).to_stdout
+        .and not_to_output.to_stderr
+
+    json = JSON.parse(output)
+    expect(json["formulae"].length).to eq(1)
+    expect(json["casks"]).to be_empty
+  end
+
   it "prints installed formulae in a human-readable inventory" do
     mktmpdir do |dir|
       tabfile = dir/AbstractTab::FILENAME
@@ -245,7 +284,7 @@ RSpec.describe Homebrew::Cmd::Info do
       option "with-foo", "Build with foo"
     end
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to output(/Installs from source: yes/).to_stdout
@@ -293,7 +332,7 @@ RSpec.describe Homebrew::Cmd::Info do
       deprecate! date: "2024-01-01", because: :versioned_formula
     end
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to output(/==> .*testball.*\(deprecated\):/).to_stdout
@@ -311,7 +350,7 @@ RSpec.describe Homebrew::Cmd::Info do
       disable! date: "2024-01-01", because: :unmaintained
     end
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to output(/==> .*testball.*\(disabled\):/).to_stdout
@@ -436,7 +475,7 @@ RSpec.describe Homebrew::Cmd::Info do
       url "https://brew.sh/testball-0.1.tar.gz"
     end
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula, shadowed_by: Tap.fetch("homebrew/core")) }
       .to output(%r{Warning: `testball` shadows `homebrew/core/testball`}).to_stdout
@@ -556,7 +595,7 @@ RSpec.describe Homebrew::Cmd::Info do
     dependent_tab.write
 
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
     allow(direct_dependency).to receive(:satisfied?).and_return(true)
 
     expected_output = Regexp.new(
@@ -598,7 +637,7 @@ RSpec.describe Homebrew::Cmd::Info do
     end
 
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to output(/^Dependents \(2\): another-dependent, some-dependent$/).to_stdout
@@ -634,7 +673,7 @@ RSpec.describe Homebrew::Cmd::Info do
     installed_dep_tab.write
 
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
     allow(direct_dependency).to receive(:satisfied?).and_return(true)
 
     expect { info.send(:info_formula, formula) }
@@ -663,7 +702,7 @@ RSpec.describe Homebrew::Cmd::Info do
     tab.write
 
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to output(/Required \(1\): .*bar.*✘/).to_stdout
@@ -700,7 +739,7 @@ RSpec.describe Homebrew::Cmd::Info do
     allow(direct_dependency).to receive(:to_formula).and_return(bar_formula)
 
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to output(/Required \(1\): .*bar.*✔/).to_stdout
@@ -737,7 +776,7 @@ RSpec.describe Homebrew::Cmd::Info do
     allow(direct_dependency).to receive(:to_formula).and_return(bar_formula)
 
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to output(/Required \(1\): .*bar.*↑/).to_stdout
@@ -767,7 +806,7 @@ RSpec.describe Homebrew::Cmd::Info do
     allow(direct_dependency).to receive(:to_formula).and_return(bar_formula)
 
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to output(/Required \(1\): .*bar.*✔/).to_stdout
@@ -797,7 +836,7 @@ RSpec.describe Homebrew::Cmd::Info do
     allow(direct_dependency).to receive(:to_formula).and_return(bar_formula)
 
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to output(/Required \(1\): .*bar.*↑/).to_stdout
@@ -827,7 +866,7 @@ RSpec.describe Homebrew::Cmd::Info do
     allow(direct_dependency).to receive(:to_formula).and_return(pkgconf_formula)
 
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to output(/Required \(1\): .*pkg-config.*✔/).to_stdout
@@ -847,7 +886,7 @@ RSpec.describe Homebrew::Cmd::Info do
     end
 
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to output(/Required \(1\): bar\n/).to_stdout
@@ -874,7 +913,7 @@ RSpec.describe Homebrew::Cmd::Info do
     tab.write
 
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to output(/Required \(1\): .*bar.*✘/).to_stdout
@@ -907,7 +946,7 @@ RSpec.describe Homebrew::Cmd::Info do
     bar_tab.write
 
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to output(/Required \(1\): .*bar.*↑/).to_stdout
@@ -1032,7 +1071,7 @@ RSpec.describe Homebrew::Cmd::Info do
     tab.write
 
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to output(a_string_including("==> Binaries\nanother\ndaemon\ntestball\n")).to_stdout
@@ -1082,7 +1121,7 @@ RSpec.describe Homebrew::Cmd::Info do
     tab.write
 
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to not_to_output(/==> Binaries/).to_stdout
@@ -1105,7 +1144,7 @@ RSpec.describe Homebrew::Cmd::Info do
     tab.write
 
     allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
-    allow(formula).to receive(:core_formula?).and_return(false)
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
 
     expect { info.send(:info_formula, formula) }
       .to not_to_output(/==> Binaries/).to_stdout

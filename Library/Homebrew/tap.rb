@@ -553,7 +553,7 @@ class Tap
 
     redirected_reference = self.class.remote_to_reference(redirected_remote)
     if redirected_reference.present? && !self.class.remote_reference?(redirected_reference)
-      redirected_tap = self.class.fetch(redirected_reference)
+      redirected_tap = Tap.fetch(redirected_reference)
       if redirected_tap.name != name && !redirected_tap.installed?
         old_path = path
         redirected_tap.path.dirname.mkpath
@@ -594,7 +594,7 @@ class Tap
   def git_command!(args, chdir: nil)
     require "system_command"
 
-    SystemCommand.run!("git", args:, chdir:, print_stderr: true)
+    SystemCommand.run!("git", args:, chdir:, env: { "GIT_TERMINAL_PROMPT" => "0" }, print_stderr: true)
   end
   private :git_command!
 
@@ -886,11 +886,12 @@ class Tap
     remote.present? && custom_remote?
   end
 
-  # The canonical allow/forbid/trust list reference for this {Tap}.
-  sig { returns(String) }
-  def reference
-    remote = self.remote
-    return name if remote.nil? || !custom_remote?
+  # The canonical allow/forbid/trust list reference for this {Tap}. Pass `remote` to resolve against
+  # a not-yet-cloned remote (e.g. a Brewfile `clone_target`) instead of the installed one.
+  sig { params(remote: T.nilable(String)).returns(String) }
+  def reference(remote: nil)
+    remote = remote.presence || self.remote
+    return name if remote.nil? || self.class.same_remote?(remote, default_remote)
 
     remote
   end

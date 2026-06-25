@@ -604,6 +604,24 @@ RSpec.describe Tap do
       FileUtils.rm_rf HOMEBREW_TAP_DIRECTORY/"oldoutput"
       FileUtils.rm_rf HOMEBREW_TAP_DIRECTORY/"newoutput"
     end
+
+    it "updates the core cask tap remote from a redirect", :trust_store do
+      tap = CoreCaskTap.instance
+      tap.path.mkpath
+      system "git", "-C", tap.path.to_s, "init"
+      system "git", "-C", tap.path.to_s, "remote", "add", "origin", "https://github.com/caskroom/homebrew-cask"
+
+      tap.update_remote_from_git_redirect!(
+        "warning: redirecting to https://github.com/Homebrew/homebrew-cask\n",
+        quiet: true,
+      )
+
+      expect(Utils.popen_read("git", "-C", tap.path, "config", "remote.origin.url").chomp)
+        .to eq("https://github.com/Homebrew/homebrew-cask")
+    ensure
+      CoreCaskTap.instance.clear_cache
+      FileUtils.rm_rf CoreCaskTap.instance.path
+    end
   end
 
   specify "Git variant" do
@@ -619,6 +637,15 @@ RSpec.describe Tap do
   end
 
   describe "#install" do
+    it "disables terminal prompts for git commands" do
+      require "system_command"
+
+      expect(SystemCommand).to receive(:run!)
+        .with("git", args: %w[fetch], chdir: path, env: { "GIT_TERMINAL_PROMPT" => "0" }, print_stderr: true)
+
+      homebrew_foo_tap.send(:git_command!, %w[fetch], chdir: path)
+    end
+
     it "raises an error when the Tap is already tapped" do
       setup_git_repo
       already_tapped_tap = described_class.fetch("Homebrew", "foo")

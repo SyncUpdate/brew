@@ -261,34 +261,6 @@ RSpec.describe Formula do
     end
   end
 
-  describe "#full_formulae" do
-    let(:f) do
-      formula "foo" do
-        T.bind(self, T.class_of(Formula))
-        url "foo-1.0"
-      end
-    end
-
-    let(:f_full) do
-      formula "foo-full" do
-        T.bind(self, T.class_of(Formula))
-        url "foo-full-1.0"
-      end
-    end
-
-    before do
-      allow(Formulary).to receive(:load_formula_from_path).with(f_full.name, f_full.path).and_return(f_full)
-      allow(Formulary).to receive(:factory).with(f_full.name).and_return(f_full)
-      allow(f).to receive(:full_formulae_names).and_return([f_full.name])
-    end
-
-    it "returns array with sibling full formulae" do
-      FileUtils.touch f.path
-      FileUtils.touch f_full.path
-      expect(f.full_formulae).to eq [f_full]
-    end
-  end
-
   describe "#unversioned_formula_name" do
     let(:f) do
       formula "foo" do
@@ -565,7 +537,6 @@ RSpec.describe Formula do
       expect(f.installed_alias_path).to be_nil
       expect(f.installed_alias_name).to be_nil
       expect(f.full_installed_alias_name).to be_nil
-      expect(f.installed_specified_name).to eq(f.name)
       expect(f.full_installed_specified_name).to eq(f.name)
     end
 
@@ -579,7 +550,6 @@ RSpec.describe Formula do
     expect(f.installed_alias_path).to eq(alias_path)
     expect(f.installed_alias_name).to eq(alias_name)
     expect(f.full_installed_alias_name).to eq(alias_name)
-    expect(f.installed_specified_name).to eq(alias_name)
     expect(f.full_installed_specified_name).to eq(alias_name)
   end
 
@@ -601,7 +571,6 @@ RSpec.describe Formula do
       expect(f.installed_alias_path).to be_nil
       expect(f.installed_alias_name).to be_nil
       expect(f.full_installed_alias_name).to be_nil
-      expect(f.installed_specified_name).to eq(f.name)
       expect(f.full_installed_specified_name).to eq(f.full_name)
     end
 
@@ -616,7 +585,6 @@ RSpec.describe Formula do
     expect(f.installed_alias_path).to eq(alias_path)
     expect(f.installed_alias_name).to eq(alias_name)
     expect(f.full_installed_alias_name).to eq(full_alias_name)
-    expect(f.installed_specified_name).to eq(alias_name)
     expect(f.full_installed_specified_name).to eq(full_alias_name)
 
     FileUtils.rm_rf HOMEBREW_LIBRARY/"Taps/user"
@@ -1625,6 +1593,44 @@ RSpec.describe Formula do
     end
   end
 
+  describe "#missing_library_linkage" do
+    let(:f) do
+      formula("foo") do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+      end
+    end
+
+    it "returns empty when no keg is installed" do
+      allow(f).to receive(:any_installed_keg).and_return(nil)
+      expect(f.missing_library_linkage).to eq([[], Set.new])
+    end
+
+    it "returns only the formula's own and orphan libraries, excluding dependency-owned ones" do
+      keg = instance_double(Keg, directory?: true)
+      allow(f).to receive(:any_installed_keg).and_return(keg)
+      linkage_checker = instance_double(
+        LinkageChecker,
+        broken_deps:   { "foo" => ["libfoo.1.dylib"], "gmp" => ["libgmp.10.dylib"] },
+        broken_dylibs: Set["liborphan.2.dylib"],
+      )
+      allow(LinkageChecker).to receive(:new).and_return(linkage_checker)
+      expect(f.missing_library_linkage.first).to eq(["libfoo.1.dylib", "liborphan.2.dylib"])
+    end
+
+    it "returns the dependency names that own missing libraries, excluding the formula itself" do
+      keg = instance_double(Keg, directory?: true)
+      allow(f).to receive(:any_installed_keg).and_return(keg)
+      linkage_checker = instance_double(
+        LinkageChecker,
+        broken_deps:   { "foo" => ["libfoo.1.dylib"], "gmp" => ["libgmp.10.dylib"] },
+        broken_dylibs: Set.new,
+      )
+      allow(LinkageChecker).to receive(:new).and_return(linkage_checker)
+      expect(f.missing_library_linkage.last).to eq(Set["gmp"])
+    end
+  end
+
   specify "requirements" do
     # don't try to load/fetch gcc/glibc
     allow(DevelopmentTools).to receive_messages(needs_libc_formula?: false, needs_compiler_formula?: false)
@@ -1746,6 +1752,76 @@ RSpec.describe Formula do
       end
 
       expect(f.to_hash["patches"]).to eq([{ "strip" => "p2", "data" => true }])
+    end
+
+    it "serialises type and explicit resolves on an external patch" do
+      f = formula "foo" do
+        url "foo-1.0"
+        patch do
+          url "https://example.com/foo.diff"
+          sha256 TEST_SHA256
+          type :cherry_pick
+          resolves "CVE-2024-1111", "CVE-2024-2222"
+        end
+      end
+
+      expect(f.to_hash["patches"]).to eq([
+        {
+          "strip"    => "p1",
+          "url"      => "https://example.com/foo.diff",
+          "sha256"   => TEST_SHA256,
+          "type"     => "cherry-pick",
+          "resolves" => [
+            { "type" => "security", "id" => "CVE-2024-1111" },
+            { "type" => "security", "id" => "CVE-2024-2222" },
+          ],
+        },
+      ])
+    end
+
+    it "serialises resolves inferred from url and apply paths" do
+      f = formula "foo" do
+        url "foo-1.0"
+        patch do
+          url "https://example.com/debian.tar.xz"
+          sha256 TEST_SHA256
+          apply "patches/CVE-2024-1234.patch", "patches/cve-2024-5678.patch"
+        end
+      end
+
+      expect(f.to_hash["patches"].first["resolves"]).to eq([
+        { "type" => "security", "id" => "CVE-2024-1234" },
+        { "type" => "security", "id" => "CVE-2024-5678" },
+      ])
+    end
+
+    it "serialises non-CVE resolves entries with the appropriate issue type" do
+      f = formula "foo" do
+        url "foo-1.0"
+        patch do
+          url "https://example.com/foo.diff"
+          sha256 TEST_SHA256
+          resolves "CVE-2024-1234", "GHSA-xr7r-f8xq-vfvv", "https://github.com/foo/bar/issues/1"
+        end
+      end
+
+      expect(f.to_hash["patches"].first["resolves"]).to eq([
+        { "type" => "security", "id" => "CVE-2024-1234" },
+        { "type" => "security", "id" => "GHSA-xr7r-f8xq-vfvv" },
+        { "type" => "defect", "id" => "https://github.com/foo/bar/issues/1" },
+      ])
+    end
+
+    it "serialises type on a local file patch" do
+      f = formula "foo" do
+        url "foo-1.0"
+        patch do
+          file "Patches/foo.diff"
+          type :unofficial
+        end
+      end
+
+      expect(f.to_hash["patches"]).to eq([{ "strip" => "p1", "file" => "Patches/foo.diff", "type" => "unofficial" }])
     end
 
     it "serialises a local file patch" do
