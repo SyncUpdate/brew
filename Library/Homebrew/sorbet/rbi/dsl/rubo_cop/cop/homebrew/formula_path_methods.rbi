@@ -20,4 +20,10 @@ class RuboCop::Cop::Homebrew::FormulaPathMethods
 
   sig { params(node: RuboCop::AST::Node, kwargs: T.untyped, block: T.untyped).returns(T.untyped) }
   def formula_path_name_node(node, **kwargs, &block); end
+
+  sig { params(node: RuboCop::AST::Node, kwargs: T.untyped, block: T.untyped).returns(T.untyped) }
+  def service_block?(node, **kwargs, &block); end
+
+  sig { params(node: RuboCop::AST::Node, kwargs: T.untyped, block: T.untyped).returns(T.untyped) }
+  def utils_path?(node, **kwargs, &block); end
 end
