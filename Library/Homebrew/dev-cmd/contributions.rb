@@ -6,11 +6,11 @@ require "abstract_command"
 module Homebrew
   module DevCmd
     class Contributions < AbstractCommand
-      PRIMARY_REPOS = T.let(%w[
+      PRIMARY_REPOS = %w[
         Homebrew/brew
         Homebrew/homebrew-core
         Homebrew/homebrew-cask
-      ].freeze, T::Array[String])
+      ].freeze
       CONTRIBUTION_TYPES = T.let({
         merged_pr_author:   "merged PR author",
         approved_pr_review: "approved PR reviewer",
@@ -213,7 +213,7 @@ module Homebrew
           person:       String,
           from:         String,
           to:           String,
-        ).returns(T::Hash[Symbol, T.untyped])
+        ).returns(T::Hash[String, T::Hash[Symbol, Integer]])
       }
       def scan_repositories(organisation, repositories, person, from:, to:)
         data = {}
@@ -266,7 +266,7 @@ module Homebrew
         data
       end
 
-      sig { params(results: T::Hash[Symbol, T.untyped]).returns(T::Hash[Symbol, Integer]) }
+      sig { params(results: T::Hash[String, T::Hash[Symbol, Integer]]).returns(T::Hash[Symbol, Integer]) }
       def total(results)
         totals = {}
 

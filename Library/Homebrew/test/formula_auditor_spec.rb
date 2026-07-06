@@ -798,6 +798,98 @@ RSpec.describe Homebrew::FormulaAuditor do
       expect(fa.problems).to be_empty
     end
 
+    it "accepts a curl dependency with a working HTTP mirror" do
+      sha256 = "31cccfc6630528db1c8e3a06f6decf2a370060b982841cfab2b8677400a5092e"
+      mirror_url = "http://brew.sh/mirror/foo-1.0.tgz"
+      allow(Homebrew::ResourceAuditor).to receive(:curl_deps).and_return(["foo"])
+      fa = formula_auditor "foo", <<~RUBY, online: true
+        class Foo < Formula
+          url "https://brew.sh/foo-1.0.tgz"
+          mirror "#{mirror_url}"
+          sha256 "#{sha256}"
+        end
+      RUBY
+      allow_any_instance_of(Homebrew::ResourceAuditor).to receive(:curl_http_content_headers_and_checksum)
+        .and_return(status_code: "200", final_url: nil, file_hash: sha256)
+
+      fa.audit_specs
+      expect(fa.problems).to be_empty
+    end
+
+    it "accepts a curl dependency whose HTTP mirror redirects to a relative path" do
+      sha256 = "31cccfc6630528db1c8e3a06f6decf2a370060b982841cfab2b8677400a5092e"
+      allow(Homebrew::ResourceAuditor).to receive(:curl_deps).and_return(["foo"])
+      fa = formula_auditor "foo", <<~RUBY, online: true
+        class Foo < Formula
+          url "https://brew.sh/foo-1.0.tgz"
+          mirror "http://brew.sh/mirror/foo-1.0.tgz"
+          sha256 "#{sha256}"
+        end
+      RUBY
+      allow_any_instance_of(Homebrew::ResourceAuditor).to receive(:curl_http_content_headers_and_checksum)
+        .and_return(status_code: "200", final_url: "/mirror/foo-1.0.tgz", file_hash: sha256)
+
+      fa.audit_specs
+      expect(fa.problems).to be_empty
+    end
+
+    it "reports a curl dependency whose HTTP mirror serves the wrong checksum" do
+      mirror_url = "http://brew.sh/mirror/foo-1.0.tgz"
+      allow(Homebrew::ResourceAuditor).to receive(:curl_deps).and_return(["foo"])
+      fa = formula_auditor "foo", <<~RUBY, online: true
+        class Foo < Formula
+          url "https://brew.sh/foo-1.0.tgz"
+          mirror "#{mirror_url}"
+          sha256 "31cccfc6630528db1c8e3a06f6decf2a370060b982841cfab2b8677400a5092e"
+        end
+      RUBY
+      allow_any_instance_of(Homebrew::ResourceAuditor).to receive(:curl_http_content_headers_and_checksum)
+        .and_return(status_code: "200", final_url: mirror_url, file_hash: "deadbeef")
+
+      fa.audit_specs
+      expect(fa.problems).to include(
+        a_hash_including(message: a_string_including("must have a working HTTP mirror")),
+      )
+    end
+
+    it "reports a curl dependency whose HTTP mirror is unreachable" do
+      mirror_url = "http://brew.sh/mirror/foo-1.0.tgz"
+      allow(Homebrew::ResourceAuditor).to receive(:curl_deps).and_return(["foo"])
+      fa = formula_auditor "foo", <<~RUBY, online: true
+        class Foo < Formula
+          url "https://brew.sh/foo-1.0.tgz"
+          mirror "#{mirror_url}"
+          sha256 "31cccfc6630528db1c8e3a06f6decf2a370060b982841cfab2b8677400a5092e"
+        end
+      RUBY
+      allow_any_instance_of(Homebrew::ResourceAuditor).to receive(:curl_http_content_headers_and_checksum)
+        .and_return(status_code: nil, final_url: nil, file_hash: nil)
+
+      fa.audit_specs
+      expect(fa.problems).to include(
+        a_hash_including(message: a_string_including("must have a working HTTP mirror")),
+      )
+    end
+
+    it "reports a curl dependency whose HTTP mirror redirects to HTTPS" do
+      sha256 = "31cccfc6630528db1c8e3a06f6decf2a370060b982841cfab2b8677400a5092e"
+      allow(Homebrew::ResourceAuditor).to receive(:curl_deps).and_return(["foo"])
+      fa = formula_auditor "foo", <<~RUBY, online: true
+        class Foo < Formula
+          url "https://brew.sh/foo-1.0.tgz"
+          mirror "http://brew.sh/mirror/foo-1.0.tgz"
+          sha256 "#{sha256}"
+        end
+      RUBY
+      allow_any_instance_of(Homebrew::ResourceAuditor).to receive(:curl_http_content_headers_and_checksum)
+        .and_return(status_code: "200", final_url: "https://brew.sh/mirror/foo-1.0.tgz", file_hash: sha256)
+
+      fa.audit_specs
+      expect(fa.problems).to include(
+        a_hash_including(message: a_string_including("must have a working HTTP mirror")),
+      )
+    end
+
     it "requires `branch:` to be specified for Git head URLs" do
       fa = formula_auditor "foo", <<~RUBY, online: true
         class Foo < Formula
@@ -1184,6 +1276,71 @@ RSpec.describe Homebrew::FormulaAuditor do
         end
 
         it(:problems) { expect(f_a.problems).to be_empty }
+      end
+    end
+
+    describe "when formula lacks OS requirement but has OS-specific dependency" do
+      subject(:f_a) { fa }
+
+      let(:fa) do
+        formula_auditor "foo", <<~RUBY, core_tap: true
+          class Foo < Formula
+            url "https://brew.sh/foo-1.0.tgz"
+            homepage "https://brew.sh"
+
+            depends_on "os-only"
+          end
+        RUBY
+      end
+
+      before do
+        allow(fa.formula.deps.first).to receive(:to_formula).and_return(f_os_only)
+      end
+
+      describe "for macOS when running on Linux" do
+        let(:f_os_only) do
+          formula do
+            T.bind(self, T.class_of(Formula))
+            url "https://brew.sh/os-only-1.0.tgz"
+            homepage "https://brew.sh"
+
+            depends_on :macos
+          end
+        end
+
+        around do |example|
+          Homebrew::SimulateSystem.with(os: :linux) do
+            example.run
+          end
+        end
+
+        it "reports missing requirement" do
+          fa.audit_deps
+          expect(f_a.problems).to include(a_hash_including(message: a_string_matching(/has a macOS requirement/)))
+        end
+      end
+
+      describe "for Linux when running on macOS" do
+        let(:f_os_only) do
+          formula do
+            T.bind(self, T.class_of(Formula))
+            url "https://brew.sh/os-only-1.0.tgz"
+            homepage "https://brew.sh"
+
+            depends_on :linux
+          end
+        end
+
+        around do |example|
+          Homebrew::SimulateSystem.with(os: :macos) do
+            example.run
+          end
+        end
+
+        it "reports missing requirement" do
+          fa.audit_deps
+          expect(f_a.problems).to include(a_hash_including(message: a_string_matching(/has a Linux requirement/)))
+        end
       end
     end
   end

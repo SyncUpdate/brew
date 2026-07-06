@@ -875,13 +875,13 @@ class Formula
   # @api internal
   sig { returns(T::Array[String]) }
   def oldnames
-    @oldnames ||= T.let(
-      if (tap = self.tap)
-        Tap.tap_migration_oldnames(tap, name) + tap.formula_reverse_renames.fetch(name, [])
-      else
-        []
-      end, T.nilable(T::Array[String])
-    )
+    @oldnames ||= T.let(nil, T.nilable(T::Array[String]))
+    @oldnames ||= if (tap = self.tap)
+      oldnames = Tap.tap_migration_oldnames(tap, name) + tap.formula_reverse_renames.fetch(name, [])
+      oldnames.reject { |oldname| Utils.name_from_full_name(oldname) == name }
+    else
+      []
+    end
   end
 
   # All aliases for the formula.
@@ -1585,16 +1585,6 @@ class Formula
   sig { returns(T::Boolean) }
   def post_install_steps_defined? = self.class.post_install_steps_defined?
 
-  sig { returns(T::Boolean) }
-  def post_install_steps_conflict?
-    post_install_steps_defined? && post_install_defined?
-  end
-
-  sig { void }
-  def warn_on_post_install_steps_conflict
-    opoo "#{full_name}: `post_install` is ignored because `post_install_steps` are defined!"
-  end
-
   sig { void }
   def install_etc_var
     etc_var_dirs = [bottle_prefix/"etc", bottle_prefix/"var"]
@@ -2125,6 +2115,7 @@ class Formula
       -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=#{HOMEBREW_LIBRARY_PATH}/cmake/trap_fetchcontent_provider.cmake
       -Wno-dev
       -DBUILD_TESTING=OFF
+      -DCCACHE_FOUND=OFF
     ]
   end
 

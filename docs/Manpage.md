@@ -1296,8 +1296,9 @@ Display brief statistics for your Homebrew installation. If a *`formula`* or
 `--json`
 
 : Print a JSON representation. Currently the default value for *`version`* is
-  `v1` for *`formula`*. For *`formula`* and *`cask`* use `v2`. See the docs for
-  examples of using the JSON output: <https://docs.brew.sh/Querying-Brew>
+  `v1`.`v1` is valid for *`formula`* only. `v2` is valid for both *`formula`*
+  and *`cask`*.See the docs for examples of using the JSON output:
+  <https://docs.brew.sh/Querying-Brew>
 
 `--installed`
 
@@ -3697,10 +3698,6 @@ and Linux workers.
 
 : Don't test livecheck.
 
-`--skip-recursive-dependents`
-
-: Only test the direct dependents.
-
 `--skip-checksum-only-audit`
 
 : Don't audit checksum-only changes.
@@ -4921,11 +4918,6 @@ command execution (e.g. `$(cat file)`).
   all formulae and casks.
   
   *Default:* `true`.
-
-`HOMEBREW_SBOM`
-
-: If set, Homebrew will write SBOM files and run SBOM-related installation
-  logic.
 
 `HOMEBREW_SIMULATE_MACOS_ON_LINUX`
 

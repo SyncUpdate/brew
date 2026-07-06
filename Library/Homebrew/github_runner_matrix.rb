@@ -107,12 +107,15 @@ class GitHubRunnerMatrix
     else raise "Unknown Linux architecture: #{arch}"
     end
 
+    options = %w[--user linuxbrew --env GITHUB_ACTIONS_HOMEBREW_SELF_HOSTED]
+    options << "--privileged" if Homebrew::EnvConfig.sandbox_linux?
+
     LinuxRunnerSpec.new(
       name:      "Linux #{arch}",
       runner:    linux_runner,
       container: {
         image:   "ghcr.io/homebrew/brew:main",
-        options: "--user=linuxbrew -e GITHUB_ACTIONS_HOMEBREW_SELF_HOSTED",
+        options: options.join(" "),
       },
       workdir:   "/github/home",
       timeout:   GITHUB_ACTIONS_LONG_TIMEOUT,
@@ -120,8 +123,8 @@ class GitHubRunnerMatrix
     )
   end
 
-  VALID_PLATFORMS = T.let([:macos, :linux].freeze, T::Array[Symbol])
-  VALID_ARCHES = T.let([:arm64, :x86_64].freeze, T::Array[Symbol])
+  VALID_PLATFORMS = [:macos, :linux].freeze
+  VALID_ARCHES = [:arm64, :x86_64].freeze
   private_constant :VALID_PLATFORMS, :VALID_ARCHES
 
   sig {
@@ -322,7 +325,7 @@ class GitHubRunnerMatrix
         compatible_dependents = formula.dependents(platform:, arch:, macos_version: macos_version&.to_sym)
                                        .select do |dependent_f|
           Homebrew::SimulateSystem.with(os: platform, arch: Homebrew::SimulateSystem.arch_symbols.fetch(arch)) do
-            simulated_dependent_f = TestRunnerFormula.new(Formulary.factory(dependent_f.name))
+            simulated_dependent_f = dependent_f
             next false if macos_version && !simulated_dependent_f.compatible_with?(macos_version)
 
             simulated_dependent_f.public_send(:"#{platform}_compatible?") &&

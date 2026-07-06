@@ -11,14 +11,14 @@ require "utils/repology"
 module Homebrew
   module DevCmd
     class Bump < AbstractCommand
-      DEFAULT_CURL_ARGS = T.let([
+      DEFAULT_CURL_ARGS = [
         "--compressed",
         "--fail-with-body",
         "--location",
         "--max-redirs",
         "5",
         "--silent",
-      ].freeze, T::Array[String])
+      ].freeze
       DEFAULT_CURL_OPTIONS = T.let({
         connect_timeout: 15,
         max_time:        55,
@@ -374,6 +374,16 @@ module Homebrew
         # simulate the arm architecture.
         arch_options = is_cask_with_blocks ? OnSystem::ARCH_OPTIONS : [:arm]
 
+        # If the cask restricts to specific architectures via
+        # `depends_on arch:`, only simulate those architectures.
+        if is_cask_with_blocks && formula_or_cask.is_a?(Cask::Cask)
+          arch_deps = formula_or_cask.depends_on.arch
+          if arch_deps.present?
+            supported_archs = arch_deps.filter_map { |dep| dep[:type] } & arch_options
+            arch_options = supported_archs if supported_archs.present?
+          end
+        end
+
         arch_options.each do |arch|
           SimulateSystem.with(arch:) do
             version_key = is_cask_with_blocks ? arch : :general
@@ -425,14 +435,21 @@ module Homebrew
           end
         end
 
-        # If arm and intel versions are identical, as it happens with casks
-        # where only the checksums differ, we consolidate them into a single
-        # version.
-        if current_versions[:arm].present? && current_versions[:arm] == current_versions[:intel]
-          current_versions = { general: current_versions[:arm] }
-        end
-        if new_versions[:arm].present? && new_versions[:arm] == new_versions[:intel]
-          new_versions = { general: new_versions[:arm] }
+        # Consolidate into a single general version when only one architecture
+        # was simulated (e.g. `depends_on arch:` restricts to a single arch) or
+        # when the arm and intel versions are identical, as happens with casks
+        # where only the checksums differ.
+        if is_cask_with_blocks && arch_options.length == 1
+          single_arch = arch_options[0]
+          current_versions = { general: current_versions[single_arch] }
+          new_versions = { general: new_versions[single_arch] }
+        else
+          if current_versions[:arm].present? && current_versions[:arm] == current_versions[:intel]
+            current_versions = { general: current_versions[:arm] }
+          end
+          if new_versions[:arm].present? && new_versions[:arm] == new_versions[:intel]
+            new_versions = { general: new_versions[:arm] }
+          end
         end
 
         current_version = BumpVersionParser.new(general: current_versions[:general],
@@ -919,7 +936,7 @@ module Homebrew
           url = version_info.dig(:meta, :url, :strategy)&.delete_suffix("/latest")
           return unless url
 
-          stdout, _stderr, status = Utils::Curl.curl_output(*DEFAULT_CURL_ARGS, url, **DEFAULT_CURL_OPTIONS)
+          stdout, _stderr, status = Utils::Curl.curl_output(*DEFAULT_CURL_ARGS, url, **DEFAULT_CURL_OPTIONS).to_a
           return unless status.success?
           return if (content = stdout.scrub).blank?
 
@@ -951,7 +968,7 @@ module Homebrew
 
           content = version_info[:content]
           unless content
-            stdout, _stderr, status = Utils::Curl.curl_output(*DEFAULT_CURL_ARGS, url, **DEFAULT_CURL_OPTIONS)
+            stdout, _stderr, status = Utils::Curl.curl_output(*DEFAULT_CURL_ARGS, url, **DEFAULT_CURL_OPTIONS).to_a
             return unless status.success?
 
             content = stdout.scrub
@@ -987,7 +1004,7 @@ module Homebrew
           match = Homebrew::Livecheck::Strategy::RubyGems::URL_MATCH_REGEX.match(original_url)
           return unless match
 
-          stdout, _stderr, status = Utils::Curl.curl_output(*DEFAULT_CURL_ARGS, url, **DEFAULT_CURL_OPTIONS)
+          stdout, _stderr, status = Utils::Curl.curl_output(*DEFAULT_CURL_ARGS, url, **DEFAULT_CURL_OPTIONS).to_a
           return unless status.success?
           return if (content = stdout.scrub).blank?
 

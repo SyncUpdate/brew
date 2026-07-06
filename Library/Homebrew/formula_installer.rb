@@ -113,7 +113,7 @@ class FormulaInstaller
     @debug_symbols = debug_symbols
     @installed_on_request = installed_on_request
     link_keg ||= !formula.keg_only? || auto_link_versioned_keg_only?
-    @link_keg = T.let(link_keg, T::Boolean)
+    @link_keg = link_keg
     @show_header = show_header
     @ignore_deps = ignore_deps
     @only_deps = only_deps
@@ -774,7 +774,12 @@ on_request: installed_on_request?, options:)
   def expand_dependencies_for_formula(formula)
     # Cache for this expansion only. FormulaInstaller has a lot of inputs which can alter expansion.
     cache_key = "FormulaInstaller-#{formula.full_name}-#{Time.now.to_f}"
-    Dependency.expand(formula, cache_key:) do |dependent, dep|
+    formula_cache = T.let({}, T::Hash[Dependency, Formula])
+    satisfied_cache = T.let(
+      {},
+      T::Hash[T::Array[T.nilable(T.any(Dependency, String, Integer))], T::Boolean],
+    )
+    Dependency.expand(formula, cache_key:, formula_cache:) do |dependent, dep|
       dependent = T.cast(dependent, Formula)
       build = effective_build_options_for(dependent)
 
@@ -788,11 +793,19 @@ on_request: installed_on_request?, options:)
       minimum_revision = @bottle_tab_runtime_dependencies.dig(dep.name, "revision")&.to_i
       bottle_os_version = @bottle_built_os_version
 
-      if dep.prune_from_option?(build) || ((dep.build? || dep.test?) && !keep_build_test)
-        next Dependable::PRUNE
-      elsif dep.satisfied?(minimum_version:, minimum_revision:, bottle_os_version:)
-        next Dependable::SKIP
+      next Dependable::PRUNE if dep.prune_from_option?(build) || ((dep.build? || dep.test?) && !keep_build_test)
+
+      satisfied_cache_key = T.let([
+        dep,
+        minimum_version&.to_s,
+        minimum_revision,
+        bottle_os_version,
+      ], T::Array[T.nilable(T.any(Dependency, String, Integer))])
+      satisfied = satisfied_cache.fetch(satisfied_cache_key) do
+        satisfied_cache[satisfied_cache_key] = dep.satisfied?(minimum_version:, minimum_revision:, bottle_os_version:)
       end
+
+      next Dependable::SKIP if satisfied
     end
   end
 
@@ -832,7 +845,8 @@ on_request: installed_on_request?, options:)
                                 outdated: installed && dep_formula.outdated?, mark_uninstalled: false,
                                 bold: false)
         end
-        oh1 "Installing dependencies for #{formula.full_name}: #{names.to_sentence}", truncate: false
+        oh1 "Installing dependencies for #{formula.full_name}:#{Tty.reset} #{names.to_sentence}",
+            truncate: false
       end
       deps_with_formulae.each { |dep, dep_formula| install_dependency(dep, dep_formula) }
     end
@@ -1003,12 +1017,8 @@ on_request: installed_on_request?, options:)
       end
     else
       formula.install_etc_var
-      if formula.post_install_steps_defined?
-        formula.warn_on_post_install_steps_conflict if formula.post_install_steps_conflict? && !quiet?
-        formula.run_post_install_steps
-      elsif formula.post_install_defined?
-        post_install
-      end
+      formula.run_post_install_steps if formula.post_install_steps_defined?
+      post_install if formula.post_install_defined?
     end
 
     keg.prepare_debug_symbols if debug_symbols?
@@ -1028,8 +1038,13 @@ on_request: installed_on_request?, options:)
     tab.runtime_dependencies = Tab.runtime_deps_hash(formula, f_runtime_deps)
     tab.write
 
-    # write/update a SBOM file (if requested and we aren't bottling)
-    if Homebrew::EnvConfig.sbom? && !build_bottle?
+    # Update packaged SBOM metadata or write a source-install SBOM.
+    if @poured_bottle
+      if (install_time = tab.time)
+        require "sbom"
+        SBOM.update_pour_metadata(SBOM.spdxfile(formula), homebrew_version: HOMEBREW_VERSION, time: install_time)
+      end
+    elsif Homebrew::EnvConfig.sbom? && !build_bottle?
       require "sbom"
       sbom = SBOM.create(formula, tab)
       sbom.write(validate: Homebrew::EnvConfig.developer?)
