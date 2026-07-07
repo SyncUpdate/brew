@@ -391,7 +391,7 @@ module Cask
         return if Homebrew::EnvConfig.no_install_from_api?
         return unless ref.is_a?(String)
         return unless (token = ref[HOMEBREW_DEFAULT_TAP_CASK_REGEX, :token])
-        if Homebrew::API.cask_tokens.exclude?(token) &&
+        if !Homebrew::API.cask_token?(token) &&
            !Homebrew::API.cask_renames.key?(token)
           return
         end
@@ -460,8 +460,9 @@ module Cask
         if @from_installed_caskfile
           api_source = api_source.dup
           installed_tab = Cask.new(token).tab
-          api_source["version"] = api_source["version"].presence || installed_tab.version.presence ||
-                                  @sourcefile_path.dirname.dirname.dirname.basename.to_s
+          api_source["version"] = api_source["version"].presence ||
+                                  @sourcefile_path.dirname.dirname.dirname.basename.to_s.presence ||
+                                  installed_tab.version.presence
           api_source["artifacts"] ||= installed_tab.uninstall_artifacts || []
         end
 
@@ -717,7 +718,7 @@ module Cask
       if warn && old_token && new_token
         destination_exists = find_cask_in_tap(token, tap).exist? ||
                              (tap.core_cask_tap? && !Homebrew::EnvConfig.no_install_from_api? &&
-                              Homebrew::API.cask_tokens.include?(token))
+                              Homebrew::API.cask_token?(token))
         opoo "Cask #{old_token} was renamed to #{new_token}." if destination_exists
       end
 

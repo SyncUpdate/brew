@@ -851,7 +851,7 @@ on_request: installed_on_request?, options:)
       deps_with_formulae.each { |dep, dep_formula| install_dependency(dep, dep_formula) }
     end
 
-    @show_header = true if deps.length > 1
+    @show_header = true unless deps.empty?
   end
 
   sig { params(dep: Dependency).void }
@@ -1042,7 +1042,12 @@ on_request: installed_on_request?, options:)
     if @poured_bottle
       if (install_time = tab.time)
         require "sbom"
-        SBOM.update_pour_metadata(SBOM.spdxfile(formula), homebrew_version: HOMEBREW_VERSION, time: install_time)
+        SBOM.update_pour_metadata(
+          SBOM.spdxfile(formula),
+          homebrew_version: HOMEBREW_VERSION,
+          time:             install_time,
+          supplement:       (api_bottle || formula.bottle)&.sbom_supplement,
+        )
       end
     elsif Homebrew::EnvConfig.sbom? && !build_bottle?
       require "sbom"
