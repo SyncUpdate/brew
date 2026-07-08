@@ -144,8 +144,6 @@ module Cask
       summary_deprecated: nil,
       summary_disabled: nil
     )
-      quarantine = true if quarantine.nil?
-
       outdated_casks =
         self.outdated_casks(casks, args:, greedy:, greedy_latest:, greedy_auto_updates:, force:, quiet:,
                                    summary_pinned:, summary_disabled:)
@@ -282,28 +280,34 @@ module Cask
         new_cask:               Cask,
         old_signing_identities: T::Hash[String, T.nilable(Quarantine::SigningIdentity)],
         old_user_approved:      T::Hash[String, T::Boolean],
-      ).returns(T::Boolean)
+      ).returns(Symbol)
     }
-    def self.release_app_upgrade_quarantine?(old_cask, new_cask, old_signing_identities, old_user_approved)
+    def self.quarantine_release_decision(old_cask, new_cask, old_signing_identities, old_user_approved)
       old_app_artifacts = old_cask.artifacts.grep(Artifact::App)
       new_app_artifacts = new_cask.artifacts.grep(Artifact::App)
-      return false if old_app_artifacts.empty? || old_app_artifacts.length != new_app_artifacts.length
+      return :skip if old_app_artifacts.empty? || old_app_artifacts.length != new_app_artifacts.length
 
-      old_app_artifacts.each_with_index.all? do |artifact, index|
-        next false unless old_user_approved.fetch(artifact.target.to_s, false)
+      approved = old_app_artifacts.each_with_index.select do |artifact, _index|
+        old_user_approved.fetch(artifact.target.to_s, false)
+      end
 
+      signer_changed = approved.any? do |artifact, index|
         old_identity = old_signing_identities[artifact.target.to_s]
         new_identity = Quarantine.signing_identity(new_app_artifacts.fetch(index).target)
-
         [
           [old_identity&.identifier, new_identity&.identifier],
           [old_identity&.team_identifier, new_identity&.team_identifier],
-        ].none? do |old_value, new_value|
+        ].any? do |old_value, new_value|
           !old_value.nil? && !new_value.nil? && old_value != new_value
         end
       end
+
+      return :signer_changed if signer_changed
+      return :unapproved if approved.length != old_app_artifacts.length
+
+      :release
     rescue
-      false
+      :skip
     end
 
     sig { params(old_cask: Cask, new_cask: Cask).void }
@@ -366,6 +370,7 @@ module Cask
 
       old_cask_installer =
         Installer.new(old_cask, **old_options)
+      old_tab = old_cask.tab
 
       new_cask.config = new_cask.default_config.merge(old_config)
 
@@ -423,11 +428,22 @@ module Cask
         new_cask_installer.install_artifacts(predecessor: old_cask)
         new_artifacts_installed = true
 
-        if quarantine.nil? &&
-           Quarantine.available? &&
-           release_app_upgrade_quarantine?(old_cask, new_cask, old_signing_identities, old_user_approved)
-          new_cask.artifacts.grep(Artifact::App).each do |artifact|
-            Quarantine.release!(download_path: artifact.target)
+        if quarantine.nil? && Quarantine.available?
+          case quarantine_release_decision(old_cask, new_cask, old_signing_identities, old_user_approved)
+          when :release
+            new_cask.artifacts.grep(Artifact::App).each do |artifact|
+              Quarantine.release!(download_path: artifact.target)
+            end
+          when :signer_changed
+            opoo "#{new_cask.token}'s signer changed so macOS will prompt at next launch."
+          when :unapproved
+            message = "#{new_cask.token} wasn't quarantine approved so not approving now. " \
+                      "macOS will prompt at next launch."
+            if verbose
+              ohai message
+            else
+              odebug message
+            end
           end
         end
 
@@ -436,11 +452,25 @@ module Cask
 
         reopen_apps_after_upgrade(old_cask, new_cask) if quit
       rescue => e
-        new_cask_installer.uninstall_artifacts(successor: old_cask, quit:) if new_artifacts_installed
-        new_cask_installer.purge_versioned_files
-        old_cask_installer.revert_upgrade(predecessor: new_cask) if started_upgrade
+        begin
+          new_cask_installer.uninstall_artifacts(successor: old_cask, quit:) if new_artifacts_installed
+          new_cask_installer.purge_versioned_files
+          old_cask_installer.revert_upgrade(predecessor: new_cask) if started_upgrade
+        rescue => rollback_error
+          opoo "Rolling back the failed upgrade of #{old_cask.token} also failed: " \
+               "#{rollback_error.class}: #{rollback_error.message}"
+          if (rollback_backtrace = rollback_error.backtrace)
+            odebug "Rollback backtrace:", rollback_backtrace
+          end
+        end
         raise e
       end
+
+      # Wait until rollback is no longer possible so failures keep the old
+      # receipt, while successful upgrades can load artifacts next time.
+      tab = Tab.create(new_cask)
+      tab.installed_on_request = old_tab.tabfile.nil? || old_tab.installed_on_request
+      tab.write
 
       end_time = Time.now
       Homebrew.messages.package_installed(new_cask.token, end_time - start_time)

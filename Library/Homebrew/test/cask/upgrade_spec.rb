@@ -491,60 +491,60 @@ RSpec.describe Cask::Upgrade, :cask do
     it "releases quarantine when Gatekeeper was already approved and identity matches" do
       allow(Cask::Quarantine).to receive(:signing_identity).with(auto_updates_path).and_return(auto_updates_identity)
 
-      expect(described_class.release_app_upgrade_quarantine?(
+      expect(described_class.quarantine_release_decision(
                outdated_auto_updates,
                auto_updates,
                { auto_updates_path.to_s => auto_updates_identity },
                { auto_updates_path.to_s => true },
-             )).to be(true)
+             )).to eq(:release)
     end
 
-    it "still keeps quarantine when the Team ID changes" do
+    it "reports a changed signer when the Team ID changes" do
       allow(Cask::Quarantine).to receive(:signing_identity).with(auto_updates_path)
                                                            .and_return(auto_updates_changed_team_identity)
 
-      expect(described_class.release_app_upgrade_quarantine?(
+      expect(described_class.quarantine_release_decision(
                outdated_auto_updates,
                auto_updates,
                { auto_updates_path.to_s => auto_updates_identity },
                { auto_updates_path.to_s => true },
-             )).to be(false)
+             )).to eq(:signer_changed)
     end
 
-    it "still keeps quarantine when the signed identifier changes" do
+    it "reports a changed signer when the signed identifier changes" do
       allow(Cask::Quarantine).to receive(:signing_identity).with(auto_updates_path)
                                                            .and_return(auto_updates_changed_identifier_identity)
 
-      expect(described_class.release_app_upgrade_quarantine?(
+      expect(described_class.quarantine_release_decision(
                outdated_auto_updates,
                auto_updates,
                { auto_updates_path.to_s => auto_updates_identity },
                { auto_updates_path.to_s => true },
-             )).to be(false)
+             )).to eq(:signer_changed)
     end
 
     it "releases quarantine when signed fields are unset before or after the upgrade" do
       allow(Cask::Quarantine).to receive(:signing_identity).with(auto_updates_path)
                                                            .and_return(auto_updates_identity)
 
-      expect(described_class.release_app_upgrade_quarantine?(
+      expect(described_class.quarantine_release_decision(
                outdated_auto_updates,
                auto_updates,
                { auto_updates_path.to_s => Cask::Quarantine::SigningIdentity.new(identifier:      nil,
                                                                                  team_identifier: nil) },
                { auto_updates_path.to_s => true },
-             )).to be(true)
+             )).to eq(:release)
     end
 
-    it "still keeps quarantine when Gatekeeper was not approved" do
+    it "reports missing approval when Gatekeeper was not approved" do
       allow(Cask::Quarantine).to receive(:signing_identity).with(auto_updates_path).and_return(auto_updates_identity)
 
-      expect(described_class.release_app_upgrade_quarantine?(
+      expect(described_class.quarantine_release_decision(
                outdated_auto_updates,
                auto_updates,
                { auto_updates_path.to_s => auto_updates_identity },
                { auto_updates_path.to_s => false },
-             )).to be(false)
+             )).to eq(:unapproved)
     end
 
     it "releases quarantine for casks without auto_updates when Gatekeeper was already approved " \
@@ -552,24 +552,60 @@ RSpec.describe Cask::Upgrade, :cask do
       allow(Cask::Quarantine).to receive(:signing_identity).with(local_caffeine_path)
                                                            .and_return(local_caffeine_identity)
 
-      expect(described_class.release_app_upgrade_quarantine?(
+      expect(described_class.quarantine_release_decision(
                outdated_local_caffeine,
                local_caffeine,
                { local_caffeine_path.to_s => local_caffeine_identity },
                { local_caffeine_path.to_s => true },
-             )).to be(true)
+             )).to eq(:release)
     end
 
-    it "still keeps quarantine for casks without auto_updates when Gatekeeper was not approved" do
+    it "reports missing approval for casks without auto_updates when Gatekeeper was not approved" do
       allow(Cask::Quarantine).to receive(:signing_identity).with(local_caffeine_path)
                                                            .and_return(local_caffeine_identity)
 
-      expect(described_class.release_app_upgrade_quarantine?(
+      expect(described_class.quarantine_release_decision(
                outdated_local_caffeine,
                local_caffeine,
                { local_caffeine_path.to_s => local_caffeine_identity },
                { local_caffeine_path.to_s => false },
-             )).to be(false)
+             )).to eq(:unapproved)
+    end
+  end
+
+  context "when an upgrade decides on quarantine after install" do
+    before do
+      Cask::Installer.new(Cask::CaskLoader.load(cask_path("outdated/local-caffeine"))).install
+      allow(Cask::Quarantine).to receive_messages(available?: true, signing_identity: nil)
+    end
+
+    it "releases the app from quarantine when the previous version was already approved" do
+      allow(Cask::Quarantine).to receive(:user_approved?).and_return(true)
+
+      expect(Cask::Quarantine).to receive(:release!).with(download_path: local_caffeine_path)
+
+      described_class.upgrade_casks!(local_caffeine, args:)
+    end
+
+    it "reports the skipped quarantine release under --verbose when approval is missing" do
+      allow(Cask::Quarantine).to receive_messages(user_approved?: false, release!: nil)
+
+      expect do
+        described_class.upgrade_casks!(local_caffeine, verbose: true, args:)
+      end.to output(/local-caffeine wasn't quarantine approved/).to_stdout
+    end
+
+    it "reports a changed signer by default so the returning Gatekeeper prompt is explained" do
+      old_identity = Cask::Quarantine::SigningIdentity.new(identifier:      "sh.brew.local-caffeine",
+                                                           team_identifier: "ABCDE12345")
+      new_identity = Cask::Quarantine::SigningIdentity.new(identifier:      "sh.brew.local-caffeine",
+                                                           team_identifier: "VWXYZ98765")
+      allow(Cask::Quarantine).to receive_messages(user_approved?: true, release!: nil)
+      allow(Cask::Quarantine).to receive(:signing_identity).and_return(old_identity, new_identity)
+
+      expect do
+        described_class.upgrade_casks!(local_caffeine, args:)
+      end.to output(/local-caffeine's signer changed so macOS will prompt/).to_stderr
     end
   end
 
@@ -609,6 +645,64 @@ RSpec.describe Cask::Upgrade, :cask do
       expect do
         described_class.upgrade_casks!(newer_cask, args:)
       end.to change(newer_cask, :installed_version).from("1.2.3").to("1.2.4")
+    end
+  end
+
+  context "when upgrading after a forced upgrade without a cask receipt" do
+    before do
+      InstallHelper.stub_cask_installation(Cask::CaskLoader.load(cask_path("outdated/local-caffeine")))
+    end
+
+    it "uses the forced upgrade metadata for the next upgrade" do
+      receipt_path = local_caffeine.metadata_main_container_path/AbstractTab::FILENAME
+
+      expect(receipt_path).not_to exist
+      expect(Cask::CaskLoader.load_from_installed_caskfile(local_caffeine.installed_caskfile).artifacts)
+        .to be_empty
+
+      described_class.upgrade_casks!(local_caffeine, force: true, args:)
+
+      expect(receipt_path).to exist
+      expect(local_caffeine.tab.installed_on_request).to be(true)
+      expect(Cask::CaskLoader.load_from_installed_caskfile(local_caffeine.installed_caskfile).artifacts)
+        .to include(an_instance_of(Cask::Artifact::App))
+
+      newer_cask = Cask::CaskLoader::FromContentLoader.new(<<~RUBY).load(config: nil)
+        cask "local-caffeine" do
+          version "1.2.4"
+          sha256 "67cdb8a02803ef37fdbf7e0be205863172e41a561ca446cd84f0d7ab35a99d94"
+
+          url "file://#{TEST_FIXTURE_DIR}/cask/caffeine.zip"
+          homepage "https://brew.sh/"
+
+          app "Caffeine.app"
+        end
+      RUBY
+
+      expect do
+        described_class.upgrade_casks!(newer_cask, args:)
+      end.to change(newer_cask, :installed_version).from("1.2.3").to("1.2.4")
+    end
+  end
+
+  context "when an upgrade fails after installing artifacts" do
+    before do
+      Cask::Installer.new(Cask::CaskLoader.load(cask_path("outdated/local-caffeine"))).install
+    end
+
+    it "keeps the old cask receipt" do
+      receipt_path = local_caffeine.metadata_main_container_path/AbstractTab::FILENAME
+
+      expect(JSON.parse(receipt_path.read).dig("source", "version")).to eq("1.2.2")
+
+      allow_any_instance_of(Cask::Installer).to receive(:finalize_upgrade)
+        .and_raise(Cask::CaskError, "finalize failed")
+
+      expect do
+        described_class.upgrade_casks!(local_caffeine, args:)
+      end.to raise_error(Cask::CaskError)
+
+      expect(JSON.parse(receipt_path.read).dig("source", "version")).to eq("1.2.2")
     end
   end
 
@@ -664,6 +758,15 @@ RSpec.describe Cask::Upgrade, :cask do
       expect(bad_checksum_path).to be_a_directory
       expect(bad_checksum.installed_version).to eq "1.2.2"
       expect(bad_checksum.staged_path).not_to exist
+    end
+
+    it "raises the original upgrade error, not a failure that occurs while rolling back" do
+      will_fail_if_upgraded = Cask::CaskLoader.load("will-fail-if-upgraded")
+      allow_any_instance_of(Cask::Installer).to receive(:revert_upgrade).and_raise("rollback failed")
+
+      expect do
+        described_class.upgrade_casks!(will_fail_if_upgraded, args:)
+      end.to raise_error(Cask::CaskError)
     end
   end
 
