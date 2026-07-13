@@ -26,10 +26,7 @@ module Formulary
   extend Utils::Output::Mixin
   include Utils::Output::Mixin
 
-  # Sorbet type members are mutable by design and cannot be frozen.
-  # rubocop:disable Style/MutableConstant
   Cache = type_template { { fixed: T::Hash[String, T.untyped] } }
-  # rubocop:enable Style/MutableConstant
 
   ALLOWED_URL_SCHEMES = %w[file].freeze
   private_constant :ALLOWED_URL_SCHEMES
@@ -58,8 +55,7 @@ module Formulary
   sig {
     returns({
       api:               T.nilable(T::Hash[String, T.class_of(Formula)]),
-      # TODO: the hash values should be Formula instances, but the linux tests were failing
-      formulary_factory: T.nilable(T::Hash[String, T.untyped]),
+      formulary_factory: T.nilable(T::Hash[String, Formula]),
       path:              T.nilable(T::Hash[String, T.class_of(Formula)]),
     })
   }

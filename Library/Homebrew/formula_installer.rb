@@ -554,7 +554,9 @@ class FormulaInstaller
     lock
 
     start_time = Time.now
-    if !pour_bottle? && DevelopmentTools.installed?
+    if pour_bottle?
+      check_developer_tools_for_bottle_pour
+    else
       require "install"
       Homebrew::Install.perform_build_from_source_checks
     end
@@ -1570,22 +1572,21 @@ on_request: installed_on_request?, options:)
   sig { void }
   def pour
     HOMEBREW_CELLAR.cd do
-      ohai "Pouring #{downloadable.downloader.basename}"
+      downloadable_object = downloadable
+      ohai "Pouring #{downloadable_object.downloader.basename}"
 
       formula.rack.mkpath
 
       # Download queue may have already extracted the bottle to a temporary directory.
       # We cannot rely on `download_queue` here as dependencies may be poured by another installer.
-      formula_prefix_relative_to_cellar = formula.prefix.relative_path_from(HOMEBREW_CELLAR)
-      bottle_tmp_keg = HOMEBREW_TEMP_CELLAR/formula_prefix_relative_to_cellar
-      bottle_poured_file = Pathname("#{bottle_tmp_keg}.poured")
-
-      if bottle_poured_file.exist?
+      if downloadable_object.is_a?(Bottle) &&
+         (bottle_poured_file = downloadable_object.staged_path_from_download_queue_marker).exist?
+        bottle_tmp_keg = downloadable_object.staged_path_from_download_queue
         FileUtils.rm(bottle_poured_file)
         FileUtils.mv(bottle_tmp_keg, formula.prefix)
         bottle_tmp_keg.parent.rmdir_if_possible
       else
-        downloadable.downloader.stage
+        downloadable_object.downloader.stage
       end
     end
 
@@ -1634,6 +1635,9 @@ on_request: installed_on_request?, options:)
     opoo output
     @show_summary_heading = true
   end
+
+  sig { void }
+  def check_developer_tools_for_bottle_pour; end
 
   sig { void }
   def audit_installed

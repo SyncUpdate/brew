@@ -2,16 +2,20 @@
 # frozen_string_literal: true
 
 require "system_command"
+require "utils/output"
 
 module Homebrew
   # Declarative install steps that can be serialised through the JSON APIs.
   module InstallSteps
     PathSpec = T.type_alias { T::Hash[String, String] }
-    StepValue = T.type_alias { T.any(String, T::Boolean, PathSpec) }
+    PathSpecs = T.type_alias { T::Array[PathSpec] }
+    StepValue = T.type_alias { T.any(String, T::Boolean, PathSpec, PathSpecs) }
     Step = T.type_alias { T::Hash[String, StepValue] }
     Steps = T.type_alias { T::Array[Step] }
+    Paths = T.type_alias { T.any(String, Pathname, T::Array[T.any(String, Pathname)]) }
     RawPathSpec = T.type_alias { T::Hash[T.any(String, Symbol), T.nilable(T.any(String, Symbol, Pathname))] }
-    RawStepValue = T.type_alias { T.nilable(T.any(String, Symbol, T::Boolean, Pathname, RawPathSpec)) }
+    RawPathSpecs = T.type_alias { T::Array[T.any(String, Symbol, Pathname, RawPathSpec)] }
+    RawStepValue = T.type_alias { T.nilable(T.any(String, Symbol, T::Boolean, Pathname, RawPathSpec, RawPathSpecs)) }
     RawStep = T.type_alias { T::Hash[T.any(String, Symbol), RawStepValue] }
     SystemCommandArg = T.type_alias { T.any(String, Pathname) }
     TemplateTokenValue = T.type_alias { T.any(String, Pathname) }
@@ -39,7 +43,7 @@ module Homebrew
       end
       private_constant :TemplateVersion
 
-      TEMPLATE_VERSION = T.let(TemplateVersion.new.freeze, TemplateVersion)
+      TEMPLATE_VERSION = TemplateVersion.new.freeze
       private_constant :TEMPLATE_VERSION
 
       sig {
@@ -99,15 +103,28 @@ module Homebrew
         case obj
         when Symbol
           obj.to_s
+        when Array
+          obj.map { |value| normalise_path_value(value) } if key == "paths"
         when Hash
-          ::T.cast(obj.to_h { |key, value| [key.to_s, value&.to_s] }.compact_blank, PathSpec)
+          normalise_path_value(obj)
         when String, Pathname
-          %w[path source target].include?(key) ? { "path" => obj.to_s } : obj.to_s
+          %w[path source target matching_certificate].include?(key) ? normalise_path_value(obj) : obj.to_s
         else
           obj
         end
       end
       private_class_method :normalise_step_value
+
+      sig { params(obj: T.any(String, Symbol, Pathname, RawPathSpec)).returns(PathSpec) }
+      def self.normalise_path_value(obj)
+        case obj
+        when Hash
+          ::T.cast(obj.to_h { |key, value| [key.to_s, value&.to_s] }.compact_blank, PathSpec)
+        else
+          { "path" => obj.to_s }
+        end
+      end
+      private_class_method :normalise_path_value
 
       sig { params(path: ::T.any(::String, ::Pathname), base: ::T.nilable(::T.any(::String, ::Symbol))).void }
       def mkdir(path, base: nil)
@@ -305,6 +322,48 @@ module Homebrew
         add_rebuild_action("update_desktop_database", "share/applications")
       end
 
+      sig {
+        params(
+          name:                 ::String,
+          matching_certificate: ::T.nilable(::T.any(::String, ::Pathname)),
+          base:                 ::T.nilable(::T.any(::String, ::Symbol)),
+        ).void
+      }
+      def delete_keychain_certificate(name, matching_certificate: nil, base: nil)
+        add_step("delete_keychain_certificate",
+                 "name"                 => name,
+                 "matching_certificate" => (path_spec(matching_certificate, base:, default_base: nil) if
+                   matching_certificate))
+      end
+
+      sig {
+        params(
+          paths:       Paths,
+          permissions: ::String,
+          base:        ::T.nilable(::T.any(::String, ::Symbol)),
+        ).void
+      }
+      def set_permissions(paths, permissions, base: nil)
+        add_step("set_permissions",
+                 "paths"       => path_specs(paths, base:, default_base: @default_base),
+                 "permissions" => permissions)
+      end
+
+      sig {
+        params(
+          paths: Paths,
+          user:  ::T.nilable(::String),
+          group: ::String,
+          base:  ::T.nilable(::T.any(::String, ::Symbol)),
+        ).void
+      }
+      def set_ownership(paths, user: nil, group: "staff", base: nil)
+        add_step("set_ownership",
+                 "paths" => path_specs(paths, base:, default_base: @default_base),
+                 "user"  => user,
+                 "group" => group)
+      end
+
       private
 
       sig { params(type: ::String, fields: ::T.nilable(StepValue)).void }
@@ -337,6 +396,18 @@ module Homebrew
 
       sig {
         params(
+          paths:        Paths,
+          base:         ::T.nilable(::T.any(::String, ::Symbol)),
+          default_base: ::T.nilable(::T.any(::String, ::Symbol)),
+        ).returns(PathSpecs)
+      }
+      def path_specs(paths, base:, default_base:)
+        paths = [paths] unless paths.is_a?(Array)
+        paths.map { |path| path_spec(path, base:, default_base:) }
+      end
+
+      sig {
+        params(
           path:         ::T.any(::String, ::Pathname),
           default_base: ::T.nilable(::T.any(::String, ::Symbol)),
         ).returns(::T.nilable(::T.any(::String, ::Symbol)))
@@ -351,15 +422,17 @@ module Homebrew
 
     class Runner
       include SystemCommand::Mixin
+      include ::Utils::Output::Mixin
 
       # Path tokens reuse the step base resolution; formula metadata tokens are
       # resolved separately. Anything else is left verbatim so literal braces in
       # templates are never rewritten.
       CONTENT_PATH_TOKENS = %w[prefix opt_prefix bin var etc pkgetc staged_path appdir].freeze
 
-      sig { params(context: Object).void }
-      def initialize(context:)
-        @context = T.let(context, Object)
+      sig { params(context: Object, command: T.class_of(SystemCommand)).void }
+      def initialize(context:, command: SystemCommand)
+        @context = context
+        @command = command
       end
 
       sig { params(steps: Steps, phase: Symbol).void }
@@ -438,6 +511,10 @@ module Homebrew
             path.dirname.mkpath
             path.write(expand_template_tokens(content))
           end
+        when "set_permissions"
+          run_set_permissions(step)
+        when "set_ownership"
+          run_set_ownership(step)
         when "compile_gsettings_schemas"
           run_formula_tool("glib", "glib-compile-schemas", resolve_path(step_path(step, "path")))
         when "gio_querymodules"
@@ -457,9 +534,75 @@ module Homebrew
           run_formula_tool("shared-mime-info", "update-mime-database", resolve_path(step_path(step, "path")))
         when "update_desktop_database"
           run_formula_tool("desktop-file-utils", "update-desktop-database", resolve_path(step_path(step, "path")))
+        when "delete_keychain_certificate"
+          certificate_hash = nil
+          if step.key?("matching_certificate")
+            certificate = resolve_path(step_path(step, "matching_certificate"))
+            return unless certificate.exist?
+
+            certificate_hash = run_command_output("/usr/bin/openssl", "x509", "-fingerprint", "-sha256", "-noout",
+                                                  "-in", certificate)
+                               .lines
+                               .first
+                               .to_s
+                               .split("=", 2)[1]
+                               .to_s
+                               .delete(":")
+                               .strip
+                               .upcase
+            return if certificate_hash.blank?
+          end
+
+          certificate_hashes = run_command_output(
+            "/usr/bin/security", "find-certificate", "-a", "-c", step_string(step, "name"), "-Z",
+            sudo: true
+          ).lines.filter_map { |line| line[/\ASHA-256 hash:\s*(\S+)/, 1]&.upcase }
+
+          if certificate_hash
+            run_command "/usr/bin/security", "delete-certificate", "-Z", certificate_hash, sudo: true if
+              certificate_hashes.include?(certificate_hash)
+          else
+            certificate_hashes.each do |matching_certificate_hash|
+              run_command "/usr/bin/security", "delete-certificate", "-Z", matching_certificate_hash, sudo: true
+            end
+          end
         else
           raise ArgumentError, "unknown install step: #{step.fetch("type")}"
         end
+      end
+
+      sig { params(step: Step).void }
+      def run_set_permissions(step)
+        paths = existing_step_paths(step)
+        return if paths.empty?
+
+        @command.run!("chmod", args: ["-R", "--", step_string(step, "permissions"), *paths], sudo: false)
+      end
+
+      sig { params(step: Step).void }
+      def run_set_ownership(step)
+        require "cask/quarantine"
+        require "utils/user"
+
+        paths = existing_step_paths(step)
+        return if paths.empty?
+
+        paths.each do |path|
+          next if ::Cask::Quarantine.app_management_permissions_granted?(app: path, command: @command)
+
+          raise ::Cask::CaskError, <<~EOS
+            Cannot change the ownership of '#{path}' because your terminal does not have App Management permissions.
+            macOS prevents modifying apps without these permissions, even when using `sudo`.
+            To fix this, approve the permissions prompt (if one was just shown) or go to
+            System Settings → Privacy & Security → App Management and add or enable your terminal.
+            Then run this command again.
+          EOS
+        end
+
+        ohai "Changing ownership of paths required by #{@context} with `sudo` (which may request your password)..."
+        @command.run!("chown", args: ["-R", "--", "#{step["user"] || ::User.current}:#{step["group"] || "staff"}",
+                                      *paths],
+                               sudo: true)
       end
 
       sig { params(step: Step).void }
@@ -537,6 +680,19 @@ module Homebrew
       sig { params(step: Step, key: String).returns(PathSpec) }
       def step_path(step, key)
         T.cast(step.fetch(key), PathSpec)
+      end
+
+      sig { params(step: Step, key: String).returns(PathSpecs) }
+      def step_paths(step, key)
+        T.cast(step.fetch(key), PathSpecs)
+      end
+
+      sig { params(step: Step).returns(T::Array[Pathname]) }
+      def existing_step_paths(step)
+        step_paths(step, "paths").filter_map do |spec|
+          path = resolve_path(spec).expand_path
+          path if path.exist?
+        end
       end
 
       sig { params(step: Step, key: String).returns(String) }
@@ -647,9 +803,14 @@ module Homebrew
         config.public_send(method) if config.respond_to?(method)
       end
 
-      sig { params(command: SystemCommandArg, args: SystemCommandArg).void }
-      def run_command(command, *args)
-        system_command!(command, args: args, print_stdout: true, print_stderr: true, reset_uid: true)
+      sig { params(command: SystemCommandArg, args: SystemCommandArg, sudo: T::Boolean).void }
+      def run_command(command, *args, sudo: false)
+        @command.run!(command, args: args, sudo:, print_stdout: true, print_stderr: true, reset_uid: true)
+      end
+
+      sig { params(command: SystemCommandArg, args: SystemCommandArg, sudo: T::Boolean).returns(String) }
+      def run_command_output(command, *args, sudo: false)
+        @command.run!(command, args: args, sudo:, print_stderr: true, reset_uid: true).stdout
       end
     end
   end

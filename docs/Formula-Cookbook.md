@@ -301,7 +301,7 @@ class Foo < Formula
   end
 
   def install
-    resource("pycrypto").stage { system "python", *Language::Python.setup_install_args(libexec/"vendor") }
+    resource("pycrypto").stage { system "python", "-m", "pip", "install", *std_pip_args, "." }
   end
 end
 ```
@@ -1211,7 +1211,9 @@ represented by structured steps.
 
 A trailing newline is appended unless the content already ends with one, so written files end in a newline as POSIX expects.
 
+{% raw %}
 Content may use a fixed set of `{{...}}` tokens that are expanded at install time so paths are not hardcoded into the JSON API: `{{HOMEBREW_PREFIX}}`, `{{prefix}}`, `{{opt_prefix}}`, `{{bin}}`, `{{var}}`, `{{etc}}`, `{{pkgetc}}`, `{{version}}` and `{{version.major_minor}}`. Any other `{{...}}` is left verbatim, so literal braces are never rewritten. Use tokens instead of Ruby interpolation, for example `write "foo.conf", "prefix = {{HOMEBREW_PREFIX}}", base: :etc`.
+{% endraw %}
 
 #### Service data directory steps
 
@@ -1257,9 +1259,11 @@ class Foo < Formula
   # ...
   url "https://example.com/foo-1.0.tar.gz"
 
-  def post_install
-    rm pkgetc/"cert.pem" if File.exist?(pkgetc/"cert.pem")
-    pkgetc.install_symlink Formula["ca-certificates"].pkgetc/"cert.pem"
+  post_install_steps do
+    ln_sf "cert.pem", "cert.pem",
+          source_formula: "ca-certificates",
+          source_base:    :formula_pkgetc,
+          target_base:    :pkgetc
   end
   # ...
 end

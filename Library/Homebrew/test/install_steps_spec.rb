@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "install_steps"
+require "cask/quarantine"
 
 RSpec.describe Homebrew::InstallSteps do
   let(:root) { Pathname(TEST_TMPDIR)/"install-steps" }
@@ -21,6 +22,12 @@ RSpec.describe Homebrew::InstallSteps do
 
   after do
     FileUtils.rm_rf root
+  end
+
+  around do |example|
+    with_env(HOMEBREW_GITHUB_ACTIONS: nil) do
+      example.run
+    end
   end
 
   specify "runs mkdir, touch, move and symlink steps", :aggregate_failures do
@@ -86,13 +93,52 @@ RSpec.describe Homebrew::InstallSteps do
           path: "nested/example",
         },
       },
+      {
+        type:                 :delete_keychain_certificate,
+        name:                 "NodeMITMProxyCA",
+        matching_certificate: "~/Library/Application Support/betwixt/ssl/certs/ca.pem",
+      },
+      {
+        type:        :set_permissions,
+        paths:       ["Example.app"],
+        permissions: "0755",
+      },
+      {
+        type:  :set_ownership,
+        paths: [{ base: :staged_path, path: "Example.app" }],
+        user:  :root,
+        group: :wheel,
+      },
     ]
 
     expect(Homebrew::InstallSteps::DSL.normalise_steps(steps)).to contain_exactly(
-      "type" => "mkdir_p",
-      "path" => {
-        "base" => "var",
-        "path" => "nested/example",
+      {
+        "type" => "mkdir_p",
+        "path" => {
+          "base" => "var",
+          "path" => "nested/example",
+        },
+      },
+      {
+        "type"                 => "delete_keychain_certificate",
+        "name"                 => "NodeMITMProxyCA",
+        "matching_certificate" => {
+          "path" => "~/Library/Application Support/betwixt/ssl/certs/ca.pem",
+        },
+      },
+      {
+        "type"        => "set_permissions",
+        "paths"       => [{ "path" => "Example.app" }],
+        "permissions" => "0755",
+      },
+      {
+        "type"  => "set_ownership",
+        "paths" => [{
+          "base" => "staged_path",
+          "path" => "Example.app",
+        }],
+        "user"  => "root",
+        "group" => "wheel",
       },
     )
   end
@@ -342,6 +388,101 @@ RSpec.describe Homebrew::InstallSteps do
                                                    HOMEBREW_PREFIX/"share/icons/hicolor").ordered
       runner.run(steps)
     end
+  end
+
+  specify "deletes matching keychain certificates by SHA-256 hash" do
+    steps = Homebrew::InstallSteps::DSL.build do
+      delete_keychain_certificate "Charles"
+    end
+
+    runner = Homebrew::InstallSteps::Runner.new(context:)
+    expect(runner).to receive(:run_command_output)
+      .with("/usr/bin/security", "find-certificate", "-a", "-c", "Charles", "-Z", sudo: true)
+      .and_return(<<~EOS)
+        SHA-256 hash: ABC123
+        SHA-256 hash: DEF456
+      EOS
+    expect(runner).to receive(:run_command)
+      .with("/usr/bin/security", "delete-certificate", "-Z", "ABC123", sudo: true).ordered
+    expect(runner).to receive(:run_command)
+      .with("/usr/bin/security", "delete-certificate", "-Z", "DEF456", sudo: true).ordered
+
+    runner.run(steps)
+  end
+
+  specify "only deletes the keychain certificate matching a local certificate" do
+    certificate = root/"home/Library/Application Support/betwixt/ssl/certs/ca.pem"
+    certificate.dirname.mkpath
+    certificate.write "certificate"
+    steps = Homebrew::InstallSteps::DSL.build do
+      delete_keychain_certificate "NodeMITMProxyCA", matching_certificate: certificate
+    end
+
+    runner = Homebrew::InstallSteps::Runner.new(context:)
+    expect(runner).to receive(:run_command_output)
+      .with("/usr/bin/openssl", "x509", "-fingerprint", "-sha256", "-noout", "-in", certificate)
+      .and_return("sha256 Fingerprint=AB:CD:EF\n")
+    expect(runner).to receive(:run_command_output)
+      .with("/usr/bin/security", "find-certificate", "-a", "-c", "NodeMITMProxyCA", "-Z", sudo: true)
+      .and_return(<<~EOS)
+        SHA-256 hash: ABCDEF
+        SHA-256 hash: FEDCBA
+      EOS
+    expect(runner).to receive(:run_command)
+      .with("/usr/bin/security", "delete-certificate", "-Z", "ABCDEF", sudo: true)
+
+    runner.run(steps)
+  end
+
+  specify "skips keychain certificate deletion when a local certificate is missing" do
+    certificate = root/"missing.pem"
+    steps = Homebrew::InstallSteps::DSL.build do
+      delete_keychain_certificate "NodeMITMProxyCA", matching_certificate: certificate
+    end
+
+    runner = Homebrew::InstallSteps::Runner.new(context:)
+    expect(runner).not_to receive(:run_command_output)
+    expect(runner).not_to receive(:run_command)
+
+    runner.run(steps)
+  end
+
+  specify "sets permissions and ownership for existing cask step paths" do
+    steps = Homebrew::InstallSteps::DSL.build(default_base: :staged_path) do
+      set_permissions ["Prepared.app", "Missing.app"], "0755"
+      set_ownership "Owned.app", user: "root", group: "wheel"
+    end
+
+    command = class_double(SystemCommand)
+    (root/"stage/Prepared.app").mkpath
+    (root/"stage/Owned.app").mkpath
+
+    allow(Cask::Quarantine).to receive(:app_management_permissions_granted?)
+      .with(app: root/"stage/Owned.app", command:)
+      .and_return(true)
+    expect(command).to receive(:run!)
+      .with("chmod", args: ["-R", "--", "0755", root/"stage/Prepared.app"], sudo: false).ordered
+    expect(command).to receive(:run!)
+      .with("chown", args: ["-R", "--", "root:wheel", root/"stage/Owned.app"], sudo: true).ordered
+
+    Homebrew::InstallSteps::Runner.new(context:, command:).run(steps)
+  end
+
+  specify "raises when App Management permissions are missing for ownership steps" do
+    steps = Homebrew::InstallSteps::DSL.build(default_base: :staged_path) do
+      set_ownership "Owned.app"
+    end
+
+    command = class_double(SystemCommand)
+    (root/"stage/Owned.app").mkpath
+
+    allow(Cask::Quarantine).to receive(:app_management_permissions_granted?)
+      .with(app: root/"stage/Owned.app", command:)
+      .and_return(false)
+    expect(command).not_to receive(:run!)
+
+    expect { Homebrew::InstallSteps::Runner.new(context:, command:).run(steps) }
+      .to raise_error(Cask::CaskError, /App Management permissions/)
   end
 
   specify "does not add the default base to home paths" do
