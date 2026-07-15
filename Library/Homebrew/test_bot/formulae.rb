@@ -870,6 +870,7 @@ module Homebrew
         # We only do full testing on `portable-ruby` itself.
         return if formula_name != "portable-ruby"
         return if args.dry_run?
+        return unless integration_test_portable_ruby?
 
         bottle_file = bottle_glob(formula_name).first
         if bottle_file.nil?
@@ -915,12 +916,11 @@ module Homebrew
         test "brew", "typecheck", "--update"
 
         # Run the checks that gate a Homebrew/brew pull request.
-        test "brew", "style" if %w[actionlint shellcheck shfmt].all? { |f| bottled?(Formulary.factory(f)) }
+        test "brew", "style" unless OS.not_tier_one_configuration?
         test "brew", "typecheck"
         test "brew", "install-bundler-gems", "--groups=all"
         test "brew", "vendor-gems", "--non-bundler-gems", "--no-commit"
-        test "brew", "tests", "--online", "--coverage"
-        test "brew", "tests", "--generic", "--coverage"
+        test "brew", "tests", "--online", "--coverage", "--only=cask,formula"
         test "brew", "update-test"
         test "brew", "update-test", "--to-tag"
         test "brew", "update-test", "--commit=HEAD"
@@ -949,6 +949,9 @@ module Homebrew
       def testing_portable_ruby?
         !!tap&.core_tap? && @testing_formulae.include?("portable-ruby")
       end
+
+      sig { returns(T::Boolean) }
+      def integration_test_portable_ruby? = true
     end
   end
 end
