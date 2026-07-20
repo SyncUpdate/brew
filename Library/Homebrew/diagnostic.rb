@@ -859,31 +859,37 @@ module Homebrew
         EOS
       end
 
-      sig { returns(T.nilable(String)) }
+      sig { returns(T.nilable(Diagnostic::Finding)) }
       def check_deprecated_disabled
         return unless HOMEBREW_CELLAR.exist?
 
         deprecated_or_disabled = Formula.installed.select { |f| f.deprecated? || f.disabled? }
         return if deprecated_or_disabled.empty?
 
-        <<~EOS
-          Some installed formulae are deprecated or disabled.
-          You should find replacements for the following formulae:
-            #{deprecated_or_disabled.sort_by(&:full_name).uniq * "\n  "}
-        EOS
+        Finding.new(
+          "Some installed formulae are deprecated or disabled.",
+          affects:     deprecated_or_disabled.map(&:full_name),
+          remediation: <<~EOS,
+            You should find replacements for the following formulae:
+                #{deprecated_or_disabled.sort_by(&:full_name).uniq * "\n  "}
+          EOS
+        )
       end
 
-      sig { returns(T.nilable(String)) }
+      sig { returns(T.nilable(Diagnostic::Finding)) }
       def check_cask_deprecated_disabled
         deprecated_or_disabled = Cask::Caskroom.casks.select(&:deprecated?)
         deprecated_or_disabled += Cask::Caskroom.casks.select(&:disabled?)
         return if deprecated_or_disabled.empty?
 
-        <<~EOS
-          Some installed casks are deprecated or disabled.
-          You should find replacements for the following casks:
-            #{deprecated_or_disabled.sort_by(&:token).uniq * "\n  "}
-        EOS
+        Finding.new(
+          "Some installed casks are deprecated or disabled.",
+          affects:     deprecated_or_disabled.map(&:token),
+          remediation: <<~EOS,
+            You should find replacements for the following casks:
+                #{deprecated_or_disabled.sort_by(&:token).uniq * "\n  "}
+          EOS
+        )
       end
 
       sig { returns(T.nilable(String)) }
@@ -1168,7 +1174,7 @@ module Homebrew
 
         path = Cask::Caskroom.path
 
-        add_info "Homebrew Cask Staging Location", user_tilde(path.to_s)
+        add_info "Cask Staging Location", user_tilde(path.to_s)
 
         return if !path.exist? || path.writable?
 
@@ -1210,7 +1216,7 @@ module Homebrew
 
           "#{tap.path} (#{Utils.pluralize("cask", cask_count, include_count: true)})"
         end
-        add_info "Homebrew Cask Taps:", taps_info
+        add_info "Cask Taps:", taps_info
 
         taps_string = Utils.pluralize("tap", error_tap_paths.count)
         "Unable to read from cask #{taps_string}: #{error_tap_paths.to_sentence}" if error_tap_paths.present?

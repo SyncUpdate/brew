@@ -162,7 +162,7 @@ module Cask
 
       return if cask.artifacts.none? { |k| k.is_a?(Artifact::Pkg) && k.stanza_options.key?(:allow_untrusted) }
 
-      add_error "allow_untrusted is not permitted in official Homebrew Cask taps"
+      add_error "allow_untrusted is not permitted in the official homebrew/cask tap"
     end
 
     sig { void }
@@ -714,7 +714,8 @@ module Cask
       extract_artifacts do |artifacts, tmpdir|
         is_container = artifacts.any? { |a| a.is_a?(Artifact::App) || a.is_a?(Artifact::Pkg) }
 
-        mentions_rosetta = cask.caveats.include?("requires Rosetta 2")
+        mentions_rosetta = cask.caveats_object.invoked?(:requires_rosetta) ||
+                           cask.caveats.include?("requires Rosetta 2")
         requires_intel = cask.depends_on.arch&.any? { |arch| arch[:type] == :intel }
 
         artifacts_to_test = artifacts.filter do |artifact|

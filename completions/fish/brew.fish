@@ -538,13 +538,13 @@ __fish_brew_complete_arg 'bump-unversioned-casks' -a '(__fish_brew_suggest_casks
 __fish_brew_complete_arg 'bump-unversioned-casks' -a '(__fish_brew_suggest_taps_installed)'
 
 
-__fish_brew_complete_cmd 'bundle' 'Bundler for non-Ruby dependencies from Homebrew, Homebrew Cask, Mac App Store dependencies, VSCode (and forks/variants) extensions, Go packages, Cargo packages, uv tools, Flatpak packages, WinGet packages, Krew plugins and npm packages'
+__fish_brew_complete_cmd 'bundle' 'Bundler for non-Ruby dependencies from Homebrew formulae, Homebrew casks, Mac App Store dependencies, VSCode (and forks/variants) extensions, Go packages, Cargo packages, uv tools, Flatpak packages, WinGet packages, Krew plugins and npm packages'
 __fish_brew_complete_sub_cmd 'bundle' 'sh' 'Run your shell in a `brew bundle exec` environment'
 __fish_brew_complete_sub_cmd 'bundle' 'remove' 'Remove entries that match `name` from your `Brewfile`. Use `--formula`, `--cask`, `--tap`, `--mas`, `--vscode`, `--go`, `--cargo`, `--uv`, `--flatpak`, `--winget`, `--krew` and `--npm` to remove only entries of the corresponding type. Passing `--formula` also removes matches against formula aliases and old formula names'
 __fish_brew_complete_sub_cmd 'bundle' 'list' 'By default, only Homebrew formula dependencies are listed'
 __fish_brew_complete_sub_cmd 'bundle' 'install' 'Use this to restore a recorded installed state from a `Brewfile`'
 __fish_brew_complete_sub_cmd 'bundle' 'upgrade' 'Use this to restore a recorded installed state from a `Brewfile`'
-__fish_brew_complete_sub_cmd 'bundle' 'exec' 'This sanitized build environment ignores unrequested dependencies, which makes sure that things you didn\'t specify in your `Brewfile` won\'t get picked up by commands like `bundle install`, `npm install`, etc. It will also add compiler flags which will help with finding keg-only dependencies like `openssl`, `icu4c`, etc'
+__fish_brew_complete_sub_cmd 'bundle' 'exec' 'This sanitised build environment ignores unrequested dependencies, which makes sure that things you didn\'t specify in your `Brewfile` won\'t get picked up by commands like `bundle install`, `npm install`, etc. It will also add compiler flags which will help with finding keg-only dependencies like `openssl`, `icu4c`, etc'
 __fish_brew_complete_sub_cmd 'bundle' 'env' 'Print the environment variables that would be set in a `brew bundle exec` environment'
 __fish_brew_complete_sub_cmd 'bundle' 'edit' 'Edit the `Brewfile` in your editor'
 __fish_brew_complete_sub_cmd 'bundle' 'dump' 'Write all installed casks/formulae/images/taps into a `Brewfile` in the current directory or to a custom file specified with the `--file` option. This is useful as an installed-state snapshot and can be kept in version control and diffed'
@@ -856,6 +856,7 @@ __fish_brew_complete_arg 'contributions' -l csv -d 'Print a CSV of contributions
 __fish_brew_complete_arg 'contributions' -l debug -d 'Display any debugging information'
 __fish_brew_complete_arg 'contributions' -l from -d 'Date (ISO 8601 format) to start searching contributions. Omitting this flag searches the past year'
 __fish_brew_complete_arg 'contributions' -l help -d 'Show this message'
+__fish_brew_complete_arg 'contributions' -l maintainer-report-csv -d 'Print a CSV of Maintainer and Lead Maintainer activity criteria using fetched Git histories and GitHub\'s existing approved-review search for the Homebrew governance quarter, for example `--maintainer-report-csv=2026-2`. Also write it to `brew-contributions-FROM-to-TO.csv` in the current directory. Only Maintainers listed at the end of that quarter are included. The `new role` value must show a downgrade for two consecutive quarters before a downgrade is applied. Review searches return at most 100 results and other counts are capped at 500 per repository and contribution type. Repository-scoped follow-up searches ensure role activity checks remain accurate when a count is capped. Completed-period GitHub searches are cached in Homebrew\'s cache and removed by normal cache pruning. `YEAR-1` is December of the previous year through February, `YEAR-2` is March through May, `YEAR-3` is June through August and `YEAR-4` is September through November'
 __fish_brew_complete_arg 'contributions' -l organisation -d 'Specify the organisation to populate sources repositories from. Omitting this flag searches the Homebrew primary repositories'
 __fish_brew_complete_arg 'contributions' -l quarter -d 'Homebrew contributions quarter to search (1-4). Omitting this flag searches the past year. If `--from` or `--to` are set, they take precedence'
 __fish_brew_complete_arg 'contributions' -l quiet -d 'Make some output more quiet'
@@ -1090,6 +1091,7 @@ __fish_brew_complete_arg 'formula-analytics' -l days-ago -d 'Query from the spec
 __fish_brew_complete_arg 'formula-analytics' -l debug -d 'Display any debugging information'
 __fish_brew_complete_arg 'formula-analytics' -l help -d 'Show this message'
 __fish_brew_complete_arg 'formula-analytics' -l homebrew-devcmdrun-developer -d 'Output the number of devcmdrun/HOMEBREW_DEVELOPER events'
+__fish_brew_complete_arg 'formula-analytics' -l homebrew-env-config -d 'Output rates of non-default Homebrew environment configuration variables'
 __fish_brew_complete_arg 'formula-analytics' -l homebrew-os-arch-ci -d 'Output the number of OS/Architecture/CI events'
 __fish_brew_complete_arg 'formula-analytics' -l homebrew-prefixes -d 'Output Homebrew prefixes'
 __fish_brew_complete_arg 'formula-analytics' -l homebrew-versions -d 'Output Homebrew versions'
@@ -1161,7 +1163,7 @@ __fish_brew_complete_arg 'generate-man-completions' -l quiet -d 'Make some outpu
 __fish_brew_complete_arg 'generate-man-completions' -l verbose -d 'Make some output more verbose'
 
 
-complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'generate-vulns-advisories' -d 'Generate OSV-schema advisory records for the `Homebrew` ecosystem from `homebrew/core` formula patch `resolves` annotations, for https://github.com/Homebrew/homebrew-advisory-database'
+complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'generate-vulns-advisories' -d 'Generate OSV-schema advisory records for the `Homebrew` ecosystem from `homebrew/core` formula patch `resolves` annotations, for https://github.com/Homebrew/advisory-database'
 __fish_brew_complete_arg 'generate-vulns-advisories' -l debug -d 'Display any debugging information'
 __fish_brew_complete_arg 'generate-vulns-advisories' -l dry-run -d 'List the records that would be generated without writing files or querying OSV.dev'
 __fish_brew_complete_arg 'generate-vulns-advisories' -l help -d 'Show this message'
@@ -1874,11 +1876,11 @@ __fish_brew_complete_arg 'tap-info' -a '(__fish_brew_suggest_taps_installed)'
 
 
 __fish_brew_complete_cmd 'tap-new' 'Generate the template files for a new tap'
-__fish_brew_complete_arg 'tap-new' -l branch -d 'Initialize Git repository and setup GitHub Actions workflows with the specified branch name (default: `main`)'
+__fish_brew_complete_arg 'tap-new' -l branch -d 'Initialise a Git repository and set up GitHub Actions workflows with the specified branch name (default: `main`)'
 __fish_brew_complete_arg 'tap-new' -l debug -d 'Display any debugging information'
 __fish_brew_complete_arg 'tap-new' -l github-packages -d 'Upload bottles to GitHub Packages'
 __fish_brew_complete_arg 'tap-new' -l help -d 'Show this message'
-__fish_brew_complete_arg 'tap-new' -l no-git -d 'Don\'t initialize a Git repository for the tap'
+__fish_brew_complete_arg 'tap-new' -l no-git -d 'Don\'t initialise a Git repository for the tap'
 __fish_brew_complete_arg 'tap-new' -l quiet -d 'Make some output more quiet'
 __fish_brew_complete_arg 'tap-new' -l verbose -d 'Make some output more verbose'
 __fish_brew_complete_arg 'tap-new' -a '(__fish_brew_suggest_taps_installed)'
@@ -1961,7 +1963,7 @@ __fish_brew_complete_arg 'tests' -l verbose -d 'Make some output more verbose'
 __fish_brew_complete_arg 'tests' -l vernier -d 'Use `vernier` to profile tests'
 
 
-__fish_brew_complete_cmd 'trust' 'Trust non-official tap formulae, casks or commands so Homebrew may load them when `$HOMEBREW_REQUIRE_TAP_TRUST` is set'
+__fish_brew_complete_cmd 'trust' 'Trust non-official tap formulae, casks or commands so Homebrew may load them'
 __fish_brew_complete_arg 'trust' -l cask -d 'Trust the named cask'
 __fish_brew_complete_arg 'trust' -l command -d 'Trust the named external command'
 __fish_brew_complete_arg 'trust' -l debug -d 'Display any debugging information'

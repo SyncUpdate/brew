@@ -475,7 +475,8 @@ class FormulaInstaller
     end
 
     recursive_deps = if pour_bottle?
-      formula.runtime_dependencies
+      # Include implicit dependencies (except duplicates) in formulae to check
+      (formula.runtime_dependencies + formula.deps.select(&:implicit?)).uniq(&:name)
     else
       formula.recursive_dependencies
     end
@@ -556,9 +557,7 @@ class FormulaInstaller
     lock
 
     start_time = Time.now
-    if pour_bottle?
-      check_developer_tools_for_bottle_pour
-    else
+    unless pour_bottle?
       require "install"
       Homebrew::Install.perform_build_from_source_checks
     end
@@ -1021,8 +1020,7 @@ on_request: installed_on_request?, options:)
       end
     else
       formula.install_etc_var
-      formula.run_post_install_steps if formula.post_install_steps_defined?
-      post_install if formula.post_install_defined?
+      post_install if formula.post_install_steps_defined? || formula.post_install_defined?
     end
 
     keg.prepare_debug_symbols if debug_symbols?
@@ -1648,9 +1646,6 @@ on_request: installed_on_request?, options:)
     opoo output
     @show_summary_heading = true
   end
-
-  sig { void }
-  def check_developer_tools_for_bottle_pour; end
 
   sig { void }
   def audit_installed

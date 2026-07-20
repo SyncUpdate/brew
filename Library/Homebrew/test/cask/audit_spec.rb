@@ -428,7 +428,7 @@ RSpec.describe Cask::Audit, :cask do
 
     describe "pkg allow_untrusted checks" do
       let(:only) { ["untrusted_pkg"] }
-      let(:message) { "allow_untrusted is not permitted in official Homebrew Cask taps" }
+      let(:message) { "allow_untrusted is not permitted in the official homebrew/cask tap" }
 
       context "when the Cask has no pkg stanza" do
         let(:cask_token) { "basic-cask" }
@@ -1101,6 +1101,44 @@ RSpec.describe Cask::Audit, :cask do
         let(:cask_token) { "latest-with-auto-updates" }
 
         it { is_expected.to error_with(message) }
+      end
+    end
+
+    describe "Rosetta checks" do
+      let(:online) { true }
+      let(:only) { ["rosetta"] }
+      let(:cask) do
+        Cask::Cask.new("rosetta-audit") do
+          version "1.0"
+          sha256 :no_check
+          url "https://brew.sh/rosetta-audit.zip"
+          name "Rosetta Audit"
+          homepage "https://brew.sh/"
+          depends_on macos: :big_sur
+
+          binary "rosetta-audit"
+
+          caveats do
+            requires_rosetta
+          end
+        end
+      end
+
+      around do |example|
+        Homebrew::SimulateSystem.with(os: :sequoia, arch: :arm) do
+          example.run
+        end
+      end
+
+      before do
+        allow(Hardware::CPU).to receive(:rosetta_installed?).and_return(true)
+        allow(audit).to receive(:extract_artifacts).and_yield(cask.artifacts, cask.staged_path)
+        allow(audit).to receive(:system_command)
+          .and_return(instance_double(SystemCommand::Result, success?: true, merged_output: "x86_64"))
+      end
+
+      it "recognizes a suppressed requires_rosetta caveat" do
+        expect(run).to pass
       end
     end
 

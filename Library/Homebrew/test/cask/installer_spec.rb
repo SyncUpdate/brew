@@ -15,6 +15,7 @@ RSpec.describe Cask::Installer, :cask do
       cask = Cask::CaskLoader.load(cask_path("local-caffeine"))
 
       described_class.new(cask).save_caskfile
+      Cask::Tab.create(cask).write
 
       expect([
         cask.installed_caskfile&.basename&.to_s,
@@ -44,12 +45,20 @@ RSpec.describe Cask::Installer, :cask do
       ])
     end
 
-    it "strips legacy install flight blocks from JSON metadata" do
+    it "strips legacy install flight blocks and records empty artifacts in JSON metadata" do
       cask = Cask::CaskLoader.load(cask_path("with-preflight"))
 
       described_class.new(cask).save_caskfile
 
-      expect(JSON.parse(cask.installed_caskfile.read).keys).to be_empty
+      expect(JSON.parse(cask.installed_caskfile.read)).to eq({ "artifacts" => [] })
+    end
+
+    it "stores intentional empty artifacts in JSON metadata" do
+      cask = Cask::CaskLoader.load(cask_path("stage-only"))
+
+      described_class.new(cask).save_caskfile
+
+      expect(JSON.parse(cask.installed_caskfile.read)).to eq({ "artifacts" => [] })
     end
 
     it "stores legacy uninstall flight block casks as Ruby metadata" do
@@ -92,6 +101,7 @@ RSpec.describe Cask::Installer, :cask do
       end
 
       described_class.new(cask).save_caskfile
+      Cask::Tab.create(cask).write
 
       loaded_cask = Cask::CaskLoader.load_from_installed_caskfile(cask.installed_caskfile)
       expect([
@@ -706,6 +716,29 @@ RSpec.describe Cask::Installer, :cask do
       installer.enqueue_downloads
     end
 
+    it "enqueues the selected language download from API data" do
+      source_cask = Cask::CaskLoader.load("with-languages")
+      cask_struct = Homebrew::API::Cask::CaskStructGenerator.generate_cask_struct_hash(
+        source_cask.to_hash_with_variations,
+      )
+      config = Cask::Config.new(explicit: { languages: ["zh"] })
+      cask = Cask::CaskLoader::FromAPILoader.new(
+        "language-api-cask",
+        from_json:          cask_struct.serialize,
+        from_internal_json: true,
+      ).load(config:)
+      download_queue = instance_double(Homebrew::DownloadQueue)
+      installer = described_class.new(cask, download_queue:)
+
+      allow(Homebrew::API::Internal).to receive(:cask_struct).with("language-api-cask").and_return(cask_struct)
+      expect(Homebrew::API::Cask).not_to receive(:source_download)
+      expect(download_queue).to receive(:enqueue) do |download|
+        expect(download.url.to_s).to eq("file://#{TEST_FIXTURE_DIR}/cask/container.tar.gz")
+      end
+
+      installer.enqueue_downloads
+    end
+
     it "enqueues source API caskfiles before the main cask download" do
       cask = Cask::Cask.new("source-api-cask") do
         url "file://#{TEST_FIXTURE_DIR}/cask/container.tar.gz"
@@ -822,6 +855,31 @@ RSpec.describe Cask::Installer, :cask do
       expect(cask).not_to be_installed
       expect(queued_staged_path).not_to exist
       expect(queued_staged_marker).not_to exist
+    end
+  end
+
+  describe "#load_installed_caskfile!" do
+    it "uses recovered installed metadata before falling back to the current cask" do
+      cask = Cask::CaskLoader.load(cask_path("local-caffeine"))
+      recovered_cask = Cask::Cask.new(cask.token) do
+        version "1.0"
+        app "Recovered.app"
+      end
+      installed_caskfile = mktmpdir/"local-caffeine.json"
+      installed_caskfile.write("{}")
+      allow(Cask::Migrator).to receive(:migrate_if_needed)
+      allow(cask).to receive(:installed_caskfile).and_return(installed_caskfile)
+      allow(Cask::CaskLoader).to receive(:load_from_installed_caskfile)
+        .with(installed_caskfile)
+        .and_raise(Cask::CaskInvalidError.new(cask.token, "broken DSL"))
+      expect(Cask::CaskLoader).to receive(:recover_from_installed_caskfile)
+        .with(installed_caskfile, tab: an_instance_of(Cask::Tab), fallback_cask: cask)
+        .and_return(recovered_cask)
+
+      installer = described_class.new(cask)
+      installer.load_installed_caskfile!
+
+      expect(installer.cask).to equal(recovered_cask)
     end
   end
 

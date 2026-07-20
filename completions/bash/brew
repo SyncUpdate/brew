@@ -1201,6 +1201,7 @@ _brew_contributions() {
       --debug
       --from
       --help
+      --maintainer-report-csv
       --organisation
       --quarter
       --quiet
@@ -1605,6 +1606,7 @@ _brew_formula_analytics() {
       --debug
       --help
       --homebrew-devcmdrun-developer
+      --homebrew-env-config
       --homebrew-os-arch-ci
       --homebrew-prefixes
       --homebrew-versions

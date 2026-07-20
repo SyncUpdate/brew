@@ -83,13 +83,13 @@ Try to summarise from the [`homepage`](/rubydoc/Formula.html#homepage-class_meth
 
 **We don’t accept new formulae into Homebrew/homebrew-core without a [`license`](/rubydoc/Formula.html#license-class_method)!**
 
-We only accept formulae that use a [Debian Free Software Guidelines license](https://wiki.debian.org/DFSGLicenses) or are released into the public domain following [DFSG Guidelines on Public Domain software](https://wiki.debian.org/DFSGLicenses#Public_Domain).
+We only accept formulae that use a licence compatible with the [Debian Free Software Guidelines](https://wiki.debian.org/DFSGLicenses) or are released into the public domain following [DFSG Guidelines on Public Domain software](https://wiki.debian.org/DFSGLicenses#Public_Domain).
 
-Use the license identifier from the [SPDX License List](https://spdx.org/licenses/) e.g. `license "BSD-2-Clause"`, or use `license :public_domain` for public domain software.
+Use the licence identifier from the [SPDX License List](https://spdx.org/licenses/) e.g. `license "BSD-2-Clause"`, or use `license :public_domain` for public domain software.
 
-Use `:any_of`, `:all_of` or `:with` to describe complex license expressions. `:any_of` should be used when the user can choose which license to use. `:all_of` should be used when the user must use all licenses. `:with` should be used to specify a valid SPDX exception. Add `+` to an identifier to indicate that the formulae can be licensed under later versions of the same license.
+Use `:any_of`, `:all_of` or `:with` to describe complex licence expressions. `:any_of` should be used when the user can choose which licence to use. `:all_of` should be used when the user must use all licences. `:with` should be used to specify a valid SPDX exception. Add `+` to an identifier to indicate that the formulae can be licensed under later versions of the same licence.
 
-Check out the [License Guidelines](License-Guidelines.md) for examples of complex license expressions in Homebrew formulae.
+Check out the [Licence Guidelines](Licence-Guidelines.md) for examples of complex licence expressions in Homebrew formulae.
 
 ### Check the build system
 
@@ -1166,7 +1166,7 @@ end
 
 Any initialization steps that aren't necessarily part of the install process can be located in a `post_install` block, such as setup commands or data directory creation. This block can be re-run separately with `brew postinstall <formula>`.
 
-For simple file preparation, prefer [`post_install_steps`](/rubydoc/Formula.html#post_install_steps-class_method). These steps are stored in the JSON API and do not require evaluating formula Ruby. A `post_install_steps` block may only contain the supported step calls with literal arguments. It cannot call the wider formula DSL or arbitrary Ruby code.
+For simple file preparation, prefer [`post_install_steps`](/rubydoc/Formula.html#post_install_steps-class_method). These steps are stored in the JSON API and do not require evaluating formula Ruby. A `post_install_steps` block may only contain the supported step calls with literal arguments. It cannot call the wider formula DSL or arbitrary Ruby code. Homebrew executes the steps with the same sandbox policy as `post_install`.
 
 ```ruby
 class Foo < Formula
@@ -1190,7 +1190,7 @@ represented by structured steps.
 
 #### File preparation steps
 
-`mkdir`, `mkdir_p` and `touch` default to paths relative to `var`. `move`, `mv`, `move_children`, `symlink`, `ln_s` and `ln_sf` default their source and target paths to `prefix`. Use `base:`, `source_base:` or `target_base:` when a step needs another formula path such as `pkgetc`; use `source_base: :relative` for relative symlink sources.
+`mkdir`, `mkdir_p` and `touch` default to paths relative to `var`. Other file steps default their source and target paths to `prefix`. Use `base:`, `source_base:` or `target_base:` when a step needs another formula path such as `pkgetc`; use `source_base: :relative` for relative symlink sources.
 
 * `mkdir`: create one directory; example: `mkdir "log/foo"`.
 * `mkdir_p`: create a directory and any missing parents; example: `mkdir_p "log/foo"`.
@@ -1198,9 +1198,14 @@ represented by structured steps.
 * `move`: move one file or directory; example: `move "default.conf", "foo/default.conf"`.
 * `mv`: alias for `move`; example: `mv "default.conf", "foo/default.conf"`.
 * `move_children`: move the contents of one directory into another; example: `move_children "defaults", "foo/defaults"`.
+* `copy`: copy a file or, with `recursive: true`, a directory; example: `copy "default.conf", "foo/default.conf"`.
+* `remove`: remove one or more paths; example: `remove ["old.conf", "foo/*.bak"]`. Use `recursive: true` for directories.
+* `inreplace`: replace text in a file; example: `inreplace "foo.conf", "@PREFIX@", "{{HOMEBREW_PREFIX}}"`. Pass a regular expression as `before` for pattern matching.
 * `symlink`: create a symlink; example: `symlink "cert.pem", "foo/cert.pem", source_base: :relative`.
 * `ln_s`: alias for `symlink`; example: `ln_s "cert.pem", "foo/cert.pem", source_base: :relative`.
 * `ln_sf`: create or replace a symlink; example: `ln_sf "cert.pem", "foo/cert.pem", source_base: :relative`.
+
+Path collections passed to `remove` expand globs automatically. Removals may be restricted with `symlink_target_contains:` or `content_contains:`.
 
 #### Default config and template steps
 

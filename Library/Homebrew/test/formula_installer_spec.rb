@@ -87,24 +87,23 @@ RSpec.describe FormulaInstaller do
     end
   end
 
-  specify "relocated bottle install requires developer tools on Apple Silicon", :needs_macos do
+  specify "relocated bottle install does not require developer tools on Apple Silicon", :needs_macos do
     formula = TestballBottle.new
     installer = described_class.new(formula)
 
-    allow(installer).to receive_messages(lock: nil, pour_bottle?: true)
+    allow(installer).to receive_messages(lock: nil, pour_bottle?: true, quiet?: true)
     allow(Hardware::CPU).to receive(:arm?).and_return(true)
     allow(formula.bottle_specification).to receive(:skip_relocation?).and_return(false)
-    allow_any_instance_of(Homebrew::Diagnostic::Checks)
-      .to receive(:check_for_installed_developer_tools)
-      .and_return("No developer tools installed.")
+    expect(Homebrew::Diagnostic::Checks).not_to receive(:new)
+    allow(installer).to receive(:check_conflicts).and_raise("stopped after preinstall checks")
 
     expect do
       installer.install
-    end.to raise_error(SystemExit)
+    end.to raise_error("stopped after preinstall checks")
   end
 
   describe "#finish" do
-    it "runs post-install steps before the remaining `post_install` hook" do
+    it "runs structured post-install work through the post-install subprocess" do
       formula = formula "finish-install-steps" do
         T.bind(self, T.class_of(Formula))
         url "foo-1.0"
@@ -129,7 +128,7 @@ RSpec.describe FormulaInstaller do
         summary:                     "summary",
         verbose?:                    false,
       )
-      allow(formula).to receive_messages(post_install_steps_defined?: true, post_install_defined?: true,
+      allow(formula).to receive_messages(post_install_steps_defined?: true, post_install_defined?: false,
                                          runtime_dependencies: [])
       allow(CacheStoreDatabase).to receive(:use).with(:linkage)
       allow(Homebrew::EnvConfig).to receive(:sbom?).and_return(false)
@@ -139,7 +138,7 @@ RSpec.describe FormulaInstaller do
       allow(tab).to receive(:write)
 
       expect(formula).to receive(:install_etc_var).ordered
-      expect(formula).to receive(:run_post_install_steps).ordered
+      expect(formula).not_to receive(:run_post_install_steps)
       expect(installer).to receive(:post_install).ordered
 
       installer.finish

@@ -131,10 +131,10 @@ and are now no longer needed.
 
 ### `bundle` \[*`subcommand`*\]
 
-Bundler for non-Ruby dependencies from Homebrew, Homebrew Cask, Mac App Store
-dependencies, VSCode (and forks/variants) extensions, Go packages, Cargo
-packages, uv tools, Flatpak packages, WinGet packages, Krew plugins and npm
-packages.
+Bundler for non-Ruby dependencies from Homebrew formulae, Homebrew casks, Mac
+App Store dependencies, VSCode (and forks/variants) extensions, Go packages,
+Cargo packages, uv tools, Flatpak packages, WinGet packages, Krew plugins and
+npm packages.
 
 Note: Flatpak support is only available on Linux.
 
@@ -355,7 +355,7 @@ to one or more of the following environment variables:
 : Run an external command in an isolated build environment based on the
   `Brewfile` dependencies.
 
-This sanitized build environment ignores unrequested dependencies, which makes
+This sanitised build environment ignores unrequested dependencies, which makes
 sure that things you didn't specify in your `Brewfile` won't get picked up by
 commands like `bundle install`, `npm install`, etc. It will also add compiler
 flags which will help with finding keg-only dependencies like `openssl`,
@@ -2208,10 +2208,9 @@ provided, display brief statistics for all installed taps.
 
 ### `trust` \[*`options`*\] \[*`target`* ...\]
 
-Trust non-official tap formulae, casks or commands so Homebrew may load them
-when `$HOMEBREW_REQUIRE_TAP_TRUST` is set. Trusted entries are stored in
-`${XDG_CONFIG_HOME}/homebrew/trust.json` if `$XDG_CONFIG_HOME` is set or
-`~/.homebrew/trust.json` otherwise.
+Trust non-official tap formulae, casks or commands so Homebrew may load them.
+Trusted entries are stored in `${XDG_CONFIG_HOME}/homebrew/trust.json` if
+`$XDG_CONFIG_HOME` is set or `~/.homebrew/trust.json` otherwise.
 
 `--tap`
 
@@ -2536,9 +2535,7 @@ available and the local username otherwise.
 
 Check *`formula`* for known security vulnerabilities using the OSV.dev database.
 
-With no arguments, installed formulae are checked unless tap trust is
-configured, in which case all formulae permitted by the trust configuration are
-checked.
+With no arguments, all installed formulae are checked.
 
 `-d`, `--deps`
 
@@ -3139,7 +3136,7 @@ Display the source of a *`formula`* or *`cask`*.
 
 : Treat all named arguments as casks.
 
-### `contributions` \[`--user=`\] \[`--repositories=`\] \[`--quarter=`\] \[`--from=`\] \[`--to=`\] \[`--csv`\]
+### `contributions` \[`--user=`\] \[`--repositories=`\] \[`--quarter=`\] \[`--from=`\] \[`--to=`\] \[`--csv`\] \[`--maintainer-report-csv=`\]
 
 Summarise contributions to Homebrew repositories.
 
@@ -3182,6 +3179,22 @@ Summarise contributions to Homebrew repositories.
 `--csv`
 
 : Print a CSV of contributions across repositories over the time period.
+
+`--maintainer-report-csv`
+
+: Print a CSV of Maintainer and Lead Maintainer activity criteria using fetched
+  Git histories and GitHub's existing approved-review search for the Homebrew
+  governance quarter, for example `--maintainer-report-csv=2026-2`. Also write
+  it to `brew-contributions-FROM-to-TO.csv` in the current directory. Only
+  Maintainers listed at the end of that quarter are included. The `new role`
+  value must show a downgrade for two consecutive quarters before a downgrade is
+  applied. Review searches return at most 100 results and other counts are
+  capped at 500 per repository and contribution type. Repository-scoped
+  follow-up searches ensure role activity checks remain accurate when a count is
+  capped. Completed-period GitHub searches are cached in Homebrew's cache and
+  removed by normal cache pruning. `YEAR-1` is December of the previous year
+  through February, `YEAR-2` is March through May, `YEAR-3` is June through
+  August and `YEAR-4` is September through November.
 
 ### `create` \[*`options`*\] *`URL`*
 
@@ -3588,11 +3601,11 @@ Generate the template files for a new tap.
 
 `--no-git`
 
-: Don't initialize a Git repository for the tap.
+: Don't initialise a Git repository for the tap.
 
 `--branch`
 
-: Initialize Git repository and setup GitHub Actions workflows with the
+: Initialise a Git repository and set up GitHub Actions workflows with the
   specified branch name (default: `main`).
 
 `--github-packages`
@@ -4226,9 +4239,9 @@ can take several different forms:
 
 ## SPECIFYING CASKS
 
-Many Homebrew Cask commands accept one or more *`cask`* arguments. These can be
-specified the same way as the *`formula`* arguments described in `SPECIFYING
-FORMULAE` above.
+Many commands that work with casks accept one or more *`cask`* arguments. These
+can be specified the same way as the *`formula`* arguments described in
+`SPECIFYING FORMULAE` above.
 
 ## ENVIRONMENT
 
@@ -4645,8 +4658,8 @@ command execution (e.g. `$(cat file)`).
 
 `HOMEBREW_FORBIDDEN_LICENSES`
 
-: A space-separated list of SPDX license identifiers. Homebrew will refuse to
-  install a formula if it or any of its dependencies has a license on this list.
+: A space-separated list of SPDX licence identifiers. Homebrew will refuse to
+  install a formula if it or any of its dependencies has a licence on this list.
 
 `HOMEBREW_FORBIDDEN_OWNER`
 
@@ -5109,7 +5122,7 @@ Zhong, Sam Ford, Sean Molenaar and Thierry Moisan.
 
 Homebrew's other Maintainers are Andrew Nesbitt, Anton Melnikov, Caleb Xu, Daeho
 Ro, Douglas Eichelberger, Eric Knibbe, Klaus Hipp, Markus Reiter, Rylan Polster,
-Štefan Baebler and William Woodruff.
+Stefan Baebler and William Woodruff.
 
 ## BUGS
 

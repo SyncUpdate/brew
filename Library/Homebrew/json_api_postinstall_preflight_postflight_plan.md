@@ -25,12 +25,12 @@ conversions can peel supported repeated statements out of larger hooks. Runtime
 handling runs formula steps first and then runs `post_install` last for the
 remaining Ruby work. Cask `*flight_steps` still replace the matching legacy
 flight block because cask artifacts already carry replacement semantics and
-warn when both forms are present. Post-install or postflight steps are not
-sandboxed for this iteration because they run only Homebrew-owned structured
-operations. The runner shape leaves room to sandbox future step types that
-invoke non-Homebrew code. Future cask work should sandbox all `*flight` run
-scripts from non-Homebrew and non-system sources, for example scripts shipped
-by upstream artifacts.
+warn when both forms are present. Formula post-install steps run in the same
+sandboxed subprocess as the remaining `post_install` hook, preserving its
+filesystem and network restrictions for structured Ruby operations and any
+commands they invoke. Future cask work should sandbox all `*flight` run scripts
+from non-Homebrew and non-system sources, for example scripts shipped by
+upstream artifacts.
 
 The final target is not to keep legacy hooks and structured steps side by side.
 Once `homebrew/core` and `homebrew/cask` have been converted, all
@@ -85,6 +85,13 @@ taps can adopt it; PR `2` (the enforcing/autocorrecting cops) merges last so it
 does not flag formulae or casks before the DSL is widely available. After PR `1`
 is merged and before PRs `3` and `4` are merged, cut a new `Homebrew/brew`
 stable release so `homebrew/core` and `homebrew/cask` CI have the new DSL.
+
+These four PRs are also a stage gate. Before starting the next numbered DSL
+operation, implement and test the current operation's enforcing/autocorrecting
+PR `2`, record its commit in this plan and run its cops across both taps. The
+cop can still merge last, but an operation is not complete while its PR `2` is
+missing. If no safe legacy pattern exists, record the tap scan, representative
+filenames and negative cop coverage instead of silently omitting the PR.
 
 Each operation PR should also clone, or create clean local worktrees for,
 `homebrew/core` and `homebrew/cask`, make the corresponding tap changes and
@@ -171,10 +178,13 @@ Local all-file scan source: `homebrew/cask` at `4eee0394c96c`. The scan read
 all `7,741` files under `Casks/`. Pattern buckets overlap because one flight
 block can prepare files, change permissions and run commands.
 
-- `193` of `7,741` casks currently require the Ruby source at install time
-  through `Cask#caskfile_only?`: `170` because of legacy `*flight` blocks and
-  `23` because of language blocks only. `27` casks have language blocks in
-  total, so `4` have both language blocks and legacy `*flight` blocks.
+- Before language variations were serialised, `193` of `7,741` casks required
+  the Ruby source at install time through `Cask#caskfile_only?`: `170` because
+  of legacy `*flight` blocks and `23` because of language blocks only. `27`
+  casks had language blocks in total, so `4` had both language blocks and
+  legacy `*flight` blocks. Language variation API data removes language blocks
+  as a source download gate; the `4` overlapping casks still need source for
+  their legacy flight blocks.
 - I did not find other current cask install-time Ruby source download gates.
   Ordinary artifacts, uninstall/zap directives, caveats, dependencies and
   `on_*` variations are serialised through API data. `*_steps` artifacts are
@@ -215,13 +225,13 @@ handling use `Homebrew::API::Formula.source_download_formula` for build-time
 reasons outside this post-install DSL work.
 
 Cask JSON API installs use `Homebrew::API::Cask.source_download_cask` when
-`Cask#caskfile_only?` is true. Today that is true when a cask has any legacy
-`preflight`, `postflight`, `uninstall_preflight` or `uninstall_postflight`
-block, or when it has language blocks. Legacy flight blocks need the source
-because API data only records that a block exists, not the Ruby body. Language
-blocks need the source because the API stores available language codes, but not
-the selected block return value or stanza effects; language-specific URLs must
-be resolved before the download can be enqueued.
+`Cask#caskfile_only?` is true. Legacy `preflight`, `postflight`,
+`uninstall_preflight` and `uninstall_postflight` blocks need the source because
+API data only records that a block exists, not the Ruby body. Current API data
+stores each language block's locale group, default marker, return value and
+resulting stanza differences, so language-specific URLs can be resolved before
+the download is enqueued. Older API data with only the flat `languages` array
+continues to download source as a compatibility fallback.
 
 ## Installed Cask Metadata Format
 
@@ -335,6 +345,12 @@ is stripped during metadata serialisation.
   non-Homebrew code and should be ready for future sandboxing. Land RuboCop
   autocorrection and tap-wide conversions in a separate follow-up after the
   new DSL methods are available in a stable Homebrew release.
+- [x] PR 4.1, formula install-step sandboxing.
+  Commit: `Sandbox formula install steps`.
+  Scope: run structured formula steps inside the existing post-install child
+  process so macOS Seatbelt and Linux Bubblewrap apply the same filesystem and
+  network policy as legacy `post_install` hooks. This must land before any tap
+  migrations use filesystem-mutating steps.
 - PR 5, default config and template writes (four-PR workflow above).
   Estimated existing formulae/casks affected: about `112` formulae write or
   patch default configuration/data files, and a subset of the `68` file-prep
@@ -378,7 +394,7 @@ is stripped during metadata serialisation.
     `{{appdir}}`-content flight writes all target a `shimscript` local that is
     also wired to a `binary` stanza, and the literal-path LibreOffice packs
     interpolate an unsupported language `token` and run `system_command`.
-- [x] PR 6, database and service data directory initialisation.
+- [x] PR 6.1, database and service data directory initialisation.
   Commit: `Add install step data directories`.
   Estimated existing formulae/casks affected: about `19` formulae initialise
   service data directories.
@@ -414,7 +430,16 @@ is stripped during metadata serialisation.
   `./bin/brew style homebrew/core`, targeted `./bin/brew audit --strict
   --online --formula ...` for the changed formulae and `./bin/brew readall
   homebrew/core`.
-- [x] PR 7, certificate and trust store actions.
+- [x] PR 6.2, database and link enforcement.
+  Commit: `Add install step enforcement cops`.
+  Scope: the formula install-step cop conservatively autocorrects recognised
+  PostgreSQL, MySQL and MariaDB bootstrap statements to `init_data_dir`, and
+  recognised PostgreSQL link maintenance to `link_dir` or `link_children`.
+  Partial conversions preserve existing `post_install_steps` ordering and
+  leave unsupported warning or maintenance work in `post_install`. Matching
+  Percona bootstrap hooks remain unchanged because they were not part of the
+  recorded MySQL formula conversion.
+- [x] PR 7.1, certificate and trust store actions.
   Commit: `Add install step keychain cleanup`.
   Estimated existing formulae/casks affected: about `17` formulae update
   certificate/trust state and `8` cask flight blocks invoke
@@ -427,7 +452,15 @@ is stripped during metadata serialisation.
   `source_base: :formula_pkgetc`; specialised trust store generation such as
   `ca-certificates` bundle regeneration and Mono `cert-sync` stays legacy Ruby
   because current repeated usage is below the named-variant threshold.
-- [x] PR 8, cask permission and ownership actions.
+- [x] PR 7.2, certificate and keychain enforcement.
+  Commit: `Add install step enforcement cops`.
+  Scope: the cask install-step cop converts fixed `/usr/bin/security`
+  certificate deletion flights to `delete_keychain_certificate`. The formula
+  cop converts the three direct `pkgetc` certificate bundle replacements to
+  forced `symlink` steps using `source_formula` and
+  `source_base: :formula_pkgetc`. Dynamic paths, altered commands and
+  specialised certificate generation remain unsupported.
+- [x] PR 8.1, cask permission and ownership actions.
   Commit: `Add cask permission steps`.
   Estimated existing casks affected: about `21` casks change permissions and
   `36` change ownership.
@@ -445,10 +478,20 @@ is stripped during metadata serialisation.
   `Casks/h/hummingbird.rb`, `Casks/m/mplabx-ide.rb` and
   `Casks/p/proxy-audio-device.rb`; they depend on unsupported local variables,
   architecture data or additional `system_command` work.
-- [ ] PR 9, cask language variations in API data.
+- [x] PR 8.2, permission and ownership enforcement.
+  Commit: `Add install step enforcement cops`.
+  Scope: the cask install-step cop converts pure legacy flight blocks using
+  `set_permissions` and `set_ownership` to matching `*_steps` blocks. Mixed
+  flights, dynamic paths and unsupported arguments remain unchanged.
+- [x] PR 9, cask language variations in API data.
+  Commit: `Serialise cask language variations`.
   Estimated existing casks affected: `27` casks use language blocks, with large
   examples including `Casks/f/firefox.rb`,
   `Casks/l/libreoffice-language-pack.rb` and `Casks/t/thunderbird.rb`.
-  Notes for implementation: represent language-specific URLs, checksums and
-  returned values without evaluating cask Ruby before fetch; keep the public API
-  shape friendly to clients that need to choose one language deterministically.
+  Scope: serialise a deterministic default plus ordered language variation
+  deltas containing locale groups, the default marker, return values and all
+  resulting API stanza changes. Public and internal API loaders select exact or
+  partial locale matches and fall back to the default. Cask downloads use the
+  selected URL and checksum directly, while older API data still falls back to
+  source. Artifact differences are included so all `27` current language casks,
+  including `cave-story` and `wondershare-edrawmax`, can use API data.

@@ -356,12 +356,9 @@ RSpec.describe Formulary do
           expect(described_class.factory(formula_name)).to be_a(Formula)
         end
 
-        it "returns a Formula from an Alias path" do
-          expect(described_class.factory(alias_name)).to be_a(Formula)
-        end
-
-        it "returns a Formula from a fully qualified Alias path" do
-          expect(described_class.factory("#{tap.name}/#{alias_name}")).to be_a(Formula)
+        it "returns a Formula with the correct alias path from a bare or fully qualified Alias name" do
+          expect(described_class.factory(alias_name).alias_path).to eq(alias_path)
+          expect(described_class.factory("#{tap.name}/#{alias_name}").alias_path).to eq(alias_path)
         end
 
         it "raises an error when the Formula cannot be found" do
@@ -619,16 +616,23 @@ RSpec.describe Formulary do
         allow(Homebrew::API::Formula).to receive(:all_formulae).and_return formula_json_contents(
           "patches" => [
             {
-              "strip"  => "p1",
-              "url"    => "https://example.com/test.patch",
-              "sha256" => TEST_SHA256,
+              "strip"    => "p1",
+              "url"      => "https://example.com/test.patch",
+              "sha256"   => TEST_SHA256,
+              "resolves" => [
+                { "type" => "security", "id" => "CVE-2024-1234" },
+                { "type" => "defect", "id" => "https://github.com/foo/bar/issues/1" },
+              ],
             },
           ],
         )
 
         formula = described_class.factory(formula_name)
 
-        expect(formula.patchlist.first).to be_a(ExternalPatch)
+        expect(formula.patchlist.first).to be_a(ExternalPatch).and have_attributes(resolves: [
+          "CVE-2024-1234",
+          "https://github.com/foo/bar/issues/1",
+        ])
       end
 
       it "returns a deprecated Formula when given a name" do
