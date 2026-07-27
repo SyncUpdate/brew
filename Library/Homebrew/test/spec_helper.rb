@@ -4,6 +4,7 @@
 if ENV["HOMEBREW_TESTS_COVERAGE"]
   require "simplecov"
   require "simplecov-cobertura"
+  SimpleCov.start
 
   formatters = [
     SimpleCov::Formatter::HTMLFormatter,
@@ -286,9 +287,9 @@ RSpec.configure do |config|
 
     Tap.installed.each(&:clear_cache)
     Cachable::Registry.clear_all_caches
-    FormulaInstaller.clear_attempted
-    FormulaInstaller.clear_installed
-    FormulaInstaller.clear_fetched
+    FormulaInstaller.attempted.clear
+    FormulaInstaller.installed.clear
+    FormulaInstaller.fetched.clear
     Utils::Curl.clear_path_cache
 
     TEST_DIRECTORIES.each(&:mkpath)

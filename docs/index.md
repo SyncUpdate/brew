@@ -1,5 +1,5 @@
 ---
-last_review_date: "2026-06-08"
+last_review_date: "2026-07-18"
 ---
 
 Start with [installation](Installation.md),
@@ -34,11 +34,10 @@ Documentation is grouped below by audience: users, contributors, maintainers and
 
 - [Querying `brew`](Querying-Brew.md)
 - [C++ Standard Libraries](C%2B%2B-Standard-Libraries.md)
-- [Custom GCC and Cross Compilers](Custom-GCC-and-cross-compilers.md)
+- [Custom GCC and Cross-Compilers](Custom-GCC-and-cross-compilers.md)
 - [External Commands](External-Commands.md)
 - [Language Runtimes and Packages](Language-Runtimes-and-Packages.md)
-- [How to Build Software Outside Homebrew with Homebrew `keg_only` Dependencies](How-to-Build-Software-Outside-Homebrew-with-Homebrew-keg-only-Dependencies.md)
-- [Xcode](Xcode.md)
+- [Building Software with Homebrew Keg-Only Dependencies](How-to-Build-Software-Outside-Homebrew-with-Homebrew-keg-only-Dependencies.md)
 
 - [Creating a Homebrew Issue](Creating-a-Homebrew-Issue.md)
 - [Updating Software in Homebrew](Updating-Software-in-Homebrew.md)
@@ -83,10 +82,11 @@ Documentation is grouped below by audience: users, contributors, maintainers and
 - [Homebrew/homebrew-cask Maintainer Guide](Homebrew-homebrew-cask-Maintainer-Guide.md)
 
 - [BrewTestBot for Maintainers](BrewTestBot-For-Maintainers.md)
-- [Common Issues for Maintainers](Common-Issues-for-Core-Contributors.md)
+- [Common Issues for Maintainers](Common-Issues-for-Maintainers.md)
 - [Releases](Releases.md)
 
 - [Linux CI](Linux-CI.md)
+- [Xcode](Xcode.md)
 
 ## Governance
 

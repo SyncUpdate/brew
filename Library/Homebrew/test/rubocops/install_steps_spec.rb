@@ -42,7 +42,7 @@ RSpec.describe RuboCop::Cop::FormulaAudit::InstallSteps do
 
         post_install_steps do
           system "true"
-          ^^^^^^^^^^^^^ FormulaAudit/InstallSteps: Steps blocks may only contain install step DSL calls: `mkdir`, `mkdir_p`, `touch`, `move`, `mv`, `move_children`, `copy`, `remove`, `inreplace`, `symlink`, `ln_s`, `ln_sf`, `link_dir`, `link_children`, `write`, `init_data_dir`, `compile_gsettings_schemas`, `gio_querymodules`, `gdk_pixbuf_query_loaders`, `gtk_update_icon_cache`, `update_mime_database`, `update_desktop_database`.
+          ^^^^^^^^^^^^^ FormulaAudit/InstallSteps: Steps blocks may only contain install step DSL calls: `mkdir`, `mkdir_p`, `touch`, `move`, `mv`, `move_children`, `move_contents`, `copy`, `remove`, `inreplace`, `symlink`, `ln_s`, `ln_sf`, `link_dir`, `link_children`, `write`, `init_data_dir`, `compile_gsettings_schemas`, `gio_querymodules`, `gdk_pixbuf_query_loaders`, `gtk_update_icon_cache`, `update_mime_database`, `update_desktop_database`, `set_permissions`, `run`, `terminate_process`, `warn`, `configure_gcc_runtime`, `install_gzipped_executable`, `if_path_exists`, `unless_path_exists`, `on_macos`, `on_linux`.
         end
       end
     RUBY
@@ -56,11 +56,19 @@ RSpec.describe RuboCop::Cop::FormulaAudit::InstallSteps do
         post_install_steps do
           mkdir_p "foo"
           touch "foo/state"
+          touch "foo/#{formula_name}"
           mv "source", "target"
           move_children "source", "target"
+          move_contents "source", "target"
           inreplace "foo.conf", /@PREFIX@/, "{{HOMEBREW_PREFIX}}"
           ln_sf "source", "target", source_base: :relative, uninstall: true
           write "foo.conf", "key = value\n", base: :etc
+          set_permissions "foo", "0755"
+          run "foo", args: ["--repair"]
+          terminate_process "foo", attempts: 3
+          warn "foo exists"
+          configure_gcc_runtime
+          install_gzipped_executable "compressed.gz", "bin/executable"
           write "foo/banner", <<~TEXT
             literal banner
           TEXT
@@ -73,6 +81,31 @@ RSpec.describe RuboCop::Cop::FormulaAudit::InstallSteps do
           gtk_update_icon_cache
           update_mime_database
           update_desktop_database
+          on_macos do
+            if_path_exists "foo" do
+              touch "foo/scoped-state"
+            end
+          end
+          on_linux do
+            unless_path_exists "foo.conf", base: :etc do
+              write "foo.conf", "key = value\n", base: :etc
+            end
+          end
+        end
+      end
+    RUBY
+  end
+
+  it "reports an offense when a scope contains Ruby code" do
+    expect_offense(<<~RUBY)
+      class Foo < Formula
+        url "https://brew.sh/foo-1.0.tgz"
+
+        post_install_steps do
+          on_macos do
+            system "true"
+            ^^^^^^^^^^^^^ FormulaAudit/InstallSteps: Steps blocks may only contain install step DSL calls: `mkdir`, `mkdir_p`, `touch`, `move`, `mv`, `move_children`, `move_contents`, `copy`, `remove`, `inreplace`, `symlink`, `ln_s`, `ln_sf`, `link_dir`, `link_children`, `write`, `init_data_dir`, `compile_gsettings_schemas`, `gio_querymodules`, `gdk_pixbuf_query_loaders`, `gtk_update_icon_cache`, `update_mime_database`, `update_desktop_database`, `set_permissions`, `run`, `terminate_process`, `warn`, `configure_gcc_runtime`, `install_gzipped_executable`, `if_path_exists`, `unless_path_exists`, `on_macos`, `on_linux`.
+          end
         end
       end
     RUBY
@@ -85,7 +118,7 @@ RSpec.describe RuboCop::Cop::FormulaAudit::InstallSteps do
 
         post_install_steps do
           write "foo.conf", "prefix = #{prefix}"
-                                      ^^^^^^^^^ FormulaAudit/InstallSteps: Steps blocks may only contain install step DSL calls: `mkdir`, `mkdir_p`, `touch`, `move`, `mv`, `move_children`, `copy`, `remove`, `inreplace`, `symlink`, `ln_s`, `ln_sf`, `link_dir`, `link_children`, `write`, `init_data_dir`, `compile_gsettings_schemas`, `gio_querymodules`, `gdk_pixbuf_query_loaders`, `gtk_update_icon_cache`, `update_mime_database`, `update_desktop_database`.
+                                      ^^^^^^^^^ FormulaAudit/InstallSteps: Steps blocks may only contain install step DSL calls: `mkdir`, `mkdir_p`, `touch`, `move`, `mv`, `move_children`, `move_contents`, `copy`, `remove`, `inreplace`, `symlink`, `ln_s`, `ln_sf`, `link_dir`, `link_children`, `write`, `init_data_dir`, `compile_gsettings_schemas`, `gio_querymodules`, `gdk_pixbuf_query_loaders`, `gtk_update_icon_cache`, `update_mime_database`, `update_desktop_database`, `set_permissions`, `run`, `terminate_process`, `warn`, `configure_gcc_runtime`, `install_gzipped_executable`, `if_path_exists`, `unless_path_exists`, `on_macos`, `on_linux`.
         end
       end
     RUBY
@@ -169,7 +202,6 @@ RSpec.describe RuboCop::Cop::FormulaAudit::InstallSteps do
         def post_install
         ^^^^^^^^^^^^^^^^ FormulaAudit/InstallSteps: Use `post_install_steps` for simple file preparation.
           system Formula["glib"].opt_bin/"glib-compile-schemas", HOMEBREW_PREFIX/"share/glib-2.0/schemas"
-          system Formula["glib"].opt_bin/"gio-querymodules", HOMEBREW_PREFIX/"lib/gio/modules"
           system Formula["gdk-pixbuf"].opt_bin/"gdk-pixbuf-query-loaders", "--update-cache"
           system Formula["gtk+3"].opt_bin/"gtk3-update-icon-cache", "-q", "-t", "-f", HOMEBREW_PREFIX/"share/icons/hicolor"
           system Formula["shared-mime-info"].opt_bin/"update-mime-database", HOMEBREW_PREFIX/"share/mime"
@@ -184,7 +216,6 @@ RSpec.describe RuboCop::Cop::FormulaAudit::InstallSteps do
 
         post_install_steps do
           compile_gsettings_schemas
-          gio_querymodules
           gdk_pixbuf_query_loaders
           gtk_update_icon_cache
           update_mime_database

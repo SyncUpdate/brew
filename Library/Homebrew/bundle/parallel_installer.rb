@@ -5,6 +5,7 @@ require "concurrent/executors"
 require "concurrent/promises"
 require "monitor"
 require "utils"
+require "utils/tty"
 require "bundle/package_types"
 
 module Homebrew
@@ -101,8 +102,6 @@ module Homebrew
         @pool.wait_for_termination
       end
 
-      private
-
       sig { params(entries: T::Array[Installer::InstallableEntry]).returns(T::Hash[String, T::Set[String]]) }
       def build_dependency_map(entries)
         installed_taps = Homebrew::Bundle::Tap.installed_taps
@@ -175,6 +174,21 @@ module Homebrew
           map[entry.name] = depends_on
         end
       end
+
+      sig { params(message: String, stream: IO).void }
+      def write_output(message, stream: $stdout)
+        @output_mutex.synchronize do
+          # Interactive installers can leave ONLCR disabled, so use CRLF to
+          # ensure terminal status output returns to column 0.
+          if stream.tty?
+            stream.write(message, "\r\n")
+          else
+            stream.puts(message)
+          end
+        end
+      end
+
+      private
 
       sig { params(name: String).returns(String) }
       def normalize_formula_name(name)
@@ -285,22 +299,11 @@ module Homebrew
         end
       end
 
-      sig { params(message: String, stream: IO).void }
-      def write_output(message, stream: $stdout)
-        @output_mutex.synchronize do
-          # Interactive installers can leave ONLCR disabled, so use CRLF to
-          # ensure terminal status output returns to column 0.
-          if stream.tty?
-            stream.write(message, "\r\n")
-          else
-            stream.puts(message)
-          end
-        end
-      end
-
       sig { void }
       def clear_tty_line
-        File.open("/dev/tty", "w") { |f| f.print("\r\e[K") }
+        File.open("/dev/tty", "w") do |f|
+          f.print("#{Tty.begin_synchronized_update}\r\e[K#{Tty.end_synchronized_update}")
+        end
       rescue Errno::ENXIO, Errno::ENOENT, Errno::EACCES, Errno::EPERM
         # No TTY available (CI, piped output) - nothing to clean up.
         nil

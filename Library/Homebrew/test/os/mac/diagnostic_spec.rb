@@ -35,21 +35,21 @@ RSpec.describe Homebrew::Diagnostic::Checks do
       allow(Hardware::CPU).to receive(:features).and_return([:pclmulqdq])
       allow(macos_version).to receive(:outdated_release?).and_return(false)
 
-      expect(checks.check_for_opencore&.to_s).to include("This is a Tier 2 configuration")
+      expect(checks.check_for_opencore&.tier).to eq 2
     end
 
     it "reports Tier 3 on an old CPU" do
       allow(Hardware::CPU).to receive(:features).and_return([])
       allow(macos_version).to receive(:outdated_release?).and_return(false)
 
-      expect(checks.check_for_opencore&.to_s).to include("This is a Tier 3 configuration")
+      expect(checks.check_for_opencore&.tier).to eq 3
     end
 
     it "reports Tier 3 on a modern CPU running an outdated macOS" do
       allow(Hardware::CPU).to receive(:features).and_return([:pclmulqdq])
       allow(macos_version).to receive(:outdated_release?).and_return(true)
 
-      expect(checks.check_for_opencore&.to_s).to include("This is a Tier 3 configuration")
+      expect(checks.check_for_opencore&.tier).to eq 3
     end
   end
 

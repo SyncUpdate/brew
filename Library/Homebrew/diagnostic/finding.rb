@@ -9,7 +9,7 @@ module Homebrew
     class Finding
       class Remediation
         sig { returns(String) }
-        attr_reader :text
+        attr_accessor :text
 
         sig { returns(T::Array[String]) }
         attr_reader :commands

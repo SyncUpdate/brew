@@ -1,4 +1,4 @@
-# brew(1) -- The Missing Package Manager for macOS (or Linux)
+# brew(1) -- The Package Manager for Everywhere
 
 ## SYNOPSIS
 
@@ -613,8 +613,8 @@ flags which will help with finding keg-only dependencies like `openssl`,
 This workflow is useful for maintainers or testers who regularly install lots of
 formulae.
 
-Unless `--force` is passed, this returns a 1 exit code if anything would be
-removed.
+Unless `--force` is passed, this prompts before removing anything and returns a
+1 exit code if the prompt is declined or cannot be shown.
 
 `--install`
 
@@ -2294,7 +2294,8 @@ Remove a tapped formula repository.
 
 `-f`, `--force`
 
-: Untap even if formulae or casks from this tap are currently installed.
+: Uninstall all formulae and casks from this tap with `--force` before
+  untapping.
 
 ### `untrust` \[*`options`*\] \[*`target`* ...\]
 
@@ -3484,7 +3485,7 @@ set or `~/.homebrew/livecheck_watchlist.txt` otherwise.
 : Include packages that are autobumped by BrewTestBot. By default these are
   skipped.
 
-### `prof` \[`--stackprof`\] \[`--vernier`\] *`command`* \[...\]
+### `prof` \[*`options`*\] *`command`* \[...\]
 
 Run Homebrew with a Ruby profiler. For example, `brew prof readall`.
 
@@ -3495,6 +3496,10 @@ Run Homebrew with a Ruby profiler. For example, `brew prof readall`.
 `--vernier`
 
 : Use `vernier` instead of `ruby-prof` (the default).
+
+`--timings`
+
+: Record machine-readable timings for Homebrew command phases.
 
 ### `rubocop`
 
@@ -4349,12 +4354,12 @@ command execution (e.g. `$(cat file)`).
 
 `HOMEBREW_BOTTLE_DOMAIN`
 
-: Use this URL as the download mirror for bottles. If bottles at that URL are
-  temporarily unavailable, the default bottle domain will be used as a fallback
-  mirror. For example, `export HOMEBREW_BOTTLE_DOMAIN=http://localhost:8080`
-  will cause all bottles to download from the prefix `http://localhost:8080/`.
-  If bottles are not available at `$HOMEBREW_BOTTLE_DOMAIN` they will be
-  downloaded from the default bottle domain.
+: Use this URL as the download mirror for bottles and their manifests. If a
+  bottle or manifest is unavailable at the mirror, the default bottle domain
+  will be used as a fallback. Prefer `$HOMEBREW_ARTIFACT_DOMAIN` for a mirror
+  that transparently proxies all Homebrew downloads. For example, `export
+  HOMEBREW_BOTTLE_DOMAIN=http://localhost:8080` will cause all bottles to
+  download from the prefix `http://localhost:8080/`.
   
   *Default:* `https://ghcr.io/v2/homebrew/core`.
 
@@ -4596,7 +4601,7 @@ command execution (e.g. `$(cat file)`).
 
 : Use this base64 encoded username and password for authenticating with a Docker
   registry proxying GitHub Packages. If set to `none`, no authentication header
-  will be sent. This can be used, if remote `$HOMEBREW_BOTTLE_DOMAIN` does not
+  will be sent. This can be used, if remote `$HOMEBREW_ARTIFACT_DOMAIN` does not
   support any authentication. If `$HOMEBREW_DOCKER_REGISTRY_TOKEN` is set, it
   will be used instead.
 
@@ -5115,14 +5120,14 @@ Homebrew API: <https://docs.brew.sh/rubydoc/>
 
 Homebrew's Project Leader is Mike McQuaid.
 
-Homebrew's Lead Maintainers are Bevan Kay, Bo Anderson, Branch Vincent, Carlo
-Cabrera, Dustin Rodrigues, FX Coudert, Issy Long, Justin Krehel, Michael Cho,
-Michka Popoff, Mike McQuaid, Nanda H Krishna, Patrick Linnane, Rui Chen, Ruoyu
-Zhong, Sam Ford, Sean Molenaar and Thierry Moisan.
+Homebrew's Lead Maintainers are Bevan Kay, Carlo Cabrera, Issy Long, Justin
+Krehel, Michael Cho, Mike McQuaid, Nanda H Krishna, Patrick Linnane, Rui Chen,
+Ruoyu Zhong, Sam Ford and Sean Molenaar.
 
-Homebrew's other Maintainers are Andrew Nesbitt, Anton Melnikov, Caleb Xu, Daeho
-Ro, Douglas Eichelberger, Eric Knibbe, Klaus Hipp, Markus Reiter, Rylan Polster,
-Stefan Baebler and William Woodruff.
+Homebrew's other Maintainers are Andrew Nesbitt, Anton Melnikov, Bo Anderson,
+Branch Vincent, Caleb Xu, Daeho Ro, Douglas Eichelberger, Dustin Rodrigues, FX
+Coudert, Klaus Hipp, Markus Reiter, Michka Popoff, Rylan Polster, Stefan
+Baebler, Thierry Moisan and William Woodruff.
 
 ## BUGS
 

@@ -462,6 +462,21 @@ RSpec.describe Cask::Installer, :cask do
       expect(Cask::Caskroom.path.join("local-caffeine")).not_to be_a_directory
     end
 
+    it "removes Caskroom symlinks the uninstall broke, whatever name they carry" do
+      caffeine = Cask::CaskLoader.load(cask_path("local-caffeine"))
+      alias_link = Cask::Caskroom.path.join("local-caffeine-renamed")
+      unrelated_link = Cask::Caskroom.path.join("alias-of-another-cask")
+      installer = described_class.new(caffeine)
+      installer.install
+      FileUtils.ln_s "local-caffeine", alias_link
+      FileUtils.ln_s "another-cask", unrelated_link
+
+      installer.uninstall
+
+      expect([alias_link.symlink?, unrelated_link.symlink?, Cask::Caskroom.path.join("local-caffeine").exist?])
+        .to eq([false, true, false])
+    end
+
     it "uninstalls all versions if force is set" do
       caffeine = Cask::CaskLoader.load(cask_path("local-caffeine"))
       mutated_version = "#{caffeine.version}.1"
@@ -575,7 +590,6 @@ RSpec.describe Cask::Installer, :cask do
           version "0.1"
         end
       RUBY
-      Formulary.cache.delete(dep_path.to_s)
 
       cask = Cask::Cask.new("homebrew-forbidden-dependent-tap") do
         url "file://#{TEST_FIXTURE_DIR}/cask/container.tar.gz"
@@ -611,7 +625,6 @@ RSpec.describe Cask::Installer, :cask do
           version "0.1"
         end
       RUBY
-      Formulary.cache.delete(dep_path.to_s)
 
       cask = Cask::Cask.new("homebrew-forbidden-dependent-cask") do
         url "file://#{TEST_FIXTURE_DIR}/cask/container.tar.gz"
@@ -906,7 +919,7 @@ RSpec.describe Cask::Installer, :cask do
       allow(cask).to receive(:staged_path).and_return(staged_path)
 
       installer = described_class.new(cask)
-      installer.send(:process_rename_operations)
+      installer.process_rename_operations
 
       expect(staged_path / "Renamed App.app").to be_a_directory
       expect(staged_path / "Original App.app").not_to exist
@@ -926,7 +939,7 @@ RSpec.describe Cask::Installer, :cask do
       allow(cask).to receive(:staged_path).and_return(staged_path)
 
       installer = described_class.new(cask)
-      installer.send(:process_rename_operations)
+      installer.process_rename_operations
 
       expect(staged_path / "Final Name.app").to be_a_directory
       expect(staged_path / "Original.app").not_to exist
@@ -946,7 +959,7 @@ RSpec.describe Cask::Installer, :cask do
       allow(cask).to receive(:staged_path).and_return(staged_path)
 
       installer = described_class.new(cask)
-      installer.send(:process_rename_operations)
+      installer.process_rename_operations
 
       expect(staged_path / "Test App.pkg").to be_a_file
       expect((staged_path / "Test App.pkg").read).to eq("test content")
@@ -967,7 +980,7 @@ RSpec.describe Cask::Installer, :cask do
 
       installer = described_class.new(cask)
 
-      expect { installer.send(:process_rename_operations) }.not_to raise_error
+      expect { installer.process_rename_operations }.not_to raise_error
       expect(staged_path / "Different.app").to be_a_directory
       expect(staged_path / "Target.app").not_to exist
     end

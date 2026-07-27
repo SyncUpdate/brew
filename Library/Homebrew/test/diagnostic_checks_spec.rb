@@ -14,8 +14,9 @@ RSpec.describe Homebrew::Diagnostic::Checks do
   specify "#check_for_installed_developer_tools uses installation instructions" do
     allow(DevelopmentTools).to receive_messages(installed?: false, installation_instructions: "Install build tools.")
 
-    expect(checks.check_for_installed_developer_tools&.to_s).to eq <<~EOS
+    expect(checks.check_for_installed_developer_tools&.to_s).to eq <<~EOS.rstrip
       No developer tools installed.
+
       Install build tools.
     EOS
   end
@@ -107,15 +108,16 @@ RSpec.describe Homebrew::Diagnostic::Checks do
       gitconfig = path/".gitconfig"
       gitconfig.write("[safe]\n")
 
-      expect(checks.check_homebrew_repository_git_hooks&.to_s).to eq <<~EOS
+      expect(checks.check_homebrew_repository_git_hooks&.to_s).to eq <<~EOS.rstrip
         Git hooks or a repository-local `.gitconfig` were found in your Homebrew repository.
         Homebrew does not use these, and they can break Homebrew operations.
-        Remove them with:
-          rm -rf "#{path}/.git/hooks" "#{path}/.gitconfig"
 
         Paths found:
           #{hook}
           #{gitconfig}
+
+        Remove them with:
+          rm -rf "#{path}/.git/hooks" "#{path}/.gitconfig"
       EOS
     end
   end
@@ -149,12 +151,13 @@ RSpec.describe Homebrew::Diagnostic::Checks do
 
     with_env(HOMEBREW_REQUIRE_TAP_TRUST: "1") do
       check_untrusted_taps = checks.check_untrusted_taps&.to_s
-      expect(check_untrusted_taps).to eq <<~EOS
+      expect(check_untrusted_taps).to eq <<~EOS.rstrip
         The following taps are not trusted:
           thirdparty/foo
           thirdparty/bar
 
         Homebrew is currently ignoring formulae, casks and commands from these taps because tap trust is required.
+
         Prefer trusting only the specific formulae, casks or commands you need.
         Trust installed formulae from these taps with:
           brew trust --formula thirdparty/bar/bar-formula
@@ -192,11 +195,12 @@ RSpec.describe Homebrew::Diagnostic::Checks do
 
     with_env(HOMEBREW_REQUIRE_TAP_TRUST: nil, HOMEBREW_NO_REQUIRE_TAP_TRUST: nil) do
       check_untrusted_taps = checks.check_untrusted_taps&.to_s
-      expect(check_untrusted_taps).to eq <<~EOS
+      expect(check_untrusted_taps).to eq <<~EOS.rstrip
         The following taps are not trusted:
           thirdparty/foo
 
         Homebrew is currently ignoring formulae, casks and commands from these taps because tap trust is required.
+
         Untap them with:
           brew untap thirdparty/foo
         Trust specific formulae, casks and commands with:
@@ -245,7 +249,8 @@ RSpec.describe Homebrew::Diagnostic::Checks do
     stub_const("HOMEBREW_REPOSITORY", HOMEBREW_PREFIX/"Library/.homebrew-is-managed-by-nix")
 
     expect(checks.check_for_nix_homebrew&.to_s)
-      .to include("This is a Tier 3 configuration", "https://github.com/zhaofengli/nix-homebrew/issues")
+      .to include("Your Homebrew installation is managed by Nix.",
+                  "Homebrew does not support Nix-managed installations.")
   end
 
   specify "#check_for_external_cmd_name_conflict" do
@@ -290,11 +295,12 @@ RSpec.describe Homebrew::Diagnostic::Checks do
   specify "#check_cask_corrupt_dirs" do
     allow(Cask::Caskroom).to receive(:corrupt_cask_dirs).and_return(["google-chrome", "docker-desktop"])
 
-    expect(checks.check_cask_corrupt_dirs&.to_s).to eq <<~EOS
+    expect(checks.check_cask_corrupt_dirs&.to_s).to eq <<~EOS.rstrip
       Some directories in the Caskroom do not have valid metadata.
         #{Cask::Caskroom.path}/google-chrome
         #{Cask::Caskroom.path}/docker-desktop
       The following casks cannot be upgraded as-is.
+
       To fix this, run:
         brew reinstall --cask --force google-chrome
         brew reinstall --cask --force docker-desktop

@@ -481,6 +481,8 @@ module Homebrew
           puts formulae_names_to_install.join(" ")
 
           formula_installers.each do |fi|
+            next if fi.ignore_deps?
+
             print_dry_run_dependencies(fi.formula, fi.compute_dependencies, &:name)
           end
           return
@@ -672,7 +674,9 @@ module Homebrew
         ).returns(T::Boolean)
       }
       def formulae_ask_prompt_needed?(formulae_installer, dependants)
-        formulae_installer.any? { |formula_installer| formula_installer.compute_dependencies.present? } ||
+        formulae_installer.any? do |formula_installer|
+          !formula_installer.ignore_deps? && formula_installer.compute_dependencies.present?
+        end ||
           dependants.upgradeable.present?
       end
 
@@ -716,6 +720,16 @@ module Homebrew
         ask_input(action:)
       end
 
+      sig { params(all_fatal: T::Boolean).void }
+      def perform_preinstall_checks(all_fatal: false)
+        check_prefix
+        check_cpu
+        attempt_directory_creation
+        Diagnostic.checks(:supported_configuration_checks, fatal: all_fatal)
+        Diagnostic.checks(:preinstall_checks, fatal: false)
+        Diagnostic.checks(:fatal_preinstall_checks)
+      end
+
       private
 
       sig { params(action: String).returns(String) }
@@ -735,16 +749,6 @@ module Homebrew
         [formula, *formula.old_installed_formulae].map(&:linked_keg)
                                                   .select(&:directory?)
                                                   .map { |k| Keg.new(k.resolved_path) }
-      end
-
-      sig { params(all_fatal: T::Boolean).void }
-      def perform_preinstall_checks(all_fatal: false)
-        check_prefix
-        check_cpu
-        attempt_directory_creation
-        Diagnostic.checks(:supported_configuration_checks, fatal: all_fatal)
-        Diagnostic.checks(:preinstall_checks, fatal: false)
-        Diagnostic.checks(:fatal_preinstall_checks)
       end
 
       sig { void }

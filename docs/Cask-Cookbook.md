@@ -70,6 +70,7 @@ Having a common order for stanzas makes casks easier to update and parse. Below 
 
     suite
     app
+    appimage
     pkg
     installer
     binary
@@ -124,10 +125,18 @@ Submissions to `homebrew/cask` may require additional stanzas such as `livecheck
 | ---------------------------------- | :---------------------------: | ----- |
 | [`version`](#stanza-version)       | no                            | Application version, or the special value `:latest`. |
 | [`sha256`](#stanza-sha256)         | no                            | SHA-256 checksum of the file downloaded from `url` as calculated by the command `shasum -a 256 <file>`, or the special value `:no_check`. |
-| [`url`](#stanza-url)               | no                            | URL to the `.dmg`/`.zip`/`.tgz` file (or other common archive formats) that contains the application. A [comment](#when-url-and-homepage-domains-differ-add-verified) should be added if the domains in the `url` and `homepage` stanzas differ. |
+| [`url`](#stanza-url)               | no                            | URL to the `.dmg`/`.zip`/`.tgz` file (or other common archive formats) that contains the application. |
 | [`name`](#stanza-name)             | yes                           | String providing the full and proper name defined by the vendor. |
 | [`desc`](#stanza-desc)             | no                            | One-line description of the cask. Shown when running `brew info`. |
 | `homepage`                         | no                            | Application homepage; used for the `brew home` command. |
+
+If a homepage blocks automated requests but works in a browser, record the date it was last checked by a human:
+
+```ruby
+homepage "https://www.example.com/", browsed: "2026-07-26"
+```
+
+This skips automated homepage availability audits for one year. Do not use a future date.
 
 ### At least one artifact stanza is also required
 
@@ -143,6 +152,8 @@ The `appimage` stanza is Linux-only, macOS integration stanzas such as `app` and
 | [`pkg`](#stanza-pkg)             | yes                           | Relative path to a `.pkg` file containing the distribution. |
 | [`installer`](#stanza-installer) | yes                           | Describes an executable which must be run to complete the installation. |
 | [`binary`](#stanza-binary)       | yes                           | Relative path to a Binary that should be linked into the `$(brew --prefix)/bin` folder on installation. |
+| [`command_wrapper`](#stanza-command_wrapper) | yes                  | Generates a command wrapper and links it into the `$(brew --prefix)/bin` folder. |
+| [`generated_script`](#stanza-generated_script) | yes          | Generates an executable for another artifact or install step to use. |
 | `manpage`                        | yes                           | Relative path to a Man Page that should be linked into the respective man page folder on installation, e.g. `/opt/homebrew/share/man/man3` for `my_app.3`. |
 | `bash_completion`                | yes                           | Relative path to a Bash completion file that should be linked into the `$(brew --prefix)/etc/bash_completion.d` folder on installation. |
 | `fish_completion`                | yes                           | Relative path to a fish completion file that should be linked into the `$(brew --prefix)/share/fish/vendor_completions.d` folder on installation. |
@@ -281,6 +292,31 @@ binary "#{appdir}/Atom.app/Contents/Resources/app/atom.sh", target: "atom"
 ```
 
 Behaviour and usage of `target:` is [the same as with `app`](#renaming-the-target). However, for `binary` the select cases don’t apply as rigidly. It’s fine to take extra liberties with `target:` to be consistent with other command-line tools, like [changing case](https://github.com/Homebrew/homebrew-cask/blob/aa461148bbb5119af26b82cccf5003e2b4e50d95/Casks/g/godot.rb#L19), [removing an extension](https://github.com/Homebrew/homebrew-cask/blob/aa461148bbb5119af26b82cccf5003e2b4e50d95/Casks/f/filebot.rb#L19), or [cleaning up the name](https://github.com/Homebrew/homebrew-cask/blob/aa461148bbb5119af26b82cccf5003e2b4e50d95/Casks/f/fig.rb#L21).
+
+### Stanza: `command_wrapper`
+
+`command_wrapper` writes an executable shim script into the staged cask and links it like a [`binary`](#stanza-binary) using the declared command name. Use it when an application does not provide a suitable command-line entry point. When using `executable:`, fixed arguments and environment variables can be passed with `args:` and `env:`.
+
+```ruby
+command_wrapper "example",
+                executable: "#{appdir}/Example.app/Contents/MacOS/example",
+                args:       ["--cli"],
+                env:        { "EXAMPLE_MODE" => "batch" }
+```
+
+Use `content:` instead of `executable:` for wrappers which need custom shell logic. It contains the complete wrapper and cannot be combined with `args:` or `env:`.
+
+### Stanza: `generated_script`
+
+`generated_script` writes literal content to an executable path in the staged cask. It does not link or run the file. Use it when a later `installer`, `uninstall` or install step needs a generated script.
+
+```ruby
+generated_script "installer.sh", content: <<~SH
+  #!/bin/sh
+  exec "#{staged_path}/payload/install" "$@"
+SH
+installer script: "installer.sh"
+```
 
 ### Stanza: `rename`
 
@@ -615,13 +651,19 @@ Relative paths default to `staged_path` for `base:`, `source_base:` and `target_
 * `symlink`: create a symlink; example: `symlink "Shared/payload", "Payload", source_base: :relative`.
 * `ln_s`: alias for `symlink`; example: `ln_s "Shared/payload", "Payload", source_base: :relative`.
 * `ln_sf`: create or replace a symlink; example: `ln_sf "Shared/payload", "Payload", source_base: :relative, uninstall: true`.
-* `write`: write literal content to a file unless it already exists; example: `write "Shared/foo.conf", "key = value"`. Pass `overwrite: true` to always replace the file. A trailing newline is appended unless the content already ends with one. Content may use the `{{staged_path}}`, `{{appdir}}` and `{{version}}` tokens, which are expanded at install time; any other `{{...}}` is left verbatim.
+* `write`: write literal content to a file unless it already exists; example: `write "Shared/foo.conf", "key = value"`. Pass `overwrite: true` to always replace the file. A trailing newline is appended unless the content already ends with one.
 * `delete_keychain_certificate`: delete macOS keychain certificates whose common name matches the argument; example: `delete_keychain_certificate "Charles"`. Pass `matching_certificate:` with a local certificate path to delete only the matching SHA-256 fingerprint; example:
   `delete_keychain_certificate "NodeMITMProxyCA", matching_certificate: "~/Library/Application Support/betwixt/ssl/certs/ca.pem"`.
 * `set_permissions`: recursively change existing path permissions with `chmod`; example: `set_permissions "Shared/payload", "0755"`.
 * `set_ownership`: recursively change existing path ownership with `sudo chown`; example: `set_ownership "Shared/payload", user: "root", group: "wheel"`. Missing paths are ignored. When `user:` is omitted, the current user is used. When `group:` is omitted, `staff` is used.
+* `run`: run one executable with literal arguments; example: `run "Example.app/Contents/MacOS/helper", args: ["--repair"], base: :appdir`.
+* `terminate_process`: terminate a process by name; example: `terminate_process "Example", attempts: 3, must_succeed: false`. `attempts:` sets the total number of attempts and defaults to one. The step also supports `match: :full`, `notices:` shown before the first attempt and a `failure_message:` warning.
 
-Path collections passed to `remove` expand globs automatically. Removals may be restricted with `symlink_target_contains:` or `content_contains:`.
+Use `if_path_exists` and `unless_path_exists` blocks to guard one or more steps by a path, and `on_macos` and `on_linux` blocks for platform-specific steps. Each guard is evaluated once for its whole block. `copy`, `move` and symlink steps accept `source_glob: true`; path collections used by `remove`, `set_permissions` and `set_ownership` expand globs automatically. Symlink removal can additionally match the serialised source during uninstall, while `remove` can restrict removal with `symlink_target_contains:` or `content_contains:`.
+
+`run` does not evaluate a shell command string. It supports a literal `env:`, `stdin_path:`, `stdout_path:`, `chdir:`, `sudo:`, `print_stdout:` and `print_stderr:`. Wrap it in one of the guard blocks described above when it should be conditional.
+
+Content, replacements, command arguments and command environments may use fixed install-time tokens. These include `{{HOMEBREW_BREW_FILE}}`, `{{HOMEBREW_CELLAR}}`, `{{HOMEBREW_PREFIX}}`, `{{name}}`, `{{user}}`, `{{staged_path}}`, `{{appdir}}`, `{{caskroom_path}}`, `{{temp}}`, `{{version}}`, `{{version.major}}` and `{{version.major_minor}}`. Any other `{{...}}` is left verbatim.
 
 {% endraw %}
 
@@ -1149,24 +1191,12 @@ When a plain URL string is insufficient to fetch a file, additional information 
 
 | key                | value |
 | ------------------ | ----- |
-| `verified:`        | string repeating the beginning of `url`, for [verification purposes](#when-url-and-homepage-domains-differ-add-verified) |
 | `using:`           | the symbols `:post` and `:homebrew_curl` are the only legal values |
 | `cookies:`         | hash of cookies to be set for the download request (Example: [oracle-jdk-javadoc.rb](https://github.com/Homebrew/homebrew-cask/blob/326c44e93aeb8d4dd73acea14a99ae215c75fdd6/Casks/o/oracle-jdk-javadoc.rb#L5-L8)) |
 | `referer:`         | string holding the URL to set as referer for the download request (Example: [firealpaca.rb](https://github.com/Homebrew/homebrew-cask/blob/c4b3f0742e044ae2a6e114eb6b90068763d0d12b/Casks/f/firealpaca.rb#L5-L6)) |
 | `header:`          | string or array of strings holding the header(s) to set for the download request (Example: [pull-6545](https://github.com/Homebrew/brew/pull/6545#issue-503302353), [issue-15590](https://github.com/Homebrew/brew/issues/15590#issue-1774825542)) |
 | `user_agent:`      | string holding the user agent to set for the download request. Can also be set to the symbol `:fake`, which will use a generic browser-like user agent string. We prefer `:fake` when the server does not require a specific user agent. |
 | `data:`            | hash of parameters to be set for a POST request (Example: [segger-jlink.rb](https://github.com/Homebrew/homebrew-cask/blob/38ac55614f146d68ae317594f0c119e9acbd7c9e/Casks/s/segger-jlink.rb#L6-L11)) |
-
-#### When URL and homepage domains differ, add `verified:`
-
-When the domains of `url` and `homepage` differ, the discrepancy should be documented with the `verified:` parameter, repeating the smallest possible portion of the URL that uniquely identifies the app or vendor, excluding the protocol. (Example: [1password-cli.rb](https://github.com/Homebrew/homebrew-cask/blob/ec2476459ead02e80391f44d42a2b48a18bf373d/Casks/1/1password-cli.rb#L8-L9))
-
-This must be added so a user auditing the cask knows the URL was verified by cask maintainers as the one provided by the vendor, even though it may look unofficial. Cask maintainers are responsible for verifying both the `url` and `homepage` information when first added (or subsequently modified, apart from versioning).
-
-The parameter doesn’t mean you should trust the source blindly.
-We approve only casks whose authenticity users can verify through an official homepage, public repository or similarly authoritative source.
-Occasionally, verification may require inspecting a [`livecheck`](#stanza-livecheck) URL already established as official.
-Cases where such verification is not possible, such as a download hidden behind a registration wall, are [treated in a stricter manner](Acceptable-Casks.md#verifiable-upstream-distribution).
 
 #### Difficulty finding a URL
 
@@ -1347,8 +1377,7 @@ cask "libreoffice" do
   sha256 arm:   "81eab945a33622fc156951e804024d23aa9a745c06743b4947215ed9303ad1c4",
          intel: "ede541af151487f60eb518e310d20dad1a973f3dbe9ff78d782dd29b14ba2946"
 
-  url "https://download.documentfoundation.org/libreoffice/stable/#{version}/mac/#{folder}/LibreOffice_#{version}_MacOS_#{arch}.dmg",
-      verified: "download.documentfoundation.org/libreoffice/stable/"
+  url "https://download.documentfoundation.org/libreoffice/stable/#{version}/mac/#{folder}/LibreOffice_#{version}_MacOS_#{arch}.dmg"
 end
 ```
 
@@ -1398,7 +1427,7 @@ cask "calibre" do
 end
 ```
 
-Such `on_<system>` blocks can be nested and contain other stanzas not listed here. However, version-specific macOS requirements should be placed in `on_macos` blocks rather than individual macOS release blocks. Examples: [calhash.rb](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/c/calhash.rb), [r.rb](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/r/r.rb), [wireshark.rb](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/wireshark.rb)
+Such `on_<system>` blocks can be nested and contain other stanzas not listed here. However, version-specific macOS requirements should be placed in `on_macos` blocks rather than individual macOS release blocks. Examples: [calhash.rb](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/c/calhash.rb), [r-app.rb](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/r/r-app.rb), [wireshark-app.rb](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/wireshark-app.rb)
 
 ### Switch between languages or regions
 

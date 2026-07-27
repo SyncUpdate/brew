@@ -7,6 +7,10 @@ require "sandbox"
 RSpec.describe Homebrew::Diagnostic::Checks do
   subject(:checks) { described_class.new }
 
+  around do |example|
+    with_env(HOMEBREW_SANDBOX_LINUX_LANDLOCK: nil) { example.run }
+  end
+
   before do
     allow(OS::Linux).to receive(:inside_docker?).and_return(false)
   end
@@ -107,7 +111,7 @@ RSpec.describe Homebrew::Diagnostic::Checks do
           "export HOMEBREW_NO_SANDBOX_LINUX=1",
         )
       expect(message).not_to include("sysctl")
-      expect(message).to end_with("  export HOMEBREW_NO_SANDBOX_LINUX=1\n")
+      expect(message).to end_with("  export HOMEBREW_NO_SANDBOX_LINUX=1")
     end
   end
 
@@ -128,7 +132,7 @@ RSpec.describe Homebrew::Diagnostic::Checks do
           "export HOMEBREW_NO_SANDBOX_LINUX=1",
         )
       expect(message).not_to include("sysctl")
-      expect(message).to end_with("  export HOMEBREW_NO_SANDBOX_LINUX=1\n")
+      expect(message).to end_with("  export HOMEBREW_NO_SANDBOX_LINUX=1")
     end
   end
 
@@ -153,7 +157,22 @@ RSpec.describe Homebrew::Diagnostic::Checks do
           "Allows unprivileged user namespaces on AppArmor-enabled systems",
           "export HOMEBREW_NO_SANDBOX_LINUX=1",
         )
-      expect(message).to end_with("  export HOMEBREW_NO_SANDBOX_LINUX=1\n")
+      expect(message).to end_with("  export HOMEBREW_NO_SANDBOX_LINUX=1")
+    end
+  end
+
+  specify "#check_linux_sandbox describes unavailable Landlock" do
+    allow(OS::Linux).to receive(:inside_docker?).and_return(true)
+    allow(Sandbox).to receive_messages(
+      state:          :unsupported,
+      failure_reason: "Landlock is not supported by this Linux kernel.",
+    )
+
+    with_env(GITHUB_ACTIONS: "true", HOMEBREW_NO_SANDBOX_LINUX: nil, HOMEBREW_SANDBOX_LINUX_LANDLOCK: "1") do
+      message = checks.check_linux_sandbox&.to_s
+
+      expect(message).to include("Landlock is not supported by this Linux kernel.")
+      expect(message).not_to include("Bubblewrap", "--privileged")
     end
   end
 
@@ -165,7 +184,7 @@ RSpec.describe Homebrew::Diagnostic::Checks do
     )
 
     with_env(GITHUB_ACTIONS: "true", HOMEBREW_NO_SANDBOX_LINUX: nil) do
-      expect(checks.check_linux_sandbox).to include(
+      expect(checks.check_linux_sandbox&.to_s).to include(
         "If this is a GitHub Actions container, add `options: --privileged` to the job's `container` configuration.",
       )
     end
