@@ -3144,7 +3144,8 @@ Summarise contributions to Homebrew repositories.
 `--user`
 
 : Specify a comma-separated list of GitHub usernames or email addresses to find
-  contributions from. Omitting this flag searches Homebrew maintainers.
+  contributions from. Omitting this flag searches Homebrew maintainers. With
+  `--maintainer-report-csv`, only matching quarter-end Maintainers are included.
 
 `--repositories`
 
@@ -3186,7 +3187,8 @@ Summarise contributions to Homebrew repositories.
 : Print a CSV of Maintainer and Lead Maintainer activity criteria using fetched
   Git histories and GitHub's existing approved-review search for the Homebrew
   governance quarter, for example `--maintainer-report-csv=2026-2`. Also write
-  it to `brew-contributions-FROM-to-TO.csv` in the current directory. Only
+  it in the current directory as `brew-contributions-FROM-to-TO.csv`, or
+  `brew-contributions-FROM-to-TO-USER.csv` when filtered with `--user`. Only
   Maintainers listed at the end of that quarter are included. The `new role`
   value must show a downgrade for two consecutive quarters before a downgrade is
   applied. Review searches return at most 100 results and other counts are
@@ -3384,17 +3386,13 @@ Install Homebrew's Bundler gems.
 : Installs the specified comma-separated list of gem groups, in addition to
   those already installed.
 
-### `irb` \[`--examples`\] \[`--pry`\]
+### `irb` \[`--examples`\]
 
 Enter the interactive Homebrew Ruby shell.
 
 `--examples`
 
 : Show several examples.
-
-`--pry`
-
-: Use Pry instead of IRB. Enabled by default if `$HOMEBREW_PRY` is set.
 
 ### `lgtm` \[`--online`\]
 
@@ -4966,10 +4964,6 @@ command execution (e.g. `$(cat file)`).
   resources.
   
   *Default:* `https://pypi.org/simple`.
-
-`HOMEBREW_PRY`
-
-: If set, use Pry for the `brew irb` command.
 
 `HOMEBREW_REQUIRE_TAP_TRUST`
 

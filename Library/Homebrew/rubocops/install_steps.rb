@@ -15,7 +15,6 @@ module RuboCop
         # TODO: Re-enable when formula `post_install` and `post_install_steps`
         # cannot coexist after the incremental conversion bridge is removed.
         # CONFLICT_MSG = "`post_install` and `post_install_steps` cannot both be used."
-        POST_INSTALL_STEPS_ORDER_MSG = "`post_install_steps` must appear before `post_install` to match run order."
         REDUNDANT_SERVICE_PATH_DIRS_MSG = "`%<block>s` only creates directories created by `brew services`."
         CERTIFICATE_REMOVE_SOURCE = 'rm(pkgetc/"cert.pem") if (pkgetc/"cert.pem").exist?'
         CERTIFICATE_INSTALL_SYMLINK_SOURCE =
@@ -90,7 +89,6 @@ module RuboCop
           #   problem CONFLICT_MSG
           # end
 
-          add_post_install_steps_order_offense(post_install_steps_block, post_install_method)
           audit_step_block(post_install_steps_block)
           add_redundant_service_path_dirs_offense(post_install_steps_block, service_path_dirs, :post_install_steps)
           redundant_post_install = post_install_method.present? &&
@@ -104,20 +102,6 @@ module RuboCop
         end
 
         private
-
-        sig {
-          params(
-            post_install_steps_block: T.nilable(RuboCop::AST::BlockNode),
-            post_install_method:      T.nilable(RuboCop::AST::Node),
-          ).void
-        }
-        def add_post_install_steps_order_offense(post_install_steps_block, post_install_method)
-          return if post_install_steps_block.nil? || post_install_method.nil?
-          return if post_install_steps_block.loc.line < post_install_method.loc.line
-
-          offending_node(post_install_steps_block)
-          problem POST_INSTALL_STEPS_ORDER_MSG
-        end
 
         sig { params(block_node: T.nilable(RuboCop::AST::BlockNode)).void }
         def audit_step_block(block_node)
@@ -279,12 +263,12 @@ module RuboCop
             case normalised_install_step_source(node)
             when POSTGRESQL_LINK_DIR_SOURCE
               step_nodes[node] = [
-                "link_dir \"include/postgresql\", \"include/\#{name}\"",
-                "link_dir \"lib/postgresql\", \"lib/\#{name}\"",
-                "link_dir \"share/postgresql\", \"share/\#{name}\"",
+                "link_dir \"include/postgresql\", \"include/{{name}}\"",
+                "link_dir \"lib/postgresql\", \"lib/{{name}}\"",
+                "link_dir \"share/postgresql\", \"share/{{name}}\"",
               ]
             when POSTGRESQL_LINK_CHILDREN_SOURCE
-              step_nodes[node] = ["link_children \"bin\", suffix: \"-\#{version.major}\""]
+              step_nodes[node] = ["link_children \"bin\", suffix: \"-{{version.major}}\""]
             end
           end
         end

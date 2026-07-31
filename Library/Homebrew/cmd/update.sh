@@ -82,7 +82,10 @@ git() {
       odie "Can't find a working Git!"
     fi
   fi
-  "${GIT_EXECUTABLE}" "$@"
+  # Disable Git hooks (e.g. a core.hooksPath set by `git lfs install`),
+  # which can break Homebrew's Git operations.
+  # Keep in sync with `Tap#git_command!` in Library/Homebrew/tap.rb.
+  "${GIT_EXECUTABLE}" -c core.hooksPath=/dev/null "$@"
 }
 
 git_init_if_necessary() {
@@ -1048,11 +1051,13 @@ EOS
     rm -f "${HOMEBREW_CACHE}"/api/internal/formula.*.jws.json
     rm -f "${HOMEBREW_CACHE}"/api/internal/cask.*.jws.json
 
-    # Remove API files from previous OS versions.
-    for f in "${HOMEBREW_CACHE}"/api/internal/packages.*.jws.json
+    # Remove API files (and their `.payload` sidecars) from previous OS
+    # versions. Keep in sync with `cache_files` in Library/Homebrew/cleanup.rb.
+    for f in "${HOMEBREW_CACHE}"/api/internal/packages.*.jws.json*
     do
       case "${f}" in
         "${HOMEBREW_CACHE}/api/internal/packages.$(bottle_tag).jws.json") ;;
+        "${HOMEBREW_CACHE}/api/internal/packages.$(bottle_tag).jws.json.payload") ;;
         *) rm -f "${f}" ;;
       esac
     done

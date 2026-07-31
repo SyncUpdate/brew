@@ -642,8 +642,10 @@ module Homebrew
         default:      "https://pypi.org/simple",
       },
       HOMEBREW_PRY:                              {
-        description: "If set, use Pry for the `brew irb` command.",
+        description: "This variable no longer has any effect because Pry is largely unmaintained upstream.",
         boolean:     true,
+        odeprecated: true,
+        replacement: "the default IRB backend (Pry is largely unmaintained upstream)",
       },
       HOMEBREW_REQUIRE_TAP_TRUST:                {
         # odeprecated: make tap trust checks default in a later release.
@@ -975,16 +977,6 @@ module Homebrew
       method_name = :cask_opts_binaries
       env_value = T.cast(Homebrew::EnvConfig.public_send(method_name), T.nilable(String))
       return FALSY_VALUES.exclude?(env_value.downcase) if env_value.present?
-
-      true
-    end
-
-    sig { returns(T::Boolean) }
-    def cask_opts_quarantine?
-      cask_opts.reverse_each do |opt|
-        return true if opt == "--quarantine"
-        return false if opt == "--no-quarantine"
-      end
 
       true
     end

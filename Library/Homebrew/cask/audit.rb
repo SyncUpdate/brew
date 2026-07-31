@@ -41,14 +41,14 @@ module Cask
 
     sig {
       params(
-        cask: ::Cask::Cask, download: T::Boolean, quarantine: T::Boolean,
+        cask: ::Cask::Cask, download: T::Boolean,
         online: T.nilable(T::Boolean), strict: T.nilable(T::Boolean), signing: T.nilable(T::Boolean),
         new_cask: T.nilable(T::Boolean), only: T::Array[String], except: T::Array[String]
       ).void
     }
     def initialize(
       cask,
-      download: false, quarantine: false,
+      download: false,
       online: nil, strict: nil, signing: nil,
       new_cask: nil, only: [], except: []
     )
@@ -62,7 +62,7 @@ module Cask
 
       @cask = cask
       @download = T.let(nil, T.nilable(Download))
-      @download = Download.new(cask, quarantine:) if download
+      @download = Download.new(cask) if download
       @online = online
       @strict = strict
       @signing = signing
@@ -942,6 +942,7 @@ module Cask
             next unless (main_binary = get_plist_main_binary(app_bundle_path))
             next if !File.exist?(main_binary) || File.open(main_binary, "rb") { |f| f.read(2) == "#!" }
 
+            require "macho"
             macho = MachO.open(main_binary)
             min_os = case macho
             when MachO::MachOFile
