@@ -48,13 +48,13 @@ RSpec.describe Homebrew::InstallSteps do
     expect(dylib.stat.mode & 0777).to eq(0444)
   end
 
-  specify "runs mkdir, touch, move and symlink steps", :aggregate_failures do
+  specify "runs directory, touch, move and symlink steps", :aggregate_failures do
     steps = Homebrew::InstallSteps::DSL.build(default_base: :var, default_source_base: :staged_path,
                                               default_target_base: :staged_path) do
       mkdir_p "log/example"
       touch "state/marker", base: :prefix
-      mv "move-source", "move-target"
-      ln_s "move-target", "linked-target", source_base: :relative
+      move "move-source", "move-target"
+      symlink "move-target", "linked-target", source_base: :relative
     end
 
     (root/"stage").mkpath
@@ -86,7 +86,7 @@ RSpec.describe Homebrew::InstallSteps do
   specify "links every source matched by a glob into a directory", :aggregate_failures do
     steps = Homebrew::InstallSteps::DSL.build(default_source_base: :prefix,
                                               default_target_base: :prefix) do
-      symlink "share/man/*.1", "share/man/man1", force: true, source_glob: true
+      symlink "share/man/*.1", "share/man/man1", source_glob: true, overwrite: true
     end
 
     (root/"prefix/share/man/man1").mkpath
@@ -191,17 +191,65 @@ RSpec.describe Homebrew::InstallSteps do
     )
   end
 
+  specify "keeps canonical DSL calls compatible with shipped API values", :aggregate_failures do
+    steps = Homebrew::InstallSteps::DSL.build do
+      symlink_tree "source", "target"
+      symlink_children "source", "target"
+      write_file "config", "content"
+      update_gdk_pixbuf_loaders_cache
+      update_gtk_icon_cache
+      delete_keychain_certificates "Example", fingerprint_of: "certificate"
+      symlink "source", "target", overwrite: true, remove_on_uninstall: true
+      init_data_dir "data", using: :postgresql
+    end
+
+    expect(steps.map { |step| step.fetch("type") }).to eq(
+      %w[link_dir link_children write gdk_pixbuf_query_loaders gtk_update_icon_cache
+         delete_keychain_certificate symlink init_data_dir],
+    )
+    expect(steps.fetch(2)).to include("content" => "content", "overwrite" => true)
+    expect(steps.fetch(5)).to include("matching_certificate" => { "path" => "certificate" })
+    expect(steps.fetch(6)).to include("force" => true, "uninstall" => true)
+    expect(steps.fetch(7)).to include("using" => "postgresql_initdb")
+  end
+
+  specify "keeps shipped step names serialisable for compatibility" do
+    steps = Homebrew::InstallSteps::DSL.build do
+      mkdir "directory"
+      mv "source", "target"
+      move_children "source", "target"
+      ln_sf "source", "target"
+      link_dir "source", "target"
+      link_children "source", "target"
+      write "config", "content"
+      gio_querymodules
+      gdk_pixbuf_query_loaders
+      gtk_update_icon_cache
+      delete_keychain_certificate "Example"
+    end
+
+    expect(steps.map { |step| step.fetch("type") }).to eq(%w[
+      mkdir move move_children symlink link_dir link_children write gio_querymodules
+      gdk_pixbuf_query_loaders gtk_update_icon_cache delete_keychain_certificate
+    ])
+  end
+
   specify "expands a scoped set of content tokens and leaves others verbatim", :aggregate_failures do
     root_path = root
     versioned_context = Class.new do
       define_method(:prefix) { root_path/"prefix" }
+      define_method(:name) { "example" }
+      define_method(:token) { "example-cask" }
       define_method(:version) { Version.new("1.2.3") }
     end.new
 
     steps = Homebrew::InstallSteps::DSL.build(default_base: :prefix) do
-      write "config.ini", <<~EOS
+      write_file "config.ini", <<~EOS
         prefix = {{prefix}}
         cellar = {{HOMEBREW_PREFIX}}
+        legacy = {{name}}
+        formula = {{formula_name}}
+        cask = {{token}}
         series = {{version.major_minor}} ({{version}})
         literal = {{unknown}} {single}
       EOS
@@ -212,6 +260,9 @@ RSpec.describe Homebrew::InstallSteps do
     written = (root/"prefix/config.ini").read
     expect(written).to include("prefix = #{root}/prefix")
     expect(written).to include("cellar = #{HOMEBREW_PREFIX}")
+    expect(written).to include("legacy = example")
+    expect(written).to include("formula = example")
+    expect(written).to include("cask = example-cask")
     expect(written).to include("series = 1.2 (1.2.3)")
     expect(written).to include("literal = {{unknown}} {single}")
   end
@@ -226,6 +277,38 @@ RSpec.describe Homebrew::InstallSteps do
     Homebrew::InstallSteps::Runner.new(context:).run(steps)
 
     expect((root/"var/identity").read).to eq("example-formula:example-cask\n")
+  end
+
+  specify "writes exact content and replaces existing files" do
+    steps = Homebrew::InstallSteps::DSL.build(default_base: :var) do
+      write_file "config/example.conf", "replacement"
+      write_file "empty", ""
+    end
+
+    (root/"var/config").mkpath
+    (root/"var/config/example.conf").write "old\n"
+
+    Homebrew::InstallSteps::Runner.new(context:).run(steps)
+
+    expect([(root/"var/config/example.conf").read, (root/"var/empty").read]).to eq(["replacement", ""])
+  end
+
+  specify "preserves meaningful blank values" do
+    steps = Homebrew::InstallSteps::DSL.build(default_base: :var) do
+      inreplace "remove.txt", "remove", ""
+      run "helper", args: [""], env: { "EMPTY" => "" }
+    end
+
+    (root/"var").mkpath
+    (root/"var/remove.txt").write "remove"
+    command = class_double(SystemCommand)
+    expect(command).to receive(:run!)
+      .with("helper", args: [""], sudo: false, env: { "EMPTY" => "" }, input: [], print_stdout: false,
+                      print_stderr: true, reset_uid: true, chdir: nil)
+
+    Homebrew::InstallSteps::Runner.new(context:, command:).run(steps)
+
+    expect((root/"var/remove.txt").read).to be_empty
   end
 
   specify "writes a default config file and preserves existing ones", :aggregate_failures do
@@ -347,7 +430,7 @@ RSpec.describe Homebrew::InstallSteps do
       .to eq([false, "replacement", "original"])
   end
 
-  specify "keeps the shipped move replacement default" do
+  specify "preserves the legacy move replacement behaviour" do
     steps = Homebrew::InstallSteps::DSL.build(default_source_base: :staged_path, default_target_base: :var) do
       move "source.txt", "target.txt"
     end
@@ -356,9 +439,23 @@ RSpec.describe Homebrew::InstallSteps do
     (root/"stage/source.txt").write "replacement"
     (root/"var/target.txt").write "existing"
 
+    steps.fetch(0).delete("overwrite")
     Homebrew::InstallSteps::Runner.new(context:).run(steps)
 
     expect((root/"var/target.txt").read).to eq("replacement")
+  end
+
+  specify "preserves a default move destination when repeated", :aggregate_failures do
+    steps = Homebrew::InstallSteps::DSL.build(default_source_base: :staged_path, default_target_base: :var) do
+      move "source", "target"
+    end
+    (root/"stage/source").mkpath
+    (root/"stage/source/file").write "content"
+    runner = Homebrew::InstallSteps::Runner.new(context:)
+
+    runner.run(steps)
+    expect { runner.run(steps) }.to raise_error(Errno::ENOENT)
+    expect((root/"var/target/file").read).to eq("content")
   end
 
   specify "requires one match for single-source globs" do
@@ -409,7 +506,7 @@ RSpec.describe Homebrew::InstallSteps do
     expect(root/"var/obsolete-dir").not_to exist
   end
 
-  specify "filters removals by symlink target and file content", :aggregate_failures do
+  specify "filters removals and accepts the legacy path base", :aggregate_failures do
     ENV["PATH"] = (root/"path-bin").to_s
     steps = Homebrew::InstallSteps::DSL.build do
       remove "links/*", base: :staged_path, symlink_target_contains: "wanted"
@@ -581,18 +678,18 @@ RSpec.describe Homebrew::InstallSteps do
     expect((root/"var/has-newline").read).to eq("value\n")
   end
 
-  specify "raises when a write step has missing or blank content" do
+  specify "raises when a write step has missing content" do
     expect do
       Homebrew::InstallSteps::Runner.new(context:).run([{ "type" => "write", "path" => "config/new.conf" }])
-    end.to raise_error(ArgumentError, /non-empty content/)
+    end.to raise_error(ArgumentError, /requires content/)
   end
 
   specify "runs service data directory initialisers", :aggregate_failures do
     steps = Homebrew::InstallSteps::DSL.build(default_base: :var) do
-      init_data_dir "postgresql@16", using: :postgresql_initdb
-      init_data_dir "postgresql@12", using: :postgresql_initdb, locale: "C"
-      init_data_dir "mysql", using: :mysql_initialize
-      init_data_dir "mysql", using: :mariadb_install_db
+      init_data_dir "postgresql@16", using: :postgresql
+      init_data_dir "postgresql@12", using: :postgresql, locale: "C"
+      init_data_dir "mysql", using: :mysql
+      init_data_dir "mysql", using: :mariadb
     end
 
     runner = Homebrew::InstallSteps::Runner.new(context:)
@@ -644,11 +741,11 @@ RSpec.describe Homebrew::InstallSteps do
     FileUtils.chmod "+x", root/"prefix/bin/pg_config"
 
     steps = Homebrew::InstallSteps::DSL.build(default_base: :var, default_source_base: :prefix) do
-      link_dir "include/postgresql", "include/#{name}"
-      link_dir "lib/postgresql", "lib/#{name}"
-      link_dir "share/postgresql", "share/#{name}"
-      link_children "bin", suffix: "-#{version.major}"
-      init_data_dir name, using: :postgresql_initdb
+      symlink_tree "include/postgresql", "include/#{formula_name}"
+      symlink_tree "lib/postgresql", "lib/#{formula_name}"
+      symlink_tree "share/postgresql", "share/#{formula_name}"
+      symlink_children "bin", suffix: "-#{version.major}"
+      init_data_dir formula_name, using: :postgresql
     end
 
     runner = Homebrew::InstallSteps::Runner.new(context: versioned_context)
@@ -676,7 +773,7 @@ RSpec.describe Homebrew::InstallSteps do
 
   specify "skips data directory initialisers in CI", :aggregate_failures do
     steps = Homebrew::InstallSteps::DSL.build(default_base: :var) do
-      init_data_dir "postgresql@16", using: :postgresql_initdb
+      init_data_dir "postgresql@16", using: :postgresql
     end
 
     ENV["HOMEBREW_GITHUB_ACTIONS"] = "1"
@@ -691,7 +788,7 @@ RSpec.describe Homebrew::InstallSteps do
 
   specify "skips data directory initialisers when their marker exists", :aggregate_failures do
     steps = Homebrew::InstallSteps::DSL.build(default_base: :var) do
-      init_data_dir "mysql", using: :mysql_initialize
+      init_data_dir "mysql", using: :mysql
     end
 
     (root/"var/mysql/mysql").mkpath
@@ -721,7 +818,7 @@ RSpec.describe Homebrew::InstallSteps do
     steps = Homebrew::InstallSteps::DSL.build do
       compile_gsettings_schemas
       gio_querymodules
-      gdk_pixbuf_query_loaders
+      update_gdk_pixbuf_loaders_cache
       update_mime_database
       update_desktop_database
     end
@@ -927,11 +1024,222 @@ RSpec.describe Homebrew::InstallSteps do
     Homebrew::InstallSteps::Runner.new(context: clang_context).run(steps)
   end
 
-  describe "runs gtk_update_icon_cache rebuild action" do
+  describe "configures PHP" do
+    let(:steps) do
+      Homebrew::InstallSteps::DSL.build do
+        configure_php
+      end
+    end
+    let(:homebrew_prefix) { root/"homebrew" }
+    let(:pear_prefix) { root/"prefix/share/php@8.4/pear" }
+    let(:pecl_path) { homebrew_prefix/"lib/php/pecl" }
+    let(:ext_config_path) { homebrew_prefix/"etc/php/8.4/conf.d/ext-opcache.ini" }
+    let(:php_context) do
+      root_path = root
+      context.tap do |value|
+        value.define_singleton_method(:name) { "php@8.4" }
+        value.define_singleton_method(:version) { Version.new("8.4.1") }
+        value.define_singleton_method(:pkgshare) { root_path/"prefix/share/php@8.4" }
+        value.define_singleton_method(:opt_prefix) { root_path/"opt/php@8.4" }
+        value.define_singleton_method(:etc) { root_path/"homebrew/etc" }
+      end
+    end
+    let(:runner) { Homebrew::InstallSteps::Runner.new(context: php_context) }
+
+    before do
+      stub_const("HOMEBREW_PREFIX", homebrew_prefix)
+      (pear_prefix/".channels/.alias").mkpath
+      (pear_prefix/".channels/pear.php.net.reg").write "channel"
+      (pear_prefix/".channels/.alias/pear.txt").write "alias"
+      (pear_prefix/".depdblock").write "lock"
+      FileUtils.chmod 0700, [pear_prefix/".channels", pear_prefix/".channels/.alias"]
+      FileUtils.chmod 0600, [pear_prefix/".channels/pear.php.net.reg", pear_prefix/".channels/.alias/pear.txt",
+                             pear_prefix/".depdblock"]
+      (homebrew_prefix/"share").mkpath
+      File.symlink root/"missing-pecl", root/"prefix/pecl"
+      allow(runner).to receive(:run_command_output)
+        .with(root/"prefix/bin/php-config", "--extension-dir")
+        .and_return("/usr/local/lib/php/20240924\n")
+      allow(runner).to receive(:run_command)
+    end
+
+    specify "updates PEAR, PECL and opcache configuration", :aggregate_failures do
+      expect(runner).to receive(:run_command).with(
+        root/"prefix/bin/pear", "config-set", "ext_dir", pecl_path/"20240924", "system"
+      ).ordered
+      expect(runner).to receive(:run_command).with(root/"prefix/bin/pear", "update-channels").ordered
+
+      runner.run(steps)
+
+      expect((pear_prefix/".channels").stat.mode & 0777).to eq(0755)
+      expect((pear_prefix/".channels/.alias").stat.mode & 0777).to eq(0755)
+      expect((pear_prefix/".channels/pear.php.net.reg").stat.mode & 0777).to eq(0644)
+      expect((pear_prefix/".channels/.alias/pear.txt").stat.mode & 0777).to eq(0644)
+      expect((pear_prefix/".depdblock").stat.mode & 0777).to eq(0644)
+      expect(root/"prefix/pecl").to be_a_symlink
+      expect((root/"prefix/pecl").readlink).to eq(pecl_path)
+      expect(pecl_path/"20240924").to be_a_directory
+      expect(homebrew_prefix/"share/pear@8.4/.depdblock").to exist
+      expect(ext_config_path.read).to eq <<~INI
+        [opcache]
+        zend_extension="#{root}/opt/php@8.4/lib/php/20240924/opcache.so"
+      INI
+    end
+
+    specify "only replaces the active opcache extension setting" do
+      ext_config_path.dirname.mkpath
+      ext_config_path.write <<~INI
+        ; zend_extension=keep.so
+          zend_extension = old.so
+        description=zend_extension=also-keep
+      INI
+
+      runner.run(steps)
+
+      expect(ext_config_path.read).to eq <<~INI
+        ; zend_extension=keep.so
+        zend_extension="#{root}/opt/php@8.4/lib/php/20240924/opcache.so"
+        description=zend_extension=also-keep
+      INI
+    end
+
+    specify "audits existing opcache extension settings" do
+      ext_config_path.dirname.mkpath
+      ext_config_path.write "[opcache]\n"
+
+      expect { runner.run(steps) }.to raise_error(Utils::Inreplace::Error)
+    end
+  end
+
+  specify "dispatches CPython and PyPy bootstrap" do
+    steps = Homebrew::InstallSteps::DSL.build do
+      bootstrap_cpython
+      bootstrap_pypy abi_version: "3.10"
+    end
+
+    runner = Homebrew::InstallSteps::Runner.new(context:)
+    expect(runner).to receive(:run_bootstrap_cpython).ordered
+    expect(runner).to receive(:run_bootstrap_pypy).with("3.10").ordered
+
+    runner.run(steps)
+  end
+
+  specify "bootstraps CPython 3.9 configuration", :aggregate_failures do
+    python = formula do
+      T.bind(self, T.class_of(Formula))
+      url "foo-3.9.1"
+    end
+    allow(python).to receive(:prefix).and_return(root/"prefix")
+    stub_const("HOMEBREW_PREFIX", root/"homebrew")
+    allow(Homebrew::SimulateSystem).to receive(:simulating_or_running_on_macos?).and_return(false)
+    site_packages = root/"homebrew/lib/python3.9/site-packages"
+    resources = %w[setuptools pip wheel].to_h do |name|
+      [name, instance_double(Resource, version: Version.new("1.0"))]
+    end
+    allow(python).to receive(:resource) { |name| resources[name] }
+    site_packages_cellar = root/"prefix/lib/python3.9/site-packages"
+    (site_packages_cellar/"old.pth").tap do |path|
+      path.dirname.mkpath
+      path.write "old"
+    end
+    (site_packages/"bin").mkpath
+    (site_packages/"bin/pip3.9").write "pip"
+    (site_packages/"bin/wheel").write "wheel"
+    (root/"prefix/bin").mkpath
+    (root/"prefix/lib/python3.9/distutils").mkpath
+    (root/"homebrew/bin").mkpath
+    runner = Homebrew::InstallSteps::Runner.new(context: python)
+    allow(runner).to receive(:run_command) do |*args|
+      next unless args.include?("--target=#{site_packages}")
+
+      framework_compat = site_packages/"setuptools/_distutils/command/_framework_compat.py"
+      framework_compat.dirname.mkpath
+      framework_compat.write "    homebrew_prefix = None\n"
+    end
+    steps = Homebrew::InstallSteps::DSL.build do
+      bootstrap_cpython
+    end
+
+    runner.run(steps)
+
+    expect(site_packages_cellar).to be_a_symlink
+    expect(site_packages_cellar.realpath).to eq(site_packages.realpath)
+    expect(site_packages_cellar/"old.pth").not_to exist
+    expect((root/"prefix/lib/python3.9/distutils/distutils.cfg").read).to eq <<~INI
+      [install]
+      prefix=#{root}/homebrew
+      [build_ext]
+      include_dirs=#{root}/homebrew/include:#{root}/homebrew/opt/openssl@3/include:#{root}/homebrew/opt/sqlite/include
+      library_dirs=#{root}/homebrew/lib:#{root}/homebrew/opt/openssl@3/lib:#{root}/homebrew/opt/sqlite/lib
+    INI
+    expect((site_packages/"setuptools/_distutils/command/_framework_compat.py").read)
+      .to eq("    homebrew_prefix = '#{root}/homebrew'\n")
+  end
+
+  specify "bootstraps PyPy 3.10 configuration", :aggregate_failures do
+    pypy = formula do
+      T.bind(self, T.class_of(Formula))
+      url "foo-7.3.20"
+    end
+    allow(pypy).to receive_messages(
+      prefix:   root/"prefix",
+      libexec:  root/"prefix/libexec",
+      pkgshare: root/"prefix/share/pypy3",
+    )
+    stub_const("HOMEBREW_PREFIX", root/"homebrew")
+    resources = %w[setuptools pip].to_h do |name|
+      resource = instance_double(Resource)
+      allow(resource).to receive(:stage).and_yield
+      [name, resource]
+    end
+    allow(pypy).to receive(:resource) { |name| resources[name] }
+    allow(Formula).to receive(:[]).with("pypy3").and_return(instance_double(Formula))
+    scripts_folder = root/"homebrew/share/pypy3.10"
+    scripts_folder.mkpath
+    (scripts_folder/"pip3.10").write "pip"
+    (root/"prefix/libexec/lib/pypy3.10/distutils").mkpath
+    command = class_double(SystemCommand, run: nil)
+    runner = Homebrew::InstallSteps::Runner.new(context: pypy, command:)
+    allow(runner).to receive(:run_command)
+    steps = Homebrew::InstallSteps::DSL.build do
+      bootstrap_pypy abi_version: "3.10"
+    end
+
+    runner.run(steps)
+
+    site_packages = root/"homebrew/lib/pypy3.10/site-packages"
+    libexec_site_packages = root/"prefix/libexec/lib/pypy3.10/site-packages"
+    expect(site_packages/".keepme").to exist
+    expect(libexec_site_packages).to be_a_symlink
+    expect(libexec_site_packages.realpath).to eq(site_packages.realpath)
+    expect((root/"prefix/libexec/lib/pypy3.10/distutils/distutils.cfg").read).to eq <<~INI
+      [install]
+      install-scripts=#{scripts_folder}
+    INI
+    expect(root/"prefix/bin/pip_pypy3.10").to be_a_symlink
+    expect(root/"homebrew/bin/pip_pypy3.10").to be_a_symlink
+  end
+
+  specify "makes CPython venv activation script templates writable", :aggregate_failures do
+    script = root/"lib/venv/scripts/common/activate"
+    directory = root/"lib/venv/scripts/directory"
+    script.dirname.mkpath
+    directory.mkpath
+    script.write "activate"
+    FileUtils.chmod 0444, script
+    FileUtils.chmod 0555, directory
+
+    Homebrew::InstallSteps::Runner.new(context:).make_cpython_venv_activation_scripts_writable(root/"lib")
+
+    expect(script.stat.mode & 0200).to eq(0200)
+    expect(directory.stat.mode & 0200).to be_zero
+  end
+
+  describe "runs update_gtk_icon_cache rebuild action" do
     let(:formula) { instance_double(Formula, opt_bin: root/"opt/bin") }
     let(:steps) do
       Homebrew::InstallSteps::DSL.build do
-        gtk_update_icon_cache
+        update_gtk_icon_cache
       end
     end
 
@@ -956,7 +1264,7 @@ RSpec.describe Homebrew::InstallSteps do
 
   specify "deletes matching keychain certificates by SHA-256 hash" do
     steps = Homebrew::InstallSteps::DSL.build do
-      delete_keychain_certificate "Charles"
+      delete_keychain_certificates "Charles"
     end
 
     runner = Homebrew::InstallSteps::Runner.new(context:)
@@ -979,7 +1287,7 @@ RSpec.describe Homebrew::InstallSteps do
     certificate.dirname.mkpath
     certificate.write "certificate"
     steps = Homebrew::InstallSteps::DSL.build do
-      delete_keychain_certificate "NodeMITMProxyCA", matching_certificate: certificate
+      delete_keychain_certificates "NodeMITMProxyCA", fingerprint_of: certificate
     end
 
     runner = Homebrew::InstallSteps::Runner.new(context:)
@@ -1001,7 +1309,7 @@ RSpec.describe Homebrew::InstallSteps do
   specify "skips keychain certificate deletion when a local certificate is missing" do
     certificate = root/"missing.pem"
     steps = Homebrew::InstallSteps::DSL.build do
-      delete_keychain_certificate "NodeMITMProxyCA", matching_certificate: certificate
+      delete_keychain_certificates "NodeMITMProxyCA", fingerprint_of: certificate
     end
 
     runner = Homebrew::InstallSteps::Runner.new(context:)
@@ -1122,7 +1430,7 @@ RSpec.describe Homebrew::InstallSteps do
 
   specify "removes symlinks marked for uninstall" do
     steps = Homebrew::InstallSteps::DSL.build(default_target_base: :staged_path) do
-      ln_sf "target", "linked-target", source_base: :relative, uninstall: true
+      symlink "target", "linked-target", source_base: :relative, overwrite: true, remove_on_uninstall: true
     end
 
     (root/"stage").mkpath
