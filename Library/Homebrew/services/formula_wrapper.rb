@@ -263,13 +263,17 @@ module Homebrew
       end
 
       # Generate the service file content (plist or systemd unit),
-      # including any per-service user environment variable overrides.
+      # including any per-service user environment variable overrides,
+      # or read the package-provided service file if the formula's
+      # service block does not define a command.
       sig { returns(String) }
       def service_contents
-        if System.launchctl?
-          formula.service.to_plist
+        if !service? || !load_service.command?
+          service_file.read
+        elsif System.launchctl?
+          load_service.to_plist
         else
-          formula.service.to_systemd_unit
+          load_service.to_systemd_unit
         end
       end
 
@@ -288,18 +292,7 @@ module Homebrew
       sig { returns(StatusOutputSuccessType) }
       def status_output_success_type
         @status_output_success_type ||= if System.launchctl?
-          cmd = [System.launchctl.to_s, "print", "#{System.domain_target}/#{service_name}"]
-          output = Utils.popen_read(*cmd).chomp
-          if $CHILD_STATUS.present? && $CHILD_STATUS.success? && output.present?
-            success = true
-            type = :launchctl_print
-          else
-            cmd = [System.launchctl.to_s, "list", service_name]
-            output = Utils.popen_read(*cmd).chomp
-            success = T.cast($CHILD_STATUS.present? && $CHILD_STATUS.success? && output.present?, T::Boolean)
-            type = :launchctl_list
-          end
-          odebug cmd.join(" "), output
+          output, success, type = System.launchctl_find_service(service_name)
           StatusOutputSuccessType.new(output, success, type)
         else # System.systemctl?
           cmd = ["status", service_name]

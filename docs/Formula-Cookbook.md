@@ -634,7 +634,7 @@ patch do
 end
 ```
 
-`resolves` records what the patch fixes: one or more CVE identifiers (`CVE-YYYY-NNNN`), GHSA identifiers (`GHSA-xxxx-xxxx-xxxx`) or issue/PR URLs. CVE identifiers are also inferred automatically from the patch `url`, `apply` paths and `file` path, so a Debian-style `CVE-2016-2399.patch` is picked up without an explicit `resolves`.
+`resolves` records what the patch fixes: one or more CVE identifiers (`CVE-YYYY-NNNN`), GHSA identifiers (`GHSA-xxxx-xxxx-xxxx`), OSV identifiers (`OSV-YYYY-NNNN`) or issue/PR URLs. CVE identifiers are also inferred automatically from the patch `url`, `apply` paths and `file` path, so a Debian-style `CVE-2016-2399.patch` is picked up without an explicit `resolves`.
 
 ```ruby
 patch do
@@ -1065,9 +1065,9 @@ end
 
 ### Running commands after installation
 
-Any initialisation steps that aren't necessarily part of the install process can be located in a `post_install` block, such as setup commands or data directory creation. This block can be re-run separately with `brew postinstall <formula>`.
+Formulae in official Homebrew taps must represent post-install work with [`post_install_steps`](/rubydoc/Formula.html#post_install_steps-class_method); new `post_install` methods are rejected. These steps can be re-run separately with `brew postinstall <formula>`, are stored in the JSON API and do not require downloading source formula Ruby. A `post_install_steps` block may only contain the supported step calls with literal arguments. It cannot call the wider formula DSL or arbitrary Ruby code. Homebrew executes the steps with the same post-install sandbox policy.
 
-For declarative post-install work, prefer [`post_install_steps`](/rubydoc/Formula.html#post_install_steps-class_method). These steps are stored in the JSON API and do not require evaluating formula Ruby. A `post_install_steps` block may only contain the supported step calls with literal arguments. It cannot call the wider formula DSL or arbitrary Ruby code. Homebrew executes the steps with the same sandbox policy as `post_install`.
+The legacy `post_install` method remains available temporarily for third-party tap compatibility, but is not an authoring interface for official formulae. A formula cannot define both `post_install` and `post_install_steps`.
 
 ```ruby
 class Foo < Formula
@@ -1083,11 +1083,6 @@ class Foo < Formula
   # ...
 end
 ```
-
-During incremental conversions a formula may define both `post_install_steps`
-and `post_install`. The structured steps run first and `post_install` runs last
-for the remaining Ruby work. Remove `post_install` once all of its behaviour is
-represented by structured steps.
 
 #### File preparation steps
 
@@ -1119,7 +1114,7 @@ end
 
 #### Default config and template steps
 
-`write_file` atomically writes its exact literal content, replacing an existing file. Specify its `base:`, such as `base: :etc`. Use `unless_path_exists` when a default file should preserve user edits across upgrades:
+`write_file` atomically writes its literal content, replacing an existing file by default. Specify its `base:`, such as `base: :etc`. Pass `append_newline: true` to ensure the content ends in a newline, `overwrite: false` to preserve an existing file or use `unless_path_exists` to guard a group of default-file steps:
 
 ```ruby
 unless_path_exists "foo.conf", base: :etc do
@@ -1142,7 +1137,7 @@ Content, replacements, command arguments and command environments may use a fixe
 
 #### Command and lifecycle steps
 
-`run` executes one command with a literal argument array; it does not evaluate a shell command string. Select the executable with `base:`, such as `:bin`, `:libexec` or `:homebrew_prefix`, or pass an absolute system executable. The step also supports a literal `env:`, `stdin_path:`, `stdout_path:`, `chdir:` and `sudo:`. Standard output is hidden by default and standard error is printed, matching `SystemCommand`; use `print_stdout: true` or `print_stderr: false` to change that behaviour.
+`run` executes one command with a literal argument array; it does not evaluate a shell command string. Select the executable with `base:`, such as `:bin`, `:libexec` or `:homebrew_prefix`, or pass an absolute system executable. The step also supports a literal `env:`, `stdin_path:`, `stdout_path:`, `chdir:` and `sudo:`. Standard output is hidden by default and standard error is printed, matching `SystemCommand`; use `print_stdout: true` or `print_stderr: false` to change that behaviour. Failure aborts the post-install; pass `must_succeed: false` when a non-zero exit status is expected and should be ignored. Nothing is written to `stdout_path:` when an ignored command fails. Like all formula post-install steps, the command runs inside the formula post-install sandbox.
 
 ```ruby
 run "foo-helper", args: ["--prefix", "{{HOMEBREW_PREFIX}}"], base: :libexec
@@ -1157,7 +1152,7 @@ end
 
 #### Repeated formula actions
 
-Use the named actions below for formula families that share post-install algorithms. Unique complex logic should be installed as a packaged helper and invoked with `run` instead of adding a formula-specific action.
+Use the named actions below for formula families that share post-install algorithms. Unique complex logic should be installed as a packaged helper and invoked with `run` instead of adding a formula-specific action. Any static formula inputs needed by a named action must be installed into the bottle rather than fetched from formula resources after pouring.
 
 * `configure_gcc_runtime`: generate the Linux GCC runtime links and specs.
 * `install_gzipped_executable`: unpack and install a gzipped executable.
@@ -1200,6 +1195,7 @@ symlink_children "bin", suffix: "-{{version.major}}"
 These steps rebuild shared desktop and cache state using Homebrew-owned tools.
 
 * `compile_gsettings_schemas`: compile GSettings schemas in `share/glib-2.0/schemas`.
+* `update_gio_modules_cache`: update the GIO module cache in `lib/gio/modules`.
 * `update_gdk_pixbuf_loaders_cache`: update the GDK Pixbuf loader cache.
 * `update_gtk_icon_cache`: refresh the `hicolor` GTK icon cache.
 * `update_mime_database`: rebuild the shared MIME database in `share/mime`.

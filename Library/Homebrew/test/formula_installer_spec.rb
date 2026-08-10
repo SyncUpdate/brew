@@ -146,6 +146,30 @@ RSpec.describe FormulaInstaller do
   end
 
   describe "#post_install" do
+    it "runs structured post-install steps inside the formula sandbox" do
+      formula = formula("sandboxed-install-steps") do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+
+        post_install_steps do
+          touch "state", base: :var
+        end
+      end
+      installer = described_class.new(formula)
+      sandbox = instance_double(Sandbox).as_null_object
+
+      allow(installer).to receive(:post_install_formula_path).and_return(formula.path)
+      allow(formula).to receive_messages(logs: mktmpdir, network_access_allowed?: false)
+      allow(Sandbox).to receive_messages(new: sandbox, use_for?: true)
+      expect(Sandbox).to receive(:with_preserved_brew_file).and_yield
+      expect(sandbox).to receive(:add_install_hook_rules).with(network_access_allowed: false)
+      expect(sandbox).to receive(:run) do |*args|
+        expect(args).to include(HOMEBREW_LIBRARY_PATH/"postinstall.rb", formula.path)
+      end
+
+      installer.post_install
+    end
+
     it "restores bin/brew after a Landlock-sandboxed post-install replaces it" do
       prefix = mktmpdir
       stub_const("HOMEBREW_PREFIX", prefix)
@@ -164,9 +188,9 @@ RSpec.describe FormulaInstaller do
       installer = described_class.new(formula)
       sandbox = instance_double(Sandbox).as_null_object
 
-      allow(installer).to receive_messages(post_install_formula_path: formula.path, use_sandbox?: true)
+      allow(installer).to receive(:post_install_formula_path).and_return(formula.path)
       allow(formula).to receive_messages(logs: mktmpdir, network_access_allowed?: true)
-      allow(Sandbox).to receive_messages(full_write_isolation?: false, new: sandbox)
+      allow(Sandbox).to receive_messages(full_write_isolation?: false, new: sandbox, use_for?: true)
       allow(sandbox).to receive(:run) do
         FileUtils.rm_f brew_file
         brew_file.write "malicious\n"
@@ -178,6 +202,35 @@ RSpec.describe FormulaInstaller do
       expect(brew_file).to be_a_symlink
       expect(brew_file.readlink).to eq(original_target)
       expect(brew_file.dirname.stat.mode & 07777).to eq(original_directory_mode)
+    end
+  end
+
+  describe "#post_install_formula_path" do
+    it "uses the API formula for structured-only post-installs" do
+      formula = formula("api-install-steps") do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+      end
+      installer = described_class.new(formula)
+
+      allow(formula).to receive_messages(any_installed_prefix: mktmpdir, loaded_from_api?: true,
+                                         post_install_defined?: false)
+
+      expect(installer.post_install_formula_path).to eq(formula.full_name)
+    end
+
+    it "uses the keg formula for API post-installs with Ruby hooks" do
+      formula = formula("api-post-install-hook") do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+      end
+      installer = described_class.new(formula)
+      installed_prefix = mktmpdir
+
+      allow(formula).to receive_messages(any_installed_prefix: installed_prefix, loaded_from_api?: true,
+                                         post_install_defined?: true)
+
+      expect(installer.post_install_formula_path).to eq(installed_prefix/".brew/api-post-install-hook.rb")
     end
   end
 
@@ -377,6 +430,17 @@ RSpec.describe FormulaInstaller do
       expect(installer).to receive(:fetch_bottle_tab).with(enqueue: true).ordered
       expect(download_queue).to receive(:enqueue)
         .with(bottle, check_attestation: false).ordered
+
+      installer.enqueue_fetch
+    end
+
+    it "does not requeue a bottle already enqueued by the prelude fetch" do
+      allow(installer).to receive(:pour_bottle?).and_return(true)
+      expect(download_queue).to receive(:enqueue)
+        .with(bottle, check_attestation: false, stage: true).once
+      installer.prelude_fetch
+
+      expect(installer).to receive(:fetch_dependencies)
 
       installer.enqueue_fetch
     end
@@ -889,78 +953,6 @@ RSpec.describe FormulaInstaller do
       end.to raise_error(CannotInstallFormulaError)
     end
 
-    it "does not raise on cyclic dependency through direct implicit Bubblewrap" do
-      ENV["HOMEBREW_DEVELOPER"] = "1"
-
-      formula_name = "homebrew-test-formula"
-      f = formula formula_name do
-        T.bind(self, T.class_of(Formula))
-        url "foo-1.0"
-      end
-      dep = Dependency.new("bubblewrap", [:implicit])
-
-      allow(f).to receive_messages(deps: [dep], recursive_dependencies: [])
-
-      fi = described_class.new(f)
-
-      expect do
-        fi.check_install_sanity
-      end.not_to raise_error
-    end
-
-    it "does not raise on cyclic dependency through recursive implicit Bubblewrap" do
-      ENV["HOMEBREW_DEVELOPER"] = "1"
-
-      formula_name = "homebrew-test-formula"
-      f = formula formula_name do
-        T.bind(self, T.class_of(Formula))
-        url "foo-1.0"
-      end
-      dep = Dependency.new("cmake", [:build])
-      implicit_bubblewrap = Dependency.new("bubblewrap", [:implicit])
-      recursive_dep = Dependency.new(formula_name)
-      dep_formula = instance_double(Formula)
-
-      allow(f).to receive_messages(deps: [dep], recursive_dependencies: [])
-      allow(dep).to receive(:to_formula).and_return(dep_formula)
-      allow(dep_formula).to receive(:recursive_dependencies) do |&block|
-        (block&.call(dep_formula, implicit_bubblewrap) == Dependable::PRUNE) ? [] : [recursive_dep]
-      end
-
-      fi = described_class.new(f)
-
-      expect do
-        fi.check_install_sanity
-      end.not_to raise_error
-    end
-
-    it "raises on cyclic dependency through recursive explicit Bubblewrap" do
-      ENV["HOMEBREW_DEVELOPER"] = "1"
-
-      formula_name = "homebrew-test-formula"
-      f = formula formula_name do
-        T.bind(self, T.class_of(Formula))
-        url "foo-1.0"
-      end
-      dep = Dependency.new("cmake", [:build])
-      explicit_bubblewrap = Dependency.new("bubblewrap")
-      recursive_dep = Dependency.new(formula_name)
-      dep_formula = instance_double(Formula)
-
-      allow(f).to receive_messages(deps: [dep], recursive_dependencies: [])
-      allow(dep).to receive(:to_formula).and_return(dep_formula)
-      allow(dep_formula).to receive(:recursive_dependencies) do |&block|
-        block&.call(dep_formula, explicit_bubblewrap)
-        [recursive_dep]
-      end
-
-      fi = described_class.new(f)
-
-      expect do
-        fi.check_install_sanity
-      end.to raise_error(CannotInstallFormulaError)
-    end
-
     it "raises on pinned dependency" do
       dep_name = "homebrew-test-dependency"
       dep_path = CoreTap.instance.new_formula_path(dep_name)
@@ -1254,41 +1246,72 @@ RSpec.describe FormulaInstaller do
   end
 
   describe "#prelude_fetch" do
-    it "uses API bottle metadata for API-loaded formula manifests" do
-      formula = formula("deno") do
-        T.bind(self, T.class_of(Formula))
-        url "https://brew.sh/deno-2.7.11.tar.gz"
+    context "with an API-loaded bottled formula" do
+      let(:deno_formula) do
+        formula("deno") do
+          T.bind(self, T.class_of(Formula))
+          url "https://brew.sh/deno-2.7.11.tar.gz"
+        end
       end
-      formula_struct = Homebrew::API::FormulaStruct.new(
-        bottle_checksums:     [
-          {
-            cellar:                  :any_skip_relocation,
-            Utils::Bottles.tag.to_sym => "d7b9f4e8bf83608b71fe958a99f19f2e5e68bb2582965d32e41759c24f1aef97",
-          },
-        ],
-        bottle_present:       true,
-        desc:                 "deno",
-        homepage:             "https://brew.sh",
-        license:              "MIT",
-        ruby_source_checksum: "abc123",
-        stable_present:       true,
-        stable_version:       "2.7.11",
-      )
-      installer = described_class.new(formula, ignore_deps: true)
-      installer.download_queue = instance_double(Homebrew::DownloadQueue)
+      let(:formula_struct) do
+        Homebrew::API::FormulaStruct.new(
+          bottle_checksums:     [
+            {
+              cellar:                  :any_skip_relocation,
+              Utils::Bottles.tag.to_sym => "d7b9f4e8bf83608b71fe958a99f19f2e5e68bb2582965d32e41759c24f1aef97",
+            },
+          ],
+          bottle_present:       true,
+          desc:                 "deno",
+          homepage:             "https://brew.sh",
+          license:              "MIT",
+          ruby_source_checksum: "abc123",
+          stable_present:       true,
+          stable_version:       "2.7.11",
+        )
+      end
+      let(:installer) do
+        installer = described_class.new(deno_formula, ignore_deps: true)
+        installer.download_queue = instance_double(Homebrew::DownloadQueue)
+        installer
+      end
 
-      allow(formula).to receive_messages(
-        bottle_tag?:               true,
-        core_formula?:             true,
-        loaded_from_internal_api?: true,
-        pour_bottle?:              true,
-      )
-      allow(Homebrew::API::Internal).to receive(:formula_struct).with("deno").and_return(formula_struct)
-      expect(formula).not_to receive(:bottle_for_tag)
-      expect(formula).not_to receive(:bottle)
-      expect(installer.download_queue).to receive(:enqueue).with(an_instance_of(Resource::BottleManifest))
+      before do
+        allow(deno_formula).to receive_messages(
+          bottle_tag?:               true,
+          core_formula?:             true,
+          loaded_from_internal_api?: true,
+          pour_bottle?:              true,
+        )
+        allow(Homebrew::API::Internal).to receive(:formula_struct).with("deno").and_return(formula_struct)
+      end
 
-      installer.prelude_fetch
+      it "uses API bottle metadata to enqueue the manifest and bottle" do
+        expect(deno_formula).not_to receive(:bottle_for_tag)
+        expect(deno_formula).not_to receive(:bottle)
+        expect(installer.download_queue).to receive(:enqueue).with(an_instance_of(Resource::BottleManifest))
+        expect(installer.download_queue).to receive(:enqueue)
+          .with(an_instance_of(Bottle), check_attestation: false, stage: true)
+
+        installer.prelude_fetch
+      end
+
+      it "enqueues only the bottle manifest when fetching metadata" do
+        expect(installer.download_queue).to receive(:enqueue).with(an_instance_of(Resource::BottleManifest))
+
+        installer.prelude_fetch(metadata_only: true)
+      end
+
+      it "enqueues the bottle without repeating metadata work after a metadata-only run" do
+        expect(installer.download_queue).to receive(:enqueue).with(an_instance_of(Resource::BottleManifest)).once
+
+        installer.prelude_fetch(metadata_only: true)
+
+        expect(installer.download_queue).to receive(:enqueue)
+          .with(an_instance_of(Bottle), check_attestation: false, stage: true)
+
+        installer.prelude_fetch
+      end
     end
 
     it "does not repeat source download prelude work" do
@@ -1473,7 +1496,7 @@ RSpec.describe FormulaInstaller do
 
       # Stub out the actual build subprocess since we only care about the guard
       allow(installer).to receive(:build_argv).and_return([])
-      allow(Utils).to receive(:safe_fork)
+      allow(Sandbox).to receive(:run_or_fork)
       allow(source_formula).to receive_messages(logs: mktmpdir, update_head_version: nil, prefix: mktmpdir,
                                                 network_access_allowed?: true)
       allow(Keg).to receive(:new).and_return(instance_double(Keg, empty_installation?: false))
@@ -1510,7 +1533,7 @@ RSpec.describe FormulaInstaller do
       sandbox = instance_double(Sandbox)
 
       allow(installer).to receive(:build_argv).and_return([])
-      allow(Sandbox).to receive_messages(ensure_sandbox_installed!: nil, available?: true, new: sandbox)
+      allow(Sandbox).to receive_messages(available?: true, new: sandbox)
       allow(sandbox).to receive_messages(record_log: nil, allow_read_if_exists: nil, allow_write_temp_and_cache: nil,
                                          allow_write_log: nil, allow_cvs: nil, allow_fossil: nil,
                                          allow_write_xcode: nil, allow_write_cellar: nil, deny_read_home: nil,

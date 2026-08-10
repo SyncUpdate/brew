@@ -37,7 +37,6 @@ module OS
             related_formula_names.merge(versioned_formulae_names)
           end
           [
-            dependency_collector.bubblewrap_dep_if_needed(related_formula_names),
             dependency_collector.gcc_dep_if_needed(related_formula_names),
             dependency_collector.glibc_dep_if_needed(related_formula_names),
           ].compact.freeze
@@ -55,6 +54,12 @@ module OS
         args = super
         args << "--ghc-option=-pie" if ::Hardware::CPU.arm?
         args
+      end
+
+      sig { returns(T::Array[String]) }
+      def std_swift_args
+        # Use ld shim to help find Homebrew-installed libraries
+        ["--static-swift-stdlib", "-Xswiftc", "-use-ld=ld"].concat(super)
       end
     end
   end
