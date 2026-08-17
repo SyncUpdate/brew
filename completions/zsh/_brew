@@ -277,6 +277,7 @@ __brew_internal_commands() {
       'determine-test-runners:Determines the runners used to test formulae or their dependents'
       'dispatch-build-bottle:Build bottles for these formulae with GitHub Actions'
       'formula-analytics:Query Homebrew'\''s analytics'
+      'generate-advisories-api:Generate advisory API data for https://formulae.brew.sh from a checkout of https://github.com/Homebrew/advisory-database'
       'generate-analytics-api:Generates analytics API data files for https://formulae.brew.sh'
       'generate-cask-api:Generate `homebrew/cask` API data files for https://formulae.brew.sh'
       'generate-cask-ci-matrix:Generate a GitHub Actions matrix for a given pull request URL or list of cask names'
@@ -443,6 +444,7 @@ _brew_advisory_match() {
     '--no-history[Skip the `FormulaVersions` walk for the `fixed` boundary; use the current `pkg_version` instead]' \
     '(--index)--output[Write each record to directory as `BREW-formula-id.json`, preserving existing `published`/`ranges` fields]' \
     '--quiet[Make some output more quiet]' \
+    '--repology[Load the formula to distro-package index from file instead of the published `data/repology.json`]' \
     '--verbose[Make some output more verbose]' \
     - formula \
     '*:formula:__brew_formulae'
@@ -1464,6 +1466,15 @@ _brew_formula_analytics() {
 
 # brew formulae
 _brew_formulae() {
+  _arguments \
+    '--debug[Display any debugging information]' \
+    '--help[Show this message]' \
+    '--quiet[Make some output more quiet]' \
+    '--verbose[Make some output more verbose]'
+}
+
+# brew generate-advisories-api
+_brew_generate_advisories_api() {
   _arguments \
     '--debug[Display any debugging information]' \
     '--help[Show this message]' \

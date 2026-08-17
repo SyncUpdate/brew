@@ -62,9 +62,13 @@ module Cask
             next false
           end
 
-          if cask.outdated?(greedy: true)
+          version = cask.version
+          if version.nil?
+            opoo "Not upgrading #{cask.token}, no version is available for the current platform" unless quiet
+            false
+          elsif cask.outdated?(greedy: true)
             true
-          elsif cask.version.latest?
+          elsif version.latest?
             opoo "Not upgrading #{cask.token}, the downloaded artifact has not changed" unless quiet
             false
           else
@@ -208,8 +212,10 @@ module Cask
 
       return false if upgradable_casks.empty?
 
-      caught_exceptions = []
-      caught_exceptions.concat(prefetched_errors) if prefetched_errors
+      # Report each failure as it happens and carry on with the other casks,
+      # rather than aborting the run; `ofail` still exits nonzero at the end.
+      prefetched_errors&.each { |error| ofail error }
+      failed = T.let(prefetched_errors.present?, T::Boolean)
 
       created_download_queue = T.let(false, T::Boolean)
       download_queue ||= if !dry_run && !skip_prefetch
@@ -232,7 +238,8 @@ module Cask
             begin
               installer.check_requirements
             rescue CaskError => e
-              caught_exceptions << e
+              ofail e
+              failed = true
               next false
             end
 
@@ -253,7 +260,7 @@ module Cask
         end
       end
 
-      return false if upgradable_casks.empty? && caught_exceptions.empty?
+      return false if upgradable_casks.empty? && !failed
 
       cask_upgrades = upgradable_casks.map do |(old_cask, new_cask)|
         "#{new_cask.full_name} #{old_cask.version} -> #{new_cask.version}"
@@ -276,18 +283,12 @@ module Cask
         )
         summary_upgrades&.push(cask_upgrades.fetch(index))
       rescue => e
-        new_exception = e.exception("#{new_cask.full_name}: #{e}")
-        new_exception.set_backtrace(e.backtrace)
-        caught_exceptions << new_exception
+        ofail "#{new_cask.full_name}: #{e}"
+        failed = true
         next
       end
 
-      return true if caught_exceptions.empty?
-
-      raise MultipleCaskErrors, caught_exceptions if caught_exceptions.count > 1
-      raise caught_exceptions.fetch(0) if caught_exceptions.one?
-
-      false
+      !failed
     end
 
     sig {
@@ -442,16 +443,16 @@ module Cask
               Quarantine.inherit_user_approval!(download_path: artifact.target)
             rescue CaskQuarantineReleaseError => e
               odebug e
-              opoo "Homebrew couldn't inherit #{new_cask.token}'s quarantine approval so macOS will prompt at " \
+              opoo "Homebrew couldn't inherit #{new_cask.token}'s quarantine approval so macOS may prompt at " \
                    "next launch."
             end
           when :signer_changed
-            opoo "#{new_cask.token}'s signer changed so macOS will prompt at next launch."
+            opoo "#{new_cask.token}'s signer changed so macOS may prompt at next launch."
           when :signer_unverified
-            opoo "Homebrew couldn't verify #{new_cask.token}'s signer so macOS will prompt at next launch."
+            opoo "Homebrew couldn't verify #{new_cask.token}'s signer so macOS may prompt at next launch."
           when :unapproved
             message = "#{new_cask.token} wasn't quarantine approved so not approving now. " \
-                      "macOS will prompt at next launch."
+                      "macOS may prompt at next launch."
             if verbose
               ohai message
             else

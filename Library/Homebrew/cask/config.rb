@@ -6,12 +6,15 @@ require "json"
 require "lazy_object"
 require "locale"
 require "extend/hash/keys"
+require "utils/output"
 
 module Cask
   # Configuration for installing casks.
   #
   # @api internal
   class Config
+    include ::Utils::Output::Mixin
+
     ConfigHash = T.type_alias { T::Hash[Symbol, T.any(LazyObject, String, Pathname, T::Array[String])] }
     DEFAULT_DIRS = T.let(
       {
@@ -74,11 +77,21 @@ module Cask
       config = JSON.parse(json, symbolize_names: true)
 
       new(
-        default:             config.fetch(:default,  {}),
-        env:                 config.fetch(:env,      {}),
-        explicit:            config.fetch(:explicit, {}),
+        default:             reject_legacy_keys(config.fetch(:default,  {})),
+        env:                 reject_legacy_keys(config.fetch(:env,      {})),
+        explicit:            reject_legacy_keys(config.fetch(:explicit, {})) || {},
         ignore_invalid_keys:,
       )
+    end
+
+    # Saved configs can contain hyphenated option names that were never honored when read back,
+    # so drop them instead of warning about them or retroactively making them take effect.
+    sig { params(config: T.nilable(ConfigHash)).returns(T.nilable(ConfigHash)) }
+    def self.reject_legacy_keys(config)
+      return if config.nil?
+
+      valid_keys = defaults
+      config.reject { |key, _| key.to_s.include?("-") && valid_keys.key?(key.to_s.tr("-", "_").to_sym) }
     end
 
     # runtime recursive evaluation forces the LazyObject to be evaluated
@@ -130,9 +143,12 @@ module Cask
       @zsh_completion = T.let(nil, T.nilable(Pathname))
       @fish_completion = T.let(nil, T.nilable(Pathname))
 
-      if ignore_invalid_keys
-        @env&.delete_if { |key, _| self.class.defaults.keys.exclude?(key) }
-        @explicit.delete_if { |key, _| self.class.defaults.keys.exclude?(key) }
+      if ignore_invalid_keys &&
+         (unknown_keys = ((Array(@env&.keys) + @explicit.keys).uniq - self.class.defaults.keys).presence)
+        opoo "Ignoring unknown cask configuration keys: #{unknown_keys.inspect}"
+
+        @env&.delete_if { |key, _| unknown_keys.include?(key) }
+        @explicit.delete_if { |key, _| unknown_keys.include?(key) }
         return
       end
 
@@ -153,7 +169,8 @@ module Cask
           .select { |arg| arg.include?("=") }
           .map { |arg| T.cast(arg.split("=", 2), [String, String]) }
           .to_h do |(flag, value)|
-            key = flag.sub(/^--/, "")
+            # command-line flags are hyphenated (e.g. --input-methoddir) but config keys use underscores
+            key = flag.sub(/^--/, "").tr("-", "_")
             # converts --language flag to :languages config key
             if key == "language"
               key = "languages"

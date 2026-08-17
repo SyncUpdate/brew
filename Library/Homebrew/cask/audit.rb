@@ -344,10 +344,19 @@ module Cask
         add_error "a #{sym} stanza is required" unless cask.public_send(sym)
       end
       add_error "at least one name stanza is required" if cask.name.empty?
-      # TODO: specific DSL knowledge should not be spread around in various files like this
-      rejected_artifacts = [:uninstall, :zap]
-      installable_artifacts = cask.artifacts.reject { |k| rejected_artifacts.include?(k) }
-      add_error "at least one activatable artifact stanza is required" if installable_artifacts.empty?
+
+      installable_artifact = if cask.on_system_blocks_exist?
+        begin
+          OnSystem::VALID_OS_ARCH_TAGS.any? do |tag|
+            cask.refresh_for_tag(tag) { cask.installable_artifact? }
+          end
+        ensure
+          cask.refresh
+        end
+      else
+        cask.installable_artifact?
+      end
+      add_error "at least one installable artifact stanza is required" unless installable_artifact
     end
 
     sig { void }
@@ -409,7 +418,7 @@ module Cask
 
       odebug "Auditing sha256 string is a legal SHA-256 digest"
       return unless cask.sha256.is_a?(Checksum)
-      return if cask.sha256.length == 64 && cask.sha256[/^[0-9a-f]+$/i]
+      return if cask.sha256.to_s.match?(/\A[0-9a-f]{64}\z/i)
 
       add_error "sha256 string must be of 64 hexadecimal characters"
     end

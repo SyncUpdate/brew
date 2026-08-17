@@ -25,6 +25,32 @@ RSpec.describe Cask::Config, :cask do
   end
 
   describe "::from_json" do
+    let(:invalid_keys_json) do
+      <<~EOS
+        {
+          "default": {},
+          "env": {
+            "appdir": "/path/to/apps",
+            "invaliddir": "/path/to/invalid"
+          },
+          "explicit": {}
+        }
+      EOS
+    end
+
+    let(:legacy_keys_json) do
+      <<~EOS
+        {
+          "default": {},
+          "env": {
+            "appdir": "/path/to/apps",
+            "input-methoddir": "/path/to/input/methods"
+          },
+          "explicit": {}
+        }
+      EOS
+    end
+
     it "deserializes a configuration in JSON format" do
       config = described_class.from_json <<~EOS
         {
@@ -36,6 +62,61 @@ RSpec.describe Cask::Config, :cask do
         }
       EOS
       expect(config.appdir).to eq(Pathname("/path/to/apps"))
+    end
+
+    it "ignores invalid keys when requested" do
+      config = described_class.from_json(invalid_keys_json, ignore_invalid_keys: true)
+
+      expect(config.env).to eq(appdir: Pathname("/path/to/apps"))
+    end
+
+    it "warns about ignored invalid keys" do
+      expect { described_class.from_json(invalid_keys_json, ignore_invalid_keys: true) }
+        .to output(/Ignoring unknown cask configuration keys: \[:invaliddir\]/).to_stderr
+    end
+
+    it "does not warn when all keys are valid" do
+      valid_json = { default: {}, env: { appdir: "/path/to/apps" }, explicit: {} }.to_json
+
+      expect { described_class.from_json(valid_json, ignore_invalid_keys: true) }
+        .not_to output.to_stderr
+    end
+
+    it "raises for unknown keys" do
+      expect { described_class.from_json(invalid_keys_json) }
+        .to raise_error(ArgumentError, /Unknown key: :invaliddir/)
+    end
+
+    it "drops legacy hyphenated keys" do
+      config = described_class.from_json(legacy_keys_json, ignore_invalid_keys: true)
+
+      expect(config.env).to eq(appdir: Pathname("/path/to/apps"))
+      expect(config.input_methoddir).to eq(Pathname(TEST_TMPDIR).join("cask-input_methoddir"))
+    end
+
+    it "does not warn about legacy hyphenated keys" do
+      expect { described_class.from_json(legacy_keys_json, ignore_invalid_keys: true) }
+        .not_to output.to_stderr
+    end
+
+    it "accepts legacy hyphenated keys without ignoring invalid keys" do
+      config = described_class.from_json(legacy_keys_json)
+
+      expect(config.input_methoddir).to eq(Pathname(TEST_TMPDIR).join("cask-input_methoddir"))
+    end
+
+    it "warns about unknown hyphenated keys" do
+      unknown_json = { default: {}, env: { "bogus-typodir": "/path/to/bogus" }, explicit: {} }.to_json
+
+      expect { described_class.from_json(unknown_json, ignore_invalid_keys: true) }
+        .to output(/Ignoring unknown cask configuration keys: \[:"bogus-typodir"\]/).to_stderr
+    end
+
+    it "tolerates null configuration sections" do
+      null_sections_json = '{"default": null, "env": null, "explicit": null}'
+
+      expect { described_class.from_json(null_sections_json, ignore_invalid_keys: true) }
+        .not_to raise_error
     end
   end
 
@@ -76,6 +157,33 @@ RSpec.describe Cask::Config, :cask do
       ENV["HOMEBREW_CASK_OPTS"] = "--appdir=/path/to/apps"
 
       expect(config.env).to eq(appdir: Pathname("/path/to/apps"))
+    end
+
+    it "normalizes hyphenated option names to underscored keys" do
+      ENV["HOMEBREW_CASK_OPTS"] = "--input-methoddir=/path/to/input/methods"
+
+      expect(config.env).to eq(input_methoddir: Pathname("/path/to/input/methods"))
+      expect(config.input_methoddir).to eq(Pathname("/path/to/input/methods"))
+    end
+
+    it "accepts underscored option names" do
+      ENV["HOMEBREW_CASK_OPTS"] = "--input_methoddir=/path/to/input/methods"
+
+      expect(config.env).to eq(input_methoddir: Pathname("/path/to/input/methods"))
+    end
+
+    it "normalizes option names but not their values" do
+      ENV["HOMEBREW_CASK_OPTS"] = "--language=zh-TW,en-GB"
+
+      expect(config.env).to eq(languages: ["zh-TW", "en-GB"])
+    end
+
+    it "survives a JSON round-trip" do
+      ENV["HOMEBREW_CASK_OPTS"] = "--input-methoddir=/path/to/input/methods"
+
+      round_tripped = described_class.from_json(config.to_json)
+
+      expect(round_tripped.input_methoddir).to eq(Pathname("/path/to/input/methods"))
     end
   end
 

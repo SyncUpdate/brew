@@ -925,7 +925,8 @@ on_request: installed_on_request?, options:)
       quiet:                      quiet?,
       verbose:                    verbose?,
     )
-    oh1 "Installing #{formula.full_name} dependency: #{Formatter.identifier(dep.name)}"
+    action = dep_formula.outdated? ? "Upgrading" : "Installing"
+    oh1 "#{action} #{formula.full_name} dependency: #{Formatter.identifier(dep.name)}"
     # prelude only needed to populate bottle_tab_runtime_dependencies, fetching has already been done.
     fi.prelude
     fi.install
@@ -1595,6 +1596,9 @@ on_request: installed_on_request?, options:)
         FileUtils.rm(bottle_poured_file)
         FileUtils.mv(bottle_tmp_keg, formula.prefix)
         bottle_tmp_keg.parent.rmdir_if_possible
+      elsif downloadable_object.is_a?(Bottle)
+        # Retries with a fresh download if the cached bottle turns out corrupt.
+        downloadable_object.stage
       else
         downloadable_object.downloader.stage
       end

@@ -979,6 +979,220 @@ RSpec.describe Cask::Cask, :cask do
       )
     end
 
+    context "when recording supported platforms" do
+      let(:platform_tags) do
+        [
+          Utils::Bottles::Tag.new(system: :sonoma, arch: :intel),
+          Utils::Bottles::Tag.new(system: :sonoma, arch: :arm),
+          Utils::Bottles::Tag.new(system: :monterey, arch: :intel),
+          Utils::Bottles::Tag.new(system: :monterey, arch: :arm),
+          Utils::Bottles::Tag.new(system: :catalina, arch: :intel),
+          Utils::Bottles::Tag.new(system: :linux, arch: :intel),
+          Utils::Bottles::Tag.new(system: :linux, arch: :arm),
+        ]
+      end
+      let(:macos_platforms) { [:sonoma, :arm64_sonoma, :monterey, :arm64_monterey, :catalina] }
+
+      before do
+        stub_const("OnSystem::VALID_OS_ARCH_TAGS", platform_tags)
+      end
+
+      it "records platforms allowed by scoped macOS requirements" do
+        c = Cask::CaskLoader.load("with-depends-on-macos-in-on-macos")
+
+        expect(c.to_hash_with_variations["supported_platforms"]).to eq(
+          [:sonoma, :arm64_sonoma, :monterey, :arm64_monterey, :x86_64_linux, :arm64_linux],
+        )
+      end
+
+      it "excludes platforms without complete download data" do
+        c = Cask::CaskLoader.load("multiple-versions")
+
+        expect(c.to_hash_with_variations["supported_platforms"]).to eq(macos_platforms)
+      end
+
+      it "excludes platforms rejected by architecture requirements" do
+        c = described_class.new("architecture-restricted") do
+          version :latest
+          arch arm: "arm64", intel: "x86_64"
+          sha256 :no_check
+          url "https://brew.sh/#{arch}.zip"
+          on_linux do
+            depends_on arch: :x86_64
+          end
+          binary "foo"
+        end
+
+        expect(c.to_hash_with_variations["supported_platforms"]).to eq(
+          [*macos_platforms, :x86_64_linux],
+        )
+      end
+
+      it "does not infer macOS support from artifact types" do
+        c = described_class.new("macos-artifact") do
+          version :latest
+          arch arm: "arm64", intel: "x86_64"
+          sha256 :no_check
+          url "https://brew.sh/#{arch}.zip"
+          app "Foo.app"
+        end
+
+        expect(c.to_hash_with_variations["supported_platforms"]).to eq(platform_tags.map(&:to_sym))
+      end
+
+      it "does not infer macOS support from manual installers" do
+        c = described_class.new("manual-installer") do
+          version :latest
+          arch arm: "arm64", intel: "x86_64"
+          sha256 :no_check
+          url "https://brew.sh/#{arch}.zip"
+          installer manual: "Foo.app"
+        end
+
+        expect(c.to_hash_with_variations["supported_platforms"]).to eq(platform_tags.map(&:to_sym))
+      end
+
+      it "does not infer Linux support from artifact types" do
+        c = described_class.new("linux-artifact") do
+          version :latest
+          arch arm: "arm64", intel: "x86_64"
+          sha256 :no_check
+          url "https://brew.sh/#{arch}.zip"
+          app_image "Foo.AppImage"
+        end
+
+        expect(c.to_hash_with_variations["supported_platforms"]).to eq(platform_tags.map(&:to_sym))
+      end
+
+      it "excludes Linux for casks with a bare macOS dependency" do
+        c = described_class.new("macos-only") do
+          version :latest
+          sha256 :no_check
+          url "https://brew.sh/foo.zip"
+          depends_on :macos
+          app "Foo.app"
+        end
+
+        expect(c.to_hash_with_variations["supported_platforms"]).to eq(macos_platforms)
+      end
+
+      it "excludes macOS for casks with a bare Linux dependency" do
+        c = described_class.new("linux-only") do
+          version :latest
+          sha256 :no_check
+          url "https://brew.sh/foo.zip"
+          depends_on :linux
+          app_image "Foo.AppImage"
+        end
+
+        expect(c.to_hash_with_variations["supported_platforms"]).to eq([:x86_64_linux, :arm64_linux])
+      end
+
+      it "includes stage-only casks" do
+        c = described_class.new("stage-only") do
+          version :latest
+          arch arm: "arm64", intel: "x86_64"
+          sha256 :no_check
+          url "https://brew.sh/#{arch}.zip"
+          stage_only true
+        end
+
+        expect(c.to_hash_with_variations["supported_platforms"]).to eq(platform_tags.map(&:to_sym))
+      end
+
+      it "records no supported platforms for a cask without an installable artifact" do
+        c = described_class.new("zap-only") do
+          version :latest
+          arch arm: "arm64", intel: "x86_64"
+          sha256 :no_check
+          url "https://brew.sh/#{arch}.zip"
+          zap trash: "~/Library/Caches/brew-test"
+        end
+
+        expect(c.to_hash_with_variations["supported_platforms"]).to eq([])
+      end
+
+      it "records every platform when a cask has no platform variations" do
+        c = described_class.new("no-platform-variations") do
+          version :latest
+          sha256 :no_check
+          url "https://brew.sh/foo.zip"
+          binary "foo"
+        end
+
+        expect(c.to_hash_with_variations["supported_platforms"]).to eq(platform_tags.map(&:to_sym))
+      end
+
+      it "records top-level platform requirements without variations" do
+        c = described_class.new("top-level-platform-requirements") do
+          version :latest
+          sha256 :no_check
+          url "https://brew.sh/foo.zip"
+          depends_on macos: :monterey
+          depends_on arch: :x86_64
+          binary "foo"
+        end
+
+        expect(c.to_hash_with_variations["supported_platforms"]).to eq([:sonoma, :monterey])
+      end
+
+      it "serializes architecture-varying and universal casks with the same macOS requirement" do
+        tags = OnSystem::ALL_OS_ARCH_COMBINATIONS.filter_map do |os, arch|
+          tag = Utils::Bottles::Tag.new(system: os, arch:)
+          tag if tag.valid_combination?
+        end
+        stub_const("OnSystem::VALID_OS_ARCH_TAGS", tags)
+
+        architecture_varying = described_class.new("architecture-varying") do
+          arch arm: "ARM64", intel: "64"
+          version "1.2.3"
+          sha256 arm:   "a" * 64,
+                 intel: "b" * 64
+          url "https://brew.sh/#{arch}.zip"
+          depends_on macos: :big_sur
+          app "Foo.app"
+        end
+        universal = described_class.new("universal") do
+          version :latest
+          sha256 :no_check
+          url "https://brew.sh/foo.zip"
+          depends_on macos: :big_sur
+          app "Foo.app"
+        end
+
+        architecture_varying.to_hash_with_variations
+        supported_platforms = Timeout.timeout(5) do
+          universal.to_hash_with_variations["supported_platforms"]
+        end
+
+        expected_platforms = tags.filter_map do |tag|
+          tag.to_sym if tag.macos? && tag.system != :catalina
+        end
+        expect(supported_platforms).to eq(expected_platforms)
+      end
+
+      it "isolates macOS requirement comparisons between casks" do
+        supported_platforms = [:monterey, :sonoma].map do |minimum_macos|
+          c = described_class.new("requires-#{minimum_macos}") do
+            version :latest
+            sha256 :no_check
+            url "https://brew.sh/foo.zip"
+            depends_on macos: minimum_macos
+            binary "foo"
+          end
+
+          c.to_hash_with_variations["supported_platforms"]
+        end
+
+        expect(supported_platforms).to eq(
+          [
+            [:sonoma, :arm64_sonoma, :monterey, :arm64_monterey],
+            [:sonoma, :arm64_sonoma],
+          ],
+        )
+      end
+    end
+
     # NOTE: The calls to `Cask.generating_hash!` and `Cask.generated_hash!`
     #       are not idempotent so they can only be used in one test.
     it "returns the correct hash placeholders" do

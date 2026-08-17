@@ -342,6 +342,7 @@ __fish_brew_complete_arg 'advisory-match' -l json -d 'Output candidate records a
 __fish_brew_complete_arg 'advisory-match' -l no-history -d 'Skip the `FormulaVersions` walk for the `fixed` boundary; use the current `pkg_version` instead'
 __fish_brew_complete_arg 'advisory-match' -l output -d 'Write each record to directory as `BREW-formula-id.json`, preserving existing `published`/`ranges` fields'
 __fish_brew_complete_arg 'advisory-match' -l quiet -d 'Make some output more quiet'
+__fish_brew_complete_arg 'advisory-match' -l repology -d 'Load the formula to distro-package index from file instead of the published `data/repology.json`'
 __fish_brew_complete_arg 'advisory-match' -l verbose -d 'Make some output more verbose'
 __fish_brew_complete_arg 'advisory-match' -a '(__fish_brew_suggest_formulae_all)'
 
@@ -1122,6 +1123,13 @@ __fish_brew_complete_arg 'formulae' -l debug -d 'Display any debugging informati
 __fish_brew_complete_arg 'formulae' -l help -d 'Show this message'
 __fish_brew_complete_arg 'formulae' -l quiet -d 'Make some output more quiet'
 __fish_brew_complete_arg 'formulae' -l verbose -d 'Make some output more verbose'
+
+
+complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'generate-advisories-api' -d 'Generate advisory API data for https://formulae.brew.sh from a checkout of https://github.com/Homebrew/advisory-database'
+__fish_brew_complete_arg 'generate-advisories-api' -l debug -d 'Display any debugging information'
+__fish_brew_complete_arg 'generate-advisories-api' -l help -d 'Show this message'
+__fish_brew_complete_arg 'generate-advisories-api' -l quiet -d 'Make some output more quiet'
+__fish_brew_complete_arg 'generate-advisories-api' -l verbose -d 'Make some output more verbose'
 
 
 complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'generate-analytics-api' -d 'Generates analytics API data files for https://formulae.brew.sh'

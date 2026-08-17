@@ -170,6 +170,42 @@ RSpec.describe Cask::Audit, :cask do
           it { is_expected.to error_with(/#{stanza} stanza is required/) }
         end
       end
+
+      context "when a cask has only uninstall artifacts" do
+        let(:cask) do
+          Cask::Cask.new("uninstall-only") do
+            version :latest
+            sha256 :no_check
+            url "https://brew.sh/foo.pkg"
+            name "Uninstall Only"
+            homepage "https://brew.sh/"
+            uninstall pkgutil: "org.example.foo"
+            zap trash: "~/Library/Caches/org.example.foo"
+          end
+        end
+
+        it { is_expected.to error_with("at least one installable artifact stanza is required") }
+      end
+
+      context "when a cask has an installable artifact only on Linux" do
+        let(:cask) do
+          Homebrew::SimulateSystem.with(os: :sequoia, arch: :arm) do
+            Cask::Cask.new("linux-only-artifact") do
+              version :latest
+              sha256 :no_check
+              url "https://brew.sh/foo"
+              name "Linux Only Artifact"
+              homepage "https://brew.sh/"
+
+              on_linux do
+                binary "foo"
+              end
+            end
+          end
+        end
+
+        it { is_expected.not_to error_with("at least one installable artifact stanza is required") }
+      end
     end
 
     describe "checking homepage availability" do
@@ -974,6 +1010,20 @@ RSpec.describe Cask::Audit, :cask do
       context "when sha256 is not a legal SHA-256 digest" do
         let(:only) { ["sha256_actually_256"] }
         let(:cask_token) { "invalid-sha256" }
+
+        it { is_expected.to error_with("sha256 string must be of 64 hexadecimal characters") }
+      end
+
+      context "when sha256 is 64 characters but contains a newline" do
+        let(:only) { ["sha256_actually_256"] }
+        let(:cask_token) { "invalid-sha256-newline" }
+
+        it { is_expected.to error_with("sha256 string must be of 64 hexadecimal characters") }
+      end
+
+      context "when sha256 is 64 characters but only one of them is hexadecimal" do
+        let(:only) { ["sha256_actually_256"] }
+        let(:cask_token) { "invalid-sha256-hex-fragment" }
 
         it { is_expected.to error_with("sha256 string must be of 64 hexadecimal characters") }
       end
