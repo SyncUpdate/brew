@@ -168,6 +168,7 @@ __brew_internal_commands() {
     'as-console-user:Run a Homebrew command as the active macOS console user'
     'audit:Check formula or cask for Homebrew coding style violations'
     'autoremove:Uninstall formulae that were only installed as a dependency of another formula and are now no longer needed'
+    'benchmark:Benchmark this `brew` with `hyperfine`, installing `hyperfine` first if it is missing'
     'bottle:Generate a bottle (binary package) from a formula that was installed with `--build-bottle`'
     'bump:Displays out-of-date packages and the latest version available'
     'bump-cask-pr:Create a pull request to update cask with a new version'
@@ -441,7 +442,8 @@ _brew_advisory_match() {
     '--help[Show this message]' \
     '(--all --json --output)--index[Emit the formula-identity index as JSON and exit]' \
     '(--all --index)--json[Output candidate records as a JSON array]' \
-    '--no-history[Skip the `FormulaVersions` walk for the `fixed` boundary; use the current `pkg_version` instead]' \
+    '(--no-history)--new-history[Walk `FormulaVersions` only for records whose reviewed ranges are not already in directory]' \
+    '(--new-history)--no-history[Skip the `FormulaVersions` walk for the `fixed` boundary; use the current `pkg_version` instead]' \
     '(--index)--output[Write each record to directory as `BREW-formula-id.json`, preserving existing `published`/`ranges` fields]' \
     '--quiet[Make some output more quiet]' \
     '--repology[Load the formula to distro-package index from file instead of the published `data/repology.json`]' \
@@ -568,6 +570,19 @@ _brew_autoremove() {
     '--help[Show this message]' \
     '--quiet[Make some output more quiet]' \
     '--verbose[Make some output more verbose]'
+}
+
+# brew benchmark
+_brew_benchmark() {
+  _arguments \
+    '--debug[Display any debugging information]' \
+    '(--runs)--exec[Run `hyperfine` with the arguments given after `--` instead of Homebrew'\''s own workloads, e.g. `brew benchmark --exec -- '\''brew --version'\''`]' \
+    '--help[Show this message]' \
+    '--quiet[Make some output more quiet]' \
+    '(--exec)--runs[Number of repetitions of each workload. Defaults to 3]' \
+    '--verbose[Make some output more verbose]' \
+    - formula \
+    '*:formula:__brew_formulae'
 }
 
 # brew bottle
@@ -2931,11 +2946,13 @@ _brew_vulns() {
     '--brewfile[Check formulae listed in a Brewfile. Defaults to `./Brewfile`; use `--brewfile=`path to specify another]' \
     '--debug[Display any debugging information]' \
     '--deps[Also check the dependencies of named formulae]' \
-    '(--no-fix-available)--fix-available[Only report vulnerabilities that have a fix available. Note that this may exclude vulnerabilities with fixes available if we cannot determine that the fix is included in the version under consideration]' \
+    '(--no-fix-available --fix-type)--fix-available[Only report vulnerabilities that have a released version fix available. Shortcut for `--fix-type=released`]' \
+    '(--fix-available --no-fix-available)--fix-type[Filter findings by fix type: `released` (official version release), `patch` (unreleased commit SHA), `any` (either), `none` (neither), `unreleased` (no released version fix)]' \
     '--help[Show this message]' \
     '--json[Output JSON]' \
+    '--list-skipped[List packages skipped due to missing or unsupported source URL]' \
     '--max-summary[Truncate summaries to n characters (default 60, 0 for no limit)]' \
-    '(--fix-available)--no-fix-available[Only report vulnerabilities that do not have a fix available. Note that this may include vulnerabilities with fixes available if we cannot determine that the fix is included in the version under consideration]' \
+    '(--fix-available --fix-type)--no-fix-available[Only report vulnerabilities that do not have a released version fix available (includes unreleased commit SHA patches). Shortcut for `--fix-type=unreleased`]' \
     '--no-ignore-patches[Report vulnerabilities even when a formula patch resolves them]' \
     '--quiet[Make some output more quiet]' \
     '--severity[Only report findings at or above: `low`, `medium`, `high`, `critical`]' \

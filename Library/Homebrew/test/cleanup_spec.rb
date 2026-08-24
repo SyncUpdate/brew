@@ -27,6 +27,84 @@ RSpec.describe Homebrew::Cleanup do
     FileUtils.rm_rf HOMEBREW_LIBRARY/"Homebrew"
   end
 
+  describe "::install_formula_clean!" do
+    it "does not report a formula when nothing was cleaned" do
+      formula = Testball.new
+
+      allow(described_class).to receive(:install_cleanup_formulae).with([formula]).and_return([formula])
+      expect_any_instance_of(described_class).to receive(:cleanup_formula).with(formula, quiet: true)
+
+      with_env(HOMEBREW_NO_ENV_HINTS: "1") do
+        expect { described_class.install_formula_clean!(formula) }.not_to output.to_stdout
+      end
+    end
+
+    it "reports a formula when it was cleaned" do
+      formula = Testball.new
+      stale_path = mktmpdir/"testball--0.0"
+      stale_path.write "stale"
+
+      allow(described_class).to receive(:install_cleanup_formulae).with([formula]).and_return([formula])
+      expect_any_instance_of(described_class).to receive(:cleanup_formula)
+        .with(formula, quiet: true) do |cleanup, package, **|
+        expect(package).to be(formula)
+        cleanup.cleanup_path(stale_path) { stale_path.unlink }
+      end
+
+      with_env(HOMEBREW_NO_ENV_HINTS: "1") do
+        expect { described_class.install_formula_clean!(formula) }.to output(<<~EOS).to_stdout
+          ==> Running `brew cleanup testball`...
+          Removing: #{stale_path}... (#{stale_path.abv})
+        EOS
+      end
+    end
+  end
+
+  describe "::install_clean!" do
+    it "does not report formulae and casks when nothing was cleaned", :cask do
+      formula = Testball.new
+      cask = Cask::Cask.new("local-caffeine")
+
+      allow(described_class).to receive(:install_cleanup_formulae).with([formula]).and_return([formula])
+      expect(Utils).to receive(:parallel_map).with([formula, cask]).and_call_original
+      expect_any_instance_of(described_class).to receive(:cleanup_formula)
+        .with(formula, quiet: true, cache_db: false, cleanup_unreferenced: false)
+      expect_any_instance_of(described_class).to receive(:cleanup_cask)
+        .with(cask, cleanup_unreferenced: false)
+      expect_any_instance_of(described_class).to receive(:cleanup_cache_db).with(no_args)
+      expect_any_instance_of(described_class).to receive(:cleanup_unreferenced_downloads).with(no_args)
+
+      with_env(HOMEBREW_NO_ENV_HINTS: "1") do
+        expect { described_class.install_clean!(formulae: [formula], casks: [cask]) }.not_to output.to_stdout
+      end
+    end
+
+    it "only reports packages that were cleaned", :cask do
+      formula = Testball.new
+      cask = Cask::Cask.new("local-caffeine")
+      stale_path = mktmpdir/"testball--0.0"
+      stale_path.write "stale"
+
+      allow(described_class).to receive(:install_cleanup_formulae).with([formula]).and_return([formula])
+      expect_any_instance_of(described_class).to receive(:cleanup_formula) do |cleanup, package, **|
+        expect(package).to be(formula)
+        cleanup.cleanup_path(stale_path) { stale_path.unlink }
+      end
+      expect_any_instance_of(described_class).to receive(:cleanup_cask)
+        .with(cask, cleanup_unreferenced: false)
+      expect_any_instance_of(described_class).to receive(:cleanup_cache_db).with(no_args)
+      expect_any_instance_of(described_class).to receive(:cleanup_unreferenced_downloads).with(no_args)
+
+      with_env(HOMEBREW_NO_ENV_HINTS: "1") do
+        expect { described_class.install_clean!(formulae: [formula], casks: [cask]) }.to output(<<~EOS).to_stdout
+          ==> Cleanup
+          ==> testball
+          Removing: #{stale_path}... (#{stale_path.abv})
+        EOS
+      end
+    end
+  end
+
   describe "::prune?" do
     subject(:path) { HOMEBREW_CACHE/"foo" }
 
@@ -46,6 +124,18 @@ RSpec.describe Homebrew::Cleanup do
   end
 
   describe "::cleanup" do
+    it "cleans installed casks during periodic cleanup", :cask do
+      cask = Cask::Cask.new("local-caffeine")
+      ENV["HOMEBREW_NO_AUTOREMOVE"] = "1"
+      allow(Formula).to receive(:installed).and_return([])
+      allow(Cask::Caskroom).to receive(:casks).and_return([cask])
+
+      expect(cleanup).to receive(:cleanup_cask)
+        .with(cask, ds_store: false, cleanup_legacy_downloads: false, cleanup_unreferenced: false)
+
+      cleanup.clean!(periodic: true)
+    end
+
     it "removes .DS_Store and lock files" do
       cleanup.clean!
 
@@ -455,6 +545,21 @@ RSpec.describe Homebrew::Cleanup do
     end
   end
 
+  describe "::cleanup_bootsnap" do
+    it "removes stale keys and keeps the current key" do
+      cache = mktmpdir
+      current = cache/"bootsnap/current"
+      stale = cache/"bootsnap/stale"
+      current.mkpath
+      stale.mkpath
+      allow(Homebrew::Bootsnap).to receive(:key).and_return("current")
+
+      described_class.new(cache:).cleanup_bootsnap
+
+      expect([current.exist?, stale.exist?]).to eq([true, false])
+    end
+  end
+
   describe "::cleanup_cache" do
     it "removes legacy cask downloads during full cache cleanup", :cask do
       cask = Cask::CaskLoader.load("local-transmission")
@@ -685,6 +790,16 @@ RSpec.describe Homebrew::Cleanup do
                              { path: nested_source_file, type: :api_source }])
 
       expect([source_file.exist?, nested_source_file.exist?]).to eq([true, true])
+    end
+
+    it "removes cached API cask source paths" do
+      source_file = HOMEBREW_CACHE/"api-source/Homebrew/homebrew-cask/abc123/Cask/testball.rb"
+      source_file.dirname.mkpath
+      FileUtils.touch source_file
+
+      cleanup.cleanup_cache([{ path: source_file, type: :api_source }])
+
+      expect(source_file).not_to exist
     end
 
     context "when cleaning old files in HOMEBREW_CACHE" do

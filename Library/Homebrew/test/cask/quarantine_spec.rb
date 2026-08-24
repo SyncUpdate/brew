@@ -74,6 +74,7 @@ RSpec.describe Cask::Quarantine do
       quarantine_properties_key = instance_double(Fiddle::Pointer)
 
       allow(klass).to receive(:detect).with(download_path).and_return(false)
+      allow(MacOS::FFI::CoreFoundation).to receive(:release)
       allow(MacOS::FFI::CoreFoundation).to receive(:string_create).with(download_path.to_s).and_return(path)
       allow(MacOS::FFI::CoreFoundation).to receive(:url_create_with_file_system_path).with(path).and_return(url)
       allow(MacOS::FFI::CoreFoundation).to receive(:string_create).with("Homebrew Cask").and_return(agent_name)
@@ -88,12 +89,12 @@ RSpec.describe Cask::Quarantine do
         quarantine_data_url_key:      instance_double(Fiddle::Pointer),
         quarantine_origin_url_key:    instance_double(Fiddle::Pointer),
       )
-      expect(MacOS::FFI::CoreFoundation).to receive(:dictionary_create).with(
+      expect(MacOS::FFI::CoreFoundation).to receive(:dictionary_create).with({
         MacOS::FFI::LaunchServices.quarantine_agent_name_key => agent_name,
         MacOS::FFI::LaunchServices.quarantine_type_key       => MacOS::FFI::LaunchServices.quarantine_type_web_download,
         MacOS::FFI::LaunchServices.quarantine_data_url_key   => data_url,
         MacOS::FFI::LaunchServices.quarantine_origin_url_key => origin_url,
-      ).and_return(dictionary)
+      }).and_return(dictionary)
       allow(MacOS::FFI::CoreFoundation).to receive(:url_quarantine_properties_key)
         .and_return(quarantine_properties_key)
       expect(MacOS::FFI::CoreFoundation).to receive(:url_set_resource_property_for_key)
@@ -203,17 +204,73 @@ RSpec.describe Cask::Quarantine do
         xattr:,
       )
       expect(klass).to receive(:system_command).with(
-        xattr,
+        "/usr/bin/xargs",
         args:         [
+          "-0",
+          "--",
+          xattr,
           "-w",
           Cask::Quarantine::QUARANTINE_ATTRIBUTE,
           "03c1;6a51855d;;3C86362A-29CA-4D55-90E7-A6621B9CC78D",
-          file,
         ],
+        input:        file.to_s,
         print_stderr: false,
       ).and_return(instance_double(SystemCommand::Result, success?: true))
 
       klass.inherit_user_approval!(download_path: file)
+    end
+
+    it "mirrors approval onto shared paths and skips paths this version does not have" do
+      mktmpdir do |tmpdir|
+        app = tmpdir/"Test.app"
+        (app/"Contents/MacOS").mkpath
+        FileUtils.touch app/"Contents/MacOS/Test"
+
+        allow(klass).to receive_messages(
+          detect: true,
+          status: "0381;6a51855d;;3C86362A-29CA-4D55-90E7-A6621B9CC78D",
+          xattr:,
+        )
+        expect(klass).to receive(:system_command).with(
+          "/usr/bin/xargs",
+          args:         [
+            "-0",
+            "--",
+            xattr,
+            "-w",
+            Cask::Quarantine::QUARANTINE_ATTRIBUTE,
+            "03c1;6a51855d;;3C86362A-29CA-4D55-90E7-A6621B9CC78D",
+          ],
+          input:        [app, app/"Contents/MacOS/Test"].join("\0"),
+          print_stderr: false,
+        ).and_return(instance_double(SystemCommand::Result, success?: true))
+
+        klass.inherit_user_approval!(download_path:  app,
+                                     approved_paths: ["Contents/MacOS/Test", "Contents/MacOS/Removed"])
+      end
+    end
+  end
+
+  describe ".user_approved_paths" do
+    let(:xattr) { Pathname("/usr/bin/xattr") }
+
+    it "returns only the approved paths, relative to the directory" do
+      mktmpdir do |tmpdir|
+        app = tmpdir/"Test.app"
+        (app/"Contents").mkpath
+        FileUtils.touch app/"Contents/approved"
+        FileUtils.touch app/"Contents/unapproved"
+
+        allow(klass).to receive_messages(xattr: xattr, system_command: instance_double(
+          SystemCommand::Result,
+          stdout: "#{app}: 03c1;6a51855d;;uuid\n" \
+                  "#{app}/Contents: 0381;6a51855d;;uuid\n" \
+                  "#{app}/Contents/approved: 03c1;6a51855d;;uuid\n" \
+                  "#{app}/Contents/unapproved: 0381;6a51855d;;uuid\n",
+        ))
+
+        expect(klass.user_approved_paths(app)).to eq(["Contents/approved"])
+      end
     end
   end
 

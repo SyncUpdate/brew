@@ -13,6 +13,7 @@ require "install_renamed"
 require "sandbox"
 require "development_tools"
 require "cache_store"
+require "download_queue"
 require "linkage_checker"
 require "messages"
 require "cask/caskroom"
@@ -961,8 +962,6 @@ on_request: installed_on_request?, options:)
     Homebrew.messages.record_completions_and_elisp(caveats.completions_and_elisp)
     return if caveats.caveats.empty?
 
-    @show_summary_heading = true
-    ohai "Caveats", caveats.to_s
     Homebrew.messages.record_caveats(formula.name, caveats)
   end
 

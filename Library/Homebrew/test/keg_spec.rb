@@ -12,12 +12,12 @@ RSpec.describe Keg do
 
   include FileUtils
 
-  def setup_test_keg(name, version)
+  def setup_test_keg(name, version, suffix: nil)
     path = HOMEBREW_CELLAR/name/version
     (path/"bin").mkpath
 
     %w[hiworld helloworld goodbye_cruel_world].each do |file|
-      touch path/"bin"/file
+      touch path/"bin"/"#{file}#{suffix}"
     end
 
     keg = Keg.new(path)
@@ -199,6 +199,36 @@ RSpec.describe Keg do
       expect(link.resolved_path).to be_a_symlink
       expect(link.lstat).to be_a_symlink
     end
+
+    context "when keg symlinks to another keg" do
+      let(:other_keg) { setup_test_keg("bar", "1.0", suffix: "-bar") }
+      let(:filename) { "libtest.dylib" }
+      let(:file) { other_keg/"lib"/filename }
+
+      before do
+        file.dirname.mkpath
+        touch file
+        other_keg.link
+      end
+
+      it "ignores symlinks that have same relative path" do
+        (keg/"lib"/filename).make_relative_symlink other_keg.opt_record/"lib"/filename
+        keg.link
+        expect((HOMEBREW_PREFIX/"lib"/filename).resolved_path).to eq file
+      end
+
+      it "links symlinks that have different relative path" do
+        filename2 = "libtest2.dylib"
+        (keg/"lib"/filename2).make_relative_symlink other_keg.opt_record/"lib"/filename
+        keg.link
+        expect((HOMEBREW_PREFIX/"lib"/filename2).resolved_path).to eq keg/"lib"/filename2
+      end
+
+      it "fails linking symlinks that use Cellar path" do
+        (keg/"lib"/filename).make_relative_symlink other_keg/"lib"/filename
+        expect { keg.link }.to raise_error(Keg::ConflictError)
+      end
+    end
   end
 
   describe "#unlink" do
@@ -309,6 +339,25 @@ RSpec.describe Keg do
   end
 
   describe "#optlink" do
+    it "removes a stale versioned alias link" do
+      setup_test_keg("foo", "0.9")
+      stale_alias = HOMEBREW_PREFIX/"opt/foo@0"
+      stale_alias.make_relative_symlink(HOMEBREW_CELLAR/"foo/0.9")
+
+      keg.optlink
+
+      expect(stale_alias).not_to exist
+    end
+
+    it "preserves the opt link for a versioned Formula" do
+      versioned_keg = setup_test_keg("foo@1", "1.0")
+      versioned_keg.optlink
+
+      keg.optlink
+
+      expect(versioned_keg).to be_optlinked
+    end
+
     it "creates an opt link" do
       oldname_opt_record = HOMEBREW_PREFIX/"opt/oldfoo"
       oldname_opt_record.make_relative_symlink(HOMEBREW_CELLAR/"foo/1.0")

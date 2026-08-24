@@ -1,4 +1,4 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 RSpec.describe Cask::Artifact::App, :cask do
@@ -390,6 +390,18 @@ RSpec.describe Cask::Artifact::App, :cask do
       expect(target_path.stat.ino).to eq(inode)
 
       expect(contents_path).to exist
+    end
+
+    describe "when quarantine support is unavailable" do
+      it "reinstalls into the reused directory without copying xattrs" do
+        allow(Cask::Quarantine).to receive(:available?).and_return(false)
+        expect(Cask::Quarantine).not_to receive(:copy_xattrs)
+
+        app.uninstall_phase(command:, force:, successor: cask)
+        app.install_phase(command:, adopt:, force:, predecessor: cask)
+
+        expect(target_path.join("Contents/Info.plist")).to exist
+      end
     end
 
     describe "when the system blocks modifying apps" do

@@ -215,6 +215,24 @@ RSpec.describe Cask::Upgrade, :cask do
         )
       end
 
+      it "records upgraded casks without a caveat mode option" do
+        upgraded_casks = []
+
+        expect(described_class).to receive(:upgrade_cask) do |_, _, **options|
+          expect(options).not_to have_key(:defer_caveats)
+        end
+
+        described_class.upgrade_casks!(
+          local_caffeine,
+          upgraded_casks:,
+          skip_prefetch:        true,
+          show_upgrade_summary: false,
+          args:,
+        )
+
+        expect(upgraded_casks).to eq([local_caffeine])
+      end
+
       it "excludes pinned Casks" do
         local_caffeine.pin
         summary_pinned = []
@@ -493,16 +511,39 @@ RSpec.describe Cask::Upgrade, :cask do
     end
 
     it 'prefetches "auto_updates true" casks with quarantine until signed identity is checked' do
-      installer = instance_double(Cask::Installer, check_requirements: nil, enqueue_downloads: nil,
-                                                   source_download_requires_pre_fetch?: false)
+      installer = instance_double(Cask::Installer, cask: auto_updates, check_requirements: nil,
+                                                   enqueue_downloads: nil, enqueue_dependency_downloads: nil)
 
       expect(Cask::Installer).to receive(:new) do |cask, **|
         expect(cask).to eq(auto_updates)
         installer
       end
-      expect(described_class).to receive(:upgrade_cask)
+      expect(described_class).to receive(:upgrade_cask) do |_, _, new_cask_installer:, **|
+        expect(new_cask_installer).to equal(installer)
+      end
 
       described_class.upgrade_casks!(auto_updates, show_upgrade_summary: false, args:)
+    end
+
+    it "retains installers in a caller-supplied prefetch collection" do
+      installer = Cask::Installer.allocate
+      prefetched_cask_installers = []
+      download_queue = instance_double(Homebrew::DownloadQueue, fetch: nil, failed_downloads: [])
+
+      allow(installer).to receive_messages(cask: auto_updates, check_requirements: nil)
+      allow(Cask::Installer).to receive(:new).and_return(installer)
+      allow(Homebrew::Install).to receive(:enqueue_cask_installers).and_return([installer])
+      allow(described_class).to receive(:upgrade_cask)
+
+      described_class.upgrade_casks!(
+        auto_updates,
+        download_queue:,
+        prefetched_cask_installers:,
+        show_upgrade_summary:       false,
+        args:,
+      )
+
+      expect(prefetched_cask_installers).to eq([installer])
     end
 
     it "releases quarantine when Gatekeeper was already approved and identity matches" do
@@ -514,6 +555,7 @@ RSpec.describe Cask::Upgrade, :cask do
                auto_updates,
                { auto_updates_path.to_s => auto_updates_identity },
                { auto_updates_path.to_s => true },
+               { auto_updates_path.to_s => false },
              )).to eq(:release)
     end
 
@@ -526,6 +568,7 @@ RSpec.describe Cask::Upgrade, :cask do
                auto_updates,
                { auto_updates_path.to_s => auto_updates_identity },
                { auto_updates_path.to_s => true },
+               { auto_updates_path.to_s => false },
              )).to eq(:signer_changed)
     end
 
@@ -535,6 +578,7 @@ RSpec.describe Cask::Upgrade, :cask do
                auto_updates,
                { auto_updates_path.to_s => nil },
                { auto_updates_path.to_s => true },
+               { auto_updates_path.to_s => false },
              )).to eq(:signer_unverified)
     end
 
@@ -547,6 +591,7 @@ RSpec.describe Cask::Upgrade, :cask do
                auto_updates,
                { auto_updates_path.to_s => auto_updates_identity },
                { auto_updates_path.to_s => true },
+               { auto_updates_path.to_s => false },
              )).to eq(:signer_unverified)
     end
 
@@ -555,6 +600,7 @@ RSpec.describe Cask::Upgrade, :cask do
                outdated_auto_updates,
                auto_updates,
                { auto_updates_path.to_s => auto_updates_identity },
+               { auto_updates_path.to_s => false },
                { auto_updates_path.to_s => false },
              )).to eq(:unapproved)
     end
@@ -569,7 +615,34 @@ RSpec.describe Cask::Upgrade, :cask do
                local_caffeine,
                { local_caffeine_path.to_s => local_caffeine_identity },
                { local_caffeine_path.to_s => true },
+               { local_caffeine_path.to_s => false },
              )).to eq(:release)
+    end
+
+    it "releases quarantine when the old app carried no quarantine attribute at all" do
+      allow(Cask::Quarantine).to receive(:signing_identity_match)
+        .with(auto_updates_path, auto_updates_identity).and_return(true)
+
+      expect(described_class.quarantine_release_decision(
+               outdated_auto_updates,
+               auto_updates,
+               { auto_updates_path.to_s => auto_updates_identity },
+               { auto_updates_path.to_s => false },
+               { auto_updates_path.to_s => true },
+             )).to eq(:release)
+    end
+
+    it "reports a changed signer for an unquarantined old app whose identity no longer matches" do
+      allow(Cask::Quarantine).to receive(:signing_identity_match)
+        .with(auto_updates_path, auto_updates_identity).and_return(false)
+
+      expect(described_class.quarantine_release_decision(
+               outdated_auto_updates,
+               auto_updates,
+               { auto_updates_path.to_s => auto_updates_identity },
+               { auto_updates_path.to_s => false },
+               { auto_updates_path.to_s => true },
+             )).to eq(:signer_changed)
     end
 
     it "reports missing approval for casks without auto_updates when Gatekeeper was not approved" do
@@ -577,6 +650,7 @@ RSpec.describe Cask::Upgrade, :cask do
                outdated_local_caffeine,
                local_caffeine,
                { local_caffeine_path.to_s => local_caffeine_identity },
+               { local_caffeine_path.to_s => false },
                { local_caffeine_path.to_s => false },
              )).to eq(:unapproved)
     end
@@ -596,7 +670,8 @@ RSpec.describe Cask::Upgrade, :cask do
         signing_identity_match: true,
       )
 
-      expect(Cask::Quarantine).to receive(:inherit_user_approval!).with(download_path: local_caffeine_path)
+      expect(Cask::Quarantine).to receive(:inherit_user_approval!)
+        .with(download_path: local_caffeine_path, approved_paths: [])
 
       described_class.upgrade_casks!(local_caffeine, args:)
     end
@@ -689,6 +764,20 @@ RSpec.describe Cask::Upgrade, :cask do
       expect do
         described_class.upgrade_casks!(newer_cask, args:)
       end.to change(newer_cask, :installed_version).from("1.2.3").to("1.2.4")
+    end
+  end
+
+  context "when quarantine support is unavailable" do
+    before do
+      Cask::Installer.new(Cask::CaskLoader.load(cask_path("outdated/local-caffeine"))).install
+    end
+
+    it "upgrades without reading quarantine metadata" do
+      allow(Cask::Quarantine).to receive(:available?).and_return(false)
+      expect(Cask::Quarantine).not_to receive(:detect)
+
+      expect { described_class.upgrade_casks!(local_caffeine, args:) }
+        .to change(local_caffeine, :installed_version).from("1.2.2").to("1.2.3")
     end
   end
 
@@ -801,7 +890,7 @@ RSpec.describe Cask::Upgrade, :cask do
 
       expect do
         described_class.upgrade_casks!(bad_checksum, args:)
-      end.to output(/bad-checksum: SHA-256 mismatch/).to_stderr.and(not_to_output(output_reverted).to_stderr)
+      end.to output(/bad-checksum: Download failed/).to_stderr.and(not_to_output(output_reverted).to_stderr)
 
       expect(bad_checksum).to be_installed
       expect(bad_checksum_path).to be_a_directory
@@ -899,12 +988,14 @@ RSpec.describe Cask::Upgrade, :cask do
     it "continues upgrading compatible casks" do
       summary_upgrades = []
       upgraded_tokens = []
-      incompatible_installer = instance_double(Cask::Installer, source_download_requires_pre_fetch?: false)
-      compatible_installer = instance_double(Cask::Installer, source_download_requires_pre_fetch?: false)
+      incompatible_installer = instance_double(Cask::Installer)
+      compatible_installer = instance_double(Cask::Installer, cask:                         local_transmission,
+                                                              enqueue_dependency_downloads: nil)
 
       allow(incompatible_installer).to receive(:check_requirements)
         .and_raise(Cask::CaskError, "local-caffeine: This cask does not run on macOS versions older than Tahoe.")
-      allow(compatible_installer).to receive_messages(check_requirements: nil, enqueue_downloads: nil)
+      allow(compatible_installer).to receive_messages(check_requirements: nil, enqueue_downloads: nil,
+                                                      enqueue_dependency_downloads: nil)
       allow(Cask::Installer).to receive(:new) do |cask, **|
         (cask.token == "local-caffeine") ? incompatible_installer : compatible_installer
       end

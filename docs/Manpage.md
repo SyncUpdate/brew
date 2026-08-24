@@ -1346,7 +1346,7 @@ reinstall` will be run for outdated dependents and dependents with broken
 linkage, respectively.
 
 Unless `$HOMEBREW_NO_INSTALL_CLEANUP` is set, `brew cleanup` will then be run
-for the installed formulae or, every 30 days, for all formulae.
+for the installed formulae and casks or, every 30 days, for all packages.
 
 Unless `$HOMEBREW_NO_INSTALL_UPGRADE` is set, `brew install` *`formula`* will
 upgrade *`formula`* if it is already installed but outdated.
@@ -1835,7 +1835,7 @@ reinstall` will be run for outdated dependents and dependents with broken
 linkage, respectively.
 
 Unless `$HOMEBREW_NO_INSTALL_CLEANUP` is set, `brew cleanup` will then be run
-for the reinstalled formulae or, every 30 days, for all formulae.
+for the reinstalled formulae and casks or, every 30 days, for all packages.
 
 `-d`, `--debug`
 
@@ -2370,7 +2370,7 @@ reinstall` will be run for outdated dependents and dependents with broken
 linkage, respectively.
 
 Unless `$HOMEBREW_NO_INSTALL_CLEANUP` is set, `brew cleanup` will then be run
-for the upgraded formulae or, every 30 days, for all formulae.
+for the upgraded formulae and casks or, every 30 days, for all packages.
 
 `-d`, `--debug`
 
@@ -2558,15 +2558,24 @@ With no arguments, all installed formulae are checked.
 
 `--fix-available`
 
-: Only report vulnerabilities that have a fix available. Note that this may
-  exclude vulnerabilities with fixes available if we cannot determine that the
-  fix is included in the version under consideration.
+: Only report vulnerabilities that have a released version fix available.
+  Shortcut for `--fix-type=released`.
 
 `--no-fix-available`
 
-: Only report vulnerabilities that do not have a fix available. Note that this
-  may include vulnerabilities with fixes available if we cannot determine that
-  the fix is included in the version under consideration.
+: Only report vulnerabilities that do not have a released version fix available
+  (includes unreleased commit SHA patches). Shortcut for
+  `--fix-type=unreleased`.
+
+`--fix-type`
+
+: Filter findings by fix type: `released` (official version release), `patch`
+  (unreleased commit SHA), `any` (either), `none` (neither), `unreleased` (no
+  released version fix).
+
+`--list-skipped`
+
+: List packages skipped due to missing or unsupported source URL.
 
 `-s`, `--severity`
 
@@ -2790,6 +2799,30 @@ checks. Will exit with a non-zero status if any errors are found.
 `--cask`
 
 : Treat all named arguments as casks.
+
+### `benchmark` \[`--exec`\] \[`--runs=`\] *`formula`* \[...\]
+
+Benchmark this `brew` with `hyperfine`, installing `hyperfine` first if it is
+missing. Each of the metadata-cold, archive-cold, archive-warm and fully-warm
+`brew install` workloads is measured separately, as are the metadata-cold,
+archive-cold and archive-warm `brew fetch` workloads for each of 1, 10, 50 and
+100 *`formula`*e that are available: pass 100 *`formula`*e for full coverage and
+fewer for a shorter run.
+
+The first *`formula`* is used for the install workloads: its dependencies are
+installed once up front and left behind. All *`formula`*e must initially be
+uninstalled and the archive-cold workloads re-download every bottle in the
+batch. Mean wall times and `$HOMEBREW_PHASE_TIMINGS` phase totals are printed
+and written to `benchmark/results.json`.
+
+`--exec`
+
+: Run `hyperfine` with the arguments given after `--` instead of Homebrew's own
+  workloads, e.g. `brew benchmark --exec -- 'brew --version'`.
+
+`--runs`
+
+: Number of repetitions of each workload. Defaults to 3.
 
 ### `bottle` \[*`options`*\] *`installed_formula`*\|*`file`* \[...\]
 
@@ -4327,7 +4360,11 @@ command execution (e.g. `$(cat file)`).
   have their domain replaced with this prefix. This results in e.g.
   `https://ghcr.io/v2/homebrew/core/gettext/manifests/0.21` to instead be
   downloaded from
-  `http://localhost:8080/v2/homebrew/core/gettext/manifests/0.21`
+  `http://localhost:8080/v2/homebrew/core/gettext/manifests/0.21`. If the value
+  already contains a `/v2` path (e.g. an OCI registry proxying GitHub Packages
+  under a repository prefix such as `https://mirror.example.com/v2/ghcr-io`),
+  the `v2` path is not duplicated, resulting in e.g.
+  `https://mirror.example.com/v2/ghcr-io/homebrew/core/gettext/manifests/0.21`.
 
 `HOMEBREW_ARTIFACT_DOMAIN_NO_FALLBACK`
 
@@ -5144,7 +5181,7 @@ Ruoyu Zhong, Sam Ford and Sean Molenaar.
 
 Homebrew's other Maintainers are Andrew Nesbitt, Anton Melnikov, Bo Anderson,
 Branch Vincent, Caleb Xu, Daeho Ro, Douglas Eichelberger, Dustin Rodrigues, FX
-Coudert, Klaus Hipp, Markus Reiter, Michka Popoff, Rylan Polster, Stefan
+Coudert, Klaus Hipp, Markus Reiter, Michka Popoff, Rylan Polster, Štefan
 Baebler, Thierry Moisan and William Woodruff.
 
 ## BUGS

@@ -1,4 +1,4 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 RSpec.describe Cask::Artifact::GeneratedCompletion, :cask do
@@ -88,6 +88,42 @@ RSpec.describe Cask::Artifact::GeneratedCompletion, :cask do
       expect(calls).to eq([:add_install_hook_rules, :run])
       expect(homes.uniq.length).to eq(1)
       expect(homes).to all(satisfy { |home| !home.exist? })
+    end
+
+    it "suppresses completion command stderr in the sandbox" do
+      artifact = cask.artifacts.grep(described_class).first
+      captured_payload = T.let({}, T::Hash[String, T.untyped])
+
+      allow(Sandbox).to receive(:available?).and_return(true)
+      allow(Sandbox).to receive(:new) do
+        instance_double(Sandbox).tap do |sandbox|
+          allow(sandbox).to receive(:allow_read)
+          allow(sandbox).to receive(:add_install_hook_rules)
+          allow(sandbox).to receive(:allow_write_path)
+          allow(sandbox).to receive(:run) do |*args|
+            captured_payload = JSON.parse(Pathname(args.last).read)
+          end
+        end
+      end
+
+      artifact.install_phase
+
+      expect(captured_payload.fetch("completions")).to all(include("print_stderr" => false))
+    end
+
+    it "suppresses completion command stderr without the sandbox" do
+      artifact = cask.artifacts.grep(described_class).first
+
+      allow(Sandbox).to receive(:available?).and_return(false)
+      expect(Utils::ShellCompletion).to receive(:generate_completion_output).exactly(3).times do
+        |_commands, _shell_parameter, env, print_stderr:|
+        expect(print_stderr).to be false
+        "#{env.fetch("SHELL")} completion\n"
+      end
+
+      artifact.install_phase
+
+      expect((bash_dir/"foo").read).to eq("bash completion\n")
     end
 
     context "when generation fails for one shell" do

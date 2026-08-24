@@ -862,7 +862,7 @@ Install a \fIformula\fP or \fIcask\fP\&\. Additional options specific to a \fIfo
 .P
 Unless \fB$HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK\fP is set, \fBbrew upgrade\fP or \fBbrew reinstall\fP will be run for outdated dependents and dependents with broken linkage, respectively\.
 .P
-Unless \fB$HOMEBREW_NO_INSTALL_CLEANUP\fP is set, \fBbrew cleanup\fP will then be run for the installed formulae or, every 30 days, for all formulae\.
+Unless \fB$HOMEBREW_NO_INSTALL_CLEANUP\fP is set, \fBbrew cleanup\fP will then be run for the installed formulae and casks or, every 30 days, for all packages\.
 .P
 Unless \fB$HOMEBREW_NO_INSTALL_UPGRADE\fP is set, \fBbrew install\fP \fIformula\fP will upgrade \fIformula\fP if it is already installed but outdated\.
 .TP
@@ -1160,7 +1160,7 @@ Uninstall and then reinstall a \fIformula\fP or \fIcask\fP using the same option
 .P
 Unless \fB$HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK\fP is set, \fBbrew upgrade\fP or \fBbrew reinstall\fP will be run for outdated dependents and dependents with broken linkage, respectively\.
 .P
-Unless \fB$HOMEBREW_NO_INSTALL_CLEANUP\fP is set, \fBbrew cleanup\fP will then be run for the reinstalled formulae or, every 30 days, for all formulae\.
+Unless \fB$HOMEBREW_NO_INSTALL_CLEANUP\fP is set, \fBbrew cleanup\fP will then be run for the reinstalled formulae and casks or, every 30 days, for all packages\.
 .TP
 \fB\-d\fP, \fB\-\-debug\fP
 If brewing fails, open an interactive debugging session with access to IRB or a shell inside the temporary build directory\.
@@ -1492,7 +1492,7 @@ Upgrade outdated, unpinned packages using the same options they were originally 
 .P
 Unless \fB$HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK\fP is set, \fBbrew upgrade\fP or \fBbrew reinstall\fP will be run for outdated dependents and dependents with broken linkage, respectively\.
 .P
-Unless \fB$HOMEBREW_NO_INSTALL_CLEANUP\fP is set, \fBbrew cleanup\fP will then be run for the upgraded formulae or, every 30 days, for all formulae\.
+Unless \fB$HOMEBREW_NO_INSTALL_CLEANUP\fP is set, \fBbrew cleanup\fP will then be run for the upgraded formulae and casks or, every 30 days, for all packages\.
 .TP
 \fB\-d\fP, \fB\-\-debug\fP
 If brewing fails, open an interactive debugging session with access to IRB or a shell inside the temporary build directory\.
@@ -1613,10 +1613,16 @@ Report vulnerabilities even when a formula patch resolves them\.
 Check formulae listed in a Brewfile\. Defaults to \fB\&\./Brewfile\fP; use \fB\-\-brewfile=\fP\fIpath\fP to specify another\.
 .TP
 \fB\-\-fix\-available\fP
-Only report vulnerabilities that have a fix available\. Note that this may exclude vulnerabilities with fixes available if we cannot determine that the fix is included in the version under consideration\.
+Only report vulnerabilities that have a released version fix available\. Shortcut for \fB\-\-fix\-type=released\fP\&\.
 .TP
 \fB\-\-no\-fix\-available\fP
-Only report vulnerabilities that do not have a fix available\. Note that this may include vulnerabilities with fixes available if we cannot determine that the fix is included in the version under consideration\.
+Only report vulnerabilities that do not have a released version fix available (includes unreleased commit SHA patches)\. Shortcut for \fB\-\-fix\-type=unreleased\fP\&\.
+.TP
+\fB\-\-fix\-type\fP
+Filter findings by fix type: \fBreleased\fP (official version release), \fBpatch\fP (unreleased commit SHA), \fBany\fP (either), \fBnone\fP (neither), \fBunreleased\fP (no released version fix)\.
+.TP
+\fB\-\-list\-skipped\fP
+List packages skipped due to missing or unsupported source URL\.
 .TP
 \fB\-s\fP, \fB\-\-severity\fP
 Only report findings at or above: \fBlow\fP, \fBmedium\fP, \fBhigh\fP, \fBcritical\fP\&\.
@@ -1761,6 +1767,16 @@ Treat all named arguments as formulae\.
 .TP
 \fB\-\-cask\fP
 Treat all named arguments as casks\.
+.SS "\fBbenchmark\fP \fR[\fB\-\-exec\fP] \fR[\fB\-\-runs=\fP] \fIformula\fP \fR[\.\.\.]"
+Benchmark this \fBbrew\fP with \fBhyperfine\fP, installing \fBhyperfine\fP first if it is missing\. Each of the metadata\-cold, archive\-cold, archive\-warm and fully\-warm \fBbrew install\fP workloads is measured separately, as are the metadata\-cold, archive\-cold and archive\-warm \fBbrew fetch\fP workloads for each of 1, 10, 50 and 100 \fIformula\fPe that are available: pass 100 \fIformula\fPe for full coverage and fewer for a shorter run\.
+.P
+The first \fIformula\fP is used for the install workloads: its dependencies are installed once up front and left behind\. All \fIformula\fPe must initially be uninstalled and the archive\-cold workloads re\-download every bottle in the batch\. Mean wall times and \fB$HOMEBREW_PHASE_TIMINGS\fP phase totals are printed and written to \fBbenchmark/results\.json\fP\&\.
+.TP
+\fB\-\-exec\fP
+Run \fBhyperfine\fP with the arguments given after \fB\-\-\fP instead of Homebrew\[u2019]s own workloads, e\.g\. \fBbrew benchmark \-\-exec \-\- \'brew \-\-version\'\fP\&\.
+.TP
+\fB\-\-runs\fP
+Number of repetitions of each workload\. Defaults to 3\.
 .SS "\fBbottle\fP \fR[\fIoptions\fP] \fIinstalled_formula\fP|\fIfile\fP \fR[\.\.\.]"
 Generate a bottle (binary package) from a formula that was installed with \fB\-\-build\-bottle\fP\&\. If the formula specifies a rebuild version, it will be incremented in the generated DSL\. Passing \fB\-\-keep\-old\fP will attempt to keep it at its original value, while \fB\-\-no\-rebuild\fP will remove it\.
 .TP
@@ -2753,7 +2769,7 @@ Linux only: Pass this value to a type name representing the compiler\[u2019]s \f
 .RE
 .TP
 \fBHOMEBREW_ARTIFACT_DOMAIN\fP
-Prefix all download URLs, including those for bottles, with this value\. For example, \fBexport HOMEBREW_ARTIFACT_DOMAIN=http://localhost:8080\fP will cause a formula with the URL \fBhttps://example\.com/foo\.tar\.gz\fP to instead download from \fBhttp://localhost:8080/https://example\.com/foo\.tar\.gz\fP\&\. Bottle URLs however, have their domain replaced with this prefix\. This results in e\.g\. \fBhttps://ghcr\.io/v2/homebrew/core/gettext/manifests/0\.21\fP to instead be downloaded from \fBhttp://localhost:8080/v2/homebrew/core/gettext/manifests/0\.21\fP
+Prefix all download URLs, including those for bottles, with this value\. For example, \fBexport HOMEBREW_ARTIFACT_DOMAIN=http://localhost:8080\fP will cause a formula with the URL \fBhttps://example\.com/foo\.tar\.gz\fP to instead download from \fBhttp://localhost:8080/https://example\.com/foo\.tar\.gz\fP\&\. Bottle URLs however, have their domain replaced with this prefix\. This results in e\.g\. \fBhttps://ghcr\.io/v2/homebrew/core/gettext/manifests/0\.21\fP to instead be downloaded from \fBhttp://localhost:8080/v2/homebrew/core/gettext/manifests/0\.21\fP\&\. If the value already contains a \fB/v2\fP path (e\.g\. an OCI registry proxying GitHub Packages under a repository prefix such as \fBhttps://mirror\.example\.com/v2/ghcr\-io\fP), the \fBv2\fP path is not duplicated, resulting in e\.g\. \fBhttps://mirror\.example\.com/v2/ghcr\-io/homebrew/core/gettext/manifests/0\.21\fP\&\.
 .TP
 \fBHOMEBREW_ARTIFACT_DOMAIN_NO_FALLBACK\fP
 When \fB$HOMEBREW_ARTIFACT_DOMAIN\fP and \fB$HOMEBREW_ARTIFACT_DOMAIN_NO_FALLBACK\fP are both set, if the request to \fB$HOMEBREW_ARTIFACT_DOMAIN\fP fails then Homebrew will error rather than trying any other/default URLs\.
@@ -3352,7 +3368,7 @@ Homebrew\[u2019]s Project Leader is Mike McQuaid\.
 .P
 Homebrew\[u2019]s Lead Maintainers are Bevan Kay, Carlo Cabrera, Issy Long, Justin Krehel, Michael Cho, Mike McQuaid, Nanda H Krishna, Patrick Linnane, Rui Chen, Ruoyu Zhong, Sam Ford and Sean Molenaar\.
 .P
-Homebrew\[u2019]s other Maintainers are Andrew Nesbitt, Anton Melnikov, Bo Anderson, Branch Vincent, Caleb Xu, Daeho Ro, Douglas Eichelberger, Dustin Rodrigues, FX Coudert, Klaus Hipp, Markus Reiter, Michka Popoff, Rylan Polster, Stefan Baebler, Thierry Moisan and William Woodruff\.
+Homebrew\[u2019]s other Maintainers are Andrew Nesbitt, Anton Melnikov, Bo Anderson, Branch Vincent, Caleb Xu, Daeho Ro, Douglas Eichelberger, Dustin Rodrigues, FX Coudert, Klaus Hipp, Markus Reiter, Michka Popoff, Rylan Polster, Štefan Baebler, Thierry Moisan and William Woodruff\.
 .SH "BUGS"
 See our issues on GitHub:
 .TP

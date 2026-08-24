@@ -1,4 +1,4 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require_relative "shared_examples/uninstall_zap"
@@ -135,6 +135,94 @@ RSpec.describe Cask::Artifact::Uninstall, :cask do
     end
   end
 
+  describe "#uninstall_quit" do
+    let(:cask) { Cask::CaskLoader.load(cask_path("with-uninstall-quit")) }
+    let(:artifact) { cask.artifacts.find { |a| a.is_a?(described_class) } }
+
+    let(:fake_system_command) { NeverSudoSystemCommand }
+
+    before do
+      allow(User.current).to receive(:gui?).and_return true
+      allow(artifact).to receive(:quit).and_return(instance_double(SystemCommand::Result, success?: true))
+    end
+
+    it "quits every running application matching a wildcard" do
+      allow(artifact).to receive(:running_bundle_ids)
+        .and_return(["com.example.app", "com.example.app.helper", "com.other.app"])
+      allow(artifact).to receive(:running?).with("com.example.app").and_return(true, false)
+      allow(artifact).to receive(:running?).with("com.example.app.helper").and_return(true, false)
+
+      artifact.uninstall_quit("com.example.app*", upgrade: true, command: fake_system_command)
+
+      expect(artifact.bundle_ids_to_reopen).to eq ["com.example.app", "com.example.app.helper"]
+    end
+
+    it "matches a wildcard without regard to case" do
+      allow(artifact).to receive(:running_bundle_ids).and_return(["com.example.app"])
+      allow(artifact).to receive(:running?).with("com.example.app").and_return(true, false)
+
+      artifact.uninstall_quit("com.Example.App*", upgrade: true, command: fake_system_command)
+
+      expect(artifact.bundle_ids_to_reopen).to eq ["com.example.app"]
+    end
+
+    it "anchors a wildcard to the whole bundle ID" do
+      allow(artifact).to receive(:running_bundle_ids).and_return(["org.other.com.example.app"])
+
+      expect(artifact).not_to receive(:running?)
+
+      artifact.uninstall_quit("com.example*", upgrade: true, command: fake_system_command)
+    end
+
+    it "does not list running applications without a GUI" do
+      allow(User.current).to receive(:gui?).and_return(false)
+
+      expect(artifact).not_to receive(:running_bundle_ids)
+
+      expect { artifact.uninstall_quit("com.example.app*", upgrade: true, command: fake_system_command) }
+        .to output(/Not logged into a GUI/).to_stderr
+    end
+
+    it "does not list running applications without a wildcard" do
+      allow(artifact).to receive(:running?).and_return(false)
+
+      expect(artifact).not_to receive(:running_bundle_ids)
+
+      artifact.uninstall_quit("com.example.app", upgrade: true, command: fake_system_command)
+    end
+  end
+
+  describe "#uninstall_signal" do
+    subject(:artifact) { cask.artifacts.find { |a| a.is_a?(described_class) } }
+
+    let(:fake_system_command) { NeverSudoSystemCommand }
+    let(:cask) { Cask::CaskLoader.load(cask_path("with-uninstall-signal-wildcard")) }
+
+    before { allow(artifact).to receive(:sleep).with(3) }
+
+    it "signals the running processes of every application matching a wildcard" do
+      allow(artifact).to receive(:running_bundle_ids)
+        .and_return(["my.fancy.package", "my.fancy.package.helper", "my.other.package"])
+      allow(artifact).to receive(:running_processes).with("my.fancy.package")
+                                                    .and_return([[123, 0, "my.fancy.package"]])
+      allow(artifact).to receive(:running_processes).with("my.fancy.package.helper")
+                                                    .and_return([[456, 0, "my.fancy.package.helper"]])
+
+      expect(Process).to receive(:kill).with("TERM", 123)
+      expect(Process).to receive(:kill).with("TERM", 456)
+
+      artifact.uninstall_phase(command: fake_system_command)
+    end
+
+    it "looks for no processes when a wildcard matches no running application" do
+      allow(artifact).to receive(:running_bundle_ids).and_return(["my.other.package"])
+
+      expect(artifact).not_to receive(:running_processes)
+
+      artifact.uninstall_phase(command: fake_system_command)
+    end
+  end
+
   describe "#bundle_ids_to_reopen" do
     subject(:artifact) { cask.artifacts.find { |a| a.is_a?(described_class) } }
 
@@ -179,10 +267,9 @@ RSpec.describe Cask::Artifact::Uninstall, :cask do
   end
 
   describe "#post_uninstall_phase" do
-    subject(:artifact) { cask.artifacts.find { |a| a.is_a?(described_class) } }
-
     context "when using :rmdir" do
       let(:fake_system_command) { NeverSudoSystemCommand }
+      let(:artifact) { cask.artifacts.find { |a| a.is_a?(described_class) } }
       let(:cask) { Cask::CaskLoader.load(cask_path("with-uninstall-rmdir")) }
       let(:empty_directory) { Pathname.new("#{TEST_TMPDIR}/empty_directory_path") }
       let(:empty_directory_tree) { empty_directory.join("nested", "empty_directory_path") }

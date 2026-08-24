@@ -344,6 +344,7 @@ _brew_advisory_match() {
       --help
       --index
       --json
+      --new-history
       --no-history
       --output
       --quiet
@@ -518,6 +519,25 @@ _brew_autoremove() {
       ;;
     *) ;;
   esac
+}
+
+_brew_benchmark() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  case "${cur}" in
+    -*)
+      __brewcomp "
+      --debug
+      --exec
+      --help
+      --quiet
+      --runs
+      --verbose
+      "
+      return
+      ;;
+    *) ;;
+  esac
+  __brew_complete_formulae
 }
 
 _brew_bottle() {
@@ -3663,8 +3683,10 @@ _brew_vulns() {
       --debug
       --deps
       --fix-available
+      --fix-type
       --help
       --json
+      --list-skipped
       --max-summary
       --no-fix-available
       --no-ignore-patches
@@ -3764,6 +3786,7 @@ _brew() {
     as-console-user) _brew_as_console_user ;;
     audit) _brew_audit ;;
     autoremove) _brew_autoremove ;;
+    benchmark) _brew_benchmark ;;
     bottle) _brew_bottle ;;
     bump) _brew_bump ;;
     bump-cask-pr) _brew_bump_cask_pr ;;

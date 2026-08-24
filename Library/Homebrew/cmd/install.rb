@@ -3,16 +3,9 @@
 
 require "abstract_command"
 require "cask/config"
-require "cask/installer"
-require "cask/upgrade"
-
-require "cask_dependent"
-require "missing_formula"
-require "formula_installer"
+require "formula"
 require "development_tools"
-require "install"
-require "cleanup"
-require "upgrade"
+require "install/check"
 require "trust"
 
 module Homebrew
@@ -27,7 +20,7 @@ module Homebrew
           outdated dependents and dependents with broken linkage, respectively.
 
           Unless `$HOMEBREW_NO_INSTALL_CLEANUP` is set, `brew cleanup` will then be run for
-          the installed formulae or, every 30 days, for all formulae.
+          the installed formulae and casks or, every 30 days, for all packages.
 
           Unless `$HOMEBREW_NO_INSTALL_UPGRADE` is set, `brew install` <formula> will upgrade <formula> if it
           is already installed but outdated.
@@ -223,12 +216,16 @@ module Homebrew
         upgrade_casks = T.let([], T::Array[Cask::Cask])
         fetch_casks = T.let([], T::Array[Cask::Cask])
         if casks.any?
+          require "cask/installer"
+          require "cask/upgrade"
+          require "install"
+
+          prefetched_cask_installers = T.let([], T::Array[Cask::Installer])
+
           if args.dry_run?
             Install.print_dry_run_casks(casks, skip_cask_deps: args.skip_cask_deps?, include_installed: false)
             return
           end
-
-          require "cask/installer"
 
           installed_casks, new_casks = casks.partition(&:installed?)
 
@@ -242,6 +239,7 @@ module Homebrew
         end
 
         if Homebrew::EnvConfig.verify_attestations?
+          require "attestation"
           formulae = Homebrew::Attestation.sort_formulae_for_install(formulae)
         end
 
@@ -275,6 +273,8 @@ module Homebrew
         end
 
         return if formulae.any? && installed_formulae.empty? && casks.empty?
+
+        require "install"
 
         formulae_installer = Install.formula_installers(
           installed_formulae,
@@ -357,81 +357,121 @@ module Homebrew
           raise
         end
 
-        if !args.dry_run? && (formulae_installer.any? || fetch_casks.any?)
+        dependent_formulae_installer = if args.dry_run?
+          []
+        else
+          Upgrade.dependent_formula_installers(
+            dependants,
+            installed_formulae,
+            flags:                      args.flags_only,
+            force_bottle:               args.force_bottle?,
+            build_from_source_formulae: args.build_from_source_formulae,
+            interactive:                args.interactive?,
+            keep_tmp:                   args.keep_tmp?,
+            debug_symbols:              args.debug_symbols?,
+            force:                      args.force?,
+            debug:                      args.debug?,
+            quiet:                      args.quiet?,
+            verbose:                    args.verbose?,
+          )
+        end
+
+        if !args.dry_run? && (formulae_installer.any? || dependent_formulae_installer.any? || fetch_casks.any?)
           download_queue = T.let(shared_download_queue || Homebrew::DownloadQueue.new(pour: true),
                                  Homebrew::DownloadQueue)
           shared_download_queue = nil
           begin
-            Cask::Upgrade.show_upgrade_summary(
-              upgrade_casks.map { |cask| "#{cask.full_name} #{cask.installed_version} -> #{cask.version}" },
-            )
+            if !ask && upgrade_casks.any?
+              Cask::Upgrade.show_upgrade_summary(
+                upgrade_casks.map { |cask| "#{cask.full_name} #{cask.installed_version} -> #{cask.version}" },
+              )
+            end
 
-            formulae_installer = Install.enqueue_formulae(formulae_installer, download_queue:)
+            all_formulae_installer = Install.enqueue_formulae(
+              (formulae_installer + dependent_formulae_installer).uniq { |fi| fi.formula.full_name },
+              download_queue:,
+            )
+            formulae_installer &= all_formulae_installer
+            dependent_formulae_installer &= all_formulae_installer
 
             if fetch_casks.any?
-              fetch_cask_installers = fetch_casks.map do |cask|
+              prefetched_cask_installers = fetch_casks.map do |cask|
                 Cask::Installer.new(
                   cask,
-                  reinstall:      true,
+                  adopt:          args.adopt?,
                   binaries:       args.binaries?,
                   verbose:        args.verbose?,
                   force:          args.force?,
+                  quiet:          args.quiet?,
                   skip_cask_deps: args.skip_cask_deps?,
                   require_sha:    args.require_sha?,
-                  zap:            args.zap?,
+                  upgrade:        upgrade_casks.include?(cask),
                   download_queue:,
                   defer_fetch:    true,
                 )
               end
 
-              Install.enqueue_cask_installers(fetch_cask_installers, download_queue:)
+              prefetched_cask_installers = Install.enqueue_cask_installers(prefetched_cask_installers)
             end
 
             download_queue.fetch(heading: Install.combined_fetch_downloads_heading(
-              formula_names: formulae_installer.map { |fi| fi.formula.name },
+              formula_names: all_formulae_installer.map { |fi| fi.formula.name },
               cask_names:    fetch_casks.map(&:full_name),
-            ))
+            ) || "Fetching dependency downloads")
+            if prefetched_cask_installers
+              Install.fetch_cask_dependencies(prefetched_cask_installers, download_queue:)
+            end
             # Install everything that did download, rather than aborting the
             # whole run; the failures above still exit nonzero at the end.
-            formulae_installer = Install.reject_failed_downloads(formulae_installer, download_queue:)
+            all_formulae_installer = Install.reject_failed_downloads(all_formulae_installer, download_queue:)
+            formulae_installer &= all_formulae_installer
+            dependent_formulae_installer &= all_formulae_installer
           ensure
             download_queue.shutdown
           end
         end
         shared_download_queue&.shutdown
 
-        Install.install_formulae(formulae_installer,
-                                 dry_run: args.dry_run?,
-                                 verbose: args.verbose?)
-
-        Upgrade.upgrade_dependents(
-          dependants, installed_formulae,
-          flags:                      args.flags_only,
-          dry_run:                    args.dry_run?,
-          force_bottle:               args.force_bottle?,
-          build_from_source_formulae: args.build_from_source_formulae,
-          interactive:                args.interactive?,
-          keep_tmp:                   args.keep_tmp?,
-          debug_symbols:              args.debug_symbols?,
-          force:                      args.force?,
-          debug:                      args.debug?,
-          quiet:                      args.quiet?,
-          verbose:                    args.verbose?
+        installed_or_upgraded_formulae = Install.install_formulae(
+          formulae_installer,
+          dry_run: args.dry_run?,
+          verbose: args.verbose?,
+          cleanup: false,
         )
 
-        if casks.any?
+        installed_or_upgraded_formulae |= Upgrade.upgrade_dependents(
+          dependants, installed_formulae,
+          flags:                         args.flags_only,
+          dry_run:                       args.dry_run?,
+          force_bottle:                  args.force_bottle?,
+          build_from_source_formulae:    args.build_from_source_formulae,
+          interactive:                   args.interactive?,
+          keep_tmp:                      args.keep_tmp?,
+          debug_symbols:                 args.debug_symbols?,
+          force:                         args.force?,
+          debug:                         args.debug?,
+          quiet:                         args.quiet?,
+          verbose:                       args.verbose?,
+          cleanup:                       false,
+          prefetched_formula_installers: dependent_formulae_installer
+        )
+
+        installed_or_upgraded_casks = T.let([], T::Array[Cask::Cask])
+        if prefetched_cask_installers
           new_casks.each do |cask|
-            Cask::Installer.new(
+            installer = prefetched_cask_installers.find { |candidate| candidate.cask.equal?(cask) }
+            installer ||= Cask::Installer.new(
               cask,
               adopt:          args.adopt?,
               binaries:       args.binaries?,
-              defer_fetch:    fetch_casks.include?(cask),
               force:          args.force?,
               quiet:          args.quiet?,
               require_sha:    args.require_sha?,
               skip_cask_deps: args.skip_cask_deps?,
               verbose:        args.verbose?,
-            ).install
+            )
+            installer.install
+            installed_or_upgraded_casks << cask
           rescue => e
             ofail "#{cask.full_name}: #{e}"
           end
@@ -440,15 +480,17 @@ module Homebrew
             begin
               Cask::Upgrade.upgrade_casks!(
                 *installed_casks,
-                force:                args.force?,
-                dry_run:              args.dry_run?,
-                binaries:             args.binaries?,
-                require_sha:          args.require_sha?,
-                skip_cask_deps:       args.skip_cask_deps?,
-                verbose:              args.verbose?,
-                quiet:                args.quiet?,
-                skip_prefetch:        true,
-                show_upgrade_summary: false,
+                force:                      args.force?,
+                dry_run:                    args.dry_run?,
+                binaries:                   args.binaries?,
+                require_sha:                args.require_sha?,
+                skip_cask_deps:             args.skip_cask_deps?,
+                verbose:                    args.verbose?,
+                quiet:                      args.quiet?,
+                skip_prefetch:              true,
+                show_upgrade_summary:       false,
+                upgraded_casks:             installed_or_upgraded_casks,
+                prefetched_cask_installers:,
                 args:,
               )
             rescue => e
@@ -457,9 +499,12 @@ module Homebrew
           end
         end
 
-        Cleanup.periodic_clean!(dry_run: args.dry_run?)
-
-        Homebrew.messages.display_messages(display_times: args.display_times?)
+        Install.finish_installation(
+          formulae:      installed_or_upgraded_formulae,
+          casks:         installed_or_upgraded_casks,
+          dry_run:       args.dry_run?,
+          display_times: args.display_times?,
+        )
       rescue FormulaUnreadableError, FormulaClassUnavailableError,
              TapFormulaUnreadableError, TapFormulaClassUnavailableError => e
         require "utils/backtrace"
@@ -486,6 +531,7 @@ module Homebrew
 
         opoo e
 
+        require "missing_formula"
         reason = MissingFormula.reason(name, silent: true)
         if !args.cask? && reason
           $stderr.puts reason

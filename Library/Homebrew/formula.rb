@@ -3749,6 +3749,11 @@ class Formula
       GOENV:                   "off",
       GOPATH:                  "#{HOMEBREW_CACHE}/go_mod_cache",
       CARGO_HOME:              "#{HOMEBREW_CACHE}/cargo_cache",
+      # TODO: Enable when `min-publish-age` stabilises in Cargo 1.100,
+      # expected with Rust 1.100 on 2026-11-12.
+      # https://github.com/rust-lang/cargo/pull/17335
+      # CARGO_REGISTRY_GLOBAL_MIN_PUBLISH_AGE: Utils.pluralize("day", Homebrew::RELEASE_COOLDOWN_DAYS,
+      #                                                        include_count: true),
       BUNDLE_COOLDOWN:         Homebrew::RELEASE_COOLDOWN_DAYS.to_s,
       PIP_CACHE_DIR:           "#{HOMEBREW_CACHE}/pip_cache",
       PIP_CONFIG_FILE:         File::NULL,
@@ -3989,7 +3994,8 @@ class Formula
 
     # The phases for which network access is allowed. By default, network
     # access is allowed for all phases. Valid phases are `:build`, `:test`,
-    # and `:postinstall`. When no argument is passed, network access will be
+    # and `:postinstall`. When phases are passed, network access will be denied
+    # for all other phases. When no argument is passed, network access will be
     # allowed for all phases.
     #
     # ### Examples
@@ -4015,9 +4021,9 @@ class Formula
       else
         phases_array.each do |phase|
           raise ArgumentError, "Unknown phase: #{phase}" unless SUPPORTED_NETWORK_ACCESS_PHASES.include?(phase)
-
-          network_access_allowed[phase] = true
         end
+        network_access_allowed.transform_values! { false }
+        phases_array.each { |phase| network_access_allowed[phase] = true }
       end
     end
 

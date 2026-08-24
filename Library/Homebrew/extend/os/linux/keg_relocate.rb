@@ -10,31 +10,38 @@ module OS
 
       requires_ancestor { ::Keg }
 
-      sig { params(relocation: ::Keg::Relocation, skip_protodesc_cold: T::Boolean).void }
-      def relocate_dynamic_linkage(relocation, skip_protodesc_cold: false)
+      sig {
+        params(relocation: ::Keg::Relocation, with_placeholders: T::Boolean).returns(T::Array[::Pathname])
+      }
+      def relocate_dynamic_linkage(relocation, with_placeholders: false)
         # Patching the dynamic linker of glibc breaks it.
-        return if name.match? Version.formula_optionally_versioned_regex(:glibc)
+        return [] if name.match? Version.formula_optionally_versioned_regex(:glibc)
 
         old_prefix, new_prefix = relocation.replacement_pair_for(:prefix)
 
+        linkage_files = []
         elf_files.each do |file|
+          changed = T.let(false, T::Boolean)
           file.ensure_writable do
-            change_rpath!(file, old_prefix, new_prefix, skip_protodesc_cold:)
+            changed = change_rpath!(file, old_prefix, new_prefix, with_placeholders:)
           end
+          linkage_files << file.relative_path_from(path) if changed
         end
+        linkage_files
       end
 
       sig {
         params(file: ELFShim, old_prefix: T.any(String, Regexp), new_prefix: String,
-               skip_protodesc_cold: T::Boolean).returns(T::Boolean)
+               with_placeholders: T::Boolean).returns(T::Boolean)
       }
-      def change_rpath!(file, old_prefix, new_prefix, skip_protodesc_cold: false)
+      def change_rpath!(file, old_prefix, new_prefix, with_placeholders: false)
         return false if !file.elf? || !file.dynamic_elf?
 
         # Skip relocation of files with `protodesc_cold` sections because patchelf.rb seems to break them,
         # but only when bottling (as we don't want to break existing bottles that require relocation).
         # https://github.com/Homebrew/homebrew-core/pull/232490#issuecomment-3161362452
-        return false if skip_protodesc_cold && file.section_names.include?("protodesc_cold")
+        # Also skip relocation of files with `.bun` sections
+        return false if with_placeholders && file.section_names.intersect?(["protodesc_cold", ".bun"])
 
         updated = {}
         old_rpath = file.rpath
