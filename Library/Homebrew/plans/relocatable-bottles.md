@@ -27,6 +27,14 @@ End each implementation commit body with this exact line:
 This change is part of [`plans/relocatable-bottles.md`](https://github.com/Homebrew/brew/blob/HEAD/Library/Homebrew/plans/relocatable-bottles.md)
 ```
 
+Any benchmark quoted in a commit message must be the full hyperfine
+output from `brew benchmark` (using its `--exec` mode for bespoke
+workloads), never hand-summarised numbers.
+
+Pull requests must always fill in the repository's pull request
+template (`.github/PULL_REQUEST_TEMPLATE.md`), never bypass it
+(e.g. with `gh pr create --fill`).
+
 ## Current state (21 August 2026, formulae.brew.sh data)
 
 | Tag | `:any_skip_relocation` | `:any` | pinned |
@@ -102,18 +110,22 @@ Replaying the exact `keg_contain?` logic over the contents of 17 pinned and
 - 12/17: compiled-in own-keg or prefix C strings (sysconfdir, datadir,
   localedir, plugin directories), e.g. `wget2`'s localedir, `graphviz`'s
   plugin directory, `python@3.x`'s framework prefix.
-- 2/17: stale ELF `.dynstr` bytes: patchelf.rb writes a placeholdered RUNPATH
-  but leaves the old string dead in the binary and the checker counts the
-  corpse (`harfbuzz`, `shared-mime-info`; the 224-formula glib/gobject
+- 2/17: stale ELF `.dynstr` bytes: Meson's install-time RPATH rewrite
+  overwrites the build RPATH without clearing the rest of the old string
+  (intentional upstream; Nix carries a patch), and patchelf leaves the old
+  table behind when growing one, so the checker counts the corpse
+  (`harfbuzz`, `shared-mime-info`; the 224-formula glib/gobject
   introspection cluster on Linux looks identical). Functionally these are
-  false positives.
+  false positives, since addressed by scanning ELF files by structure
+  (design decision 11).
 - 1/17: node-gyp build debris: native addons compiled inside the keg embed
   keg paths in debug info and ship stray `.o` artefacts (about 29 npm
   formulae).
 - 1/17: `abseil` replays clean under the current checker yet CI pinned it:
-  some pins are stale or wrong. A bottle's cellar lives in the formula, not
-  the tarball, so provably clean bottles can be re-marked `cellar :any`
-  without rebuilding.
+  since explained and fixed (phantom resolved-linkage matches, Phase 1
+  item 4). A bottle's cellar lives in the formula, not the tarball, so
+  provably clean bottles can be re-marked `cellar :any` without
+  rebuilding.
 
 ## Design decisions
 
@@ -157,32 +169,40 @@ Replaying the exact `keg_contain?` logic over the contents of 17 pinned and
 10. Non-intuitive logic must always be commented, especially relocation edge
     cases (NUL padding, string-table subtleties, codesign behaviour): this
     code is touched rarely and debugged under pressure.
+11. The relocatability checker deliberately errs towards classifying
+    bottles as relocatable rather than pinned. This is a rebalancing of the
+    original `strings`-based checker, which counted every prefix byte
+    sequence in a file as a pin: a wrongly pinned bottle forces source
+    builds for every non-default-prefix user and poisons its whole
+    dependent subtree, whereas a wrongly relocatable one surfaces as a
+    per-formula bug report with a trivial fix and is caught by the Phase 2
+    validation sweep and the test-bot relocated-pour test. Concretely, ELF
+    files are scanned by structure rather than as a whole: only the
+    interpreter the loader uses, the dynamic strings the loader references
+    and the contents of ordinary sections count; bytes outside every
+    section and unreferenced entries in loader-owned string tables never
+    do. Other file types keep the whole-file scan.
 
 ## Plan
-
-### Phase 0: pour speed and relocation metadata (helps everyone, every prefix)
-
-3. Metadata-driven fast pour, benchmarked, with scan fallback: no keg walks,
-   only listed files touched, relocation coordinated into one write and one
-   codesign per file, codesign parallelised across files. Benefits accrue to
-   every install, default prefix included, as bottles are rebottled with
-   metadata.
 
 ### Phase 1: maximise relocatable bottles now (helps every custom prefix, any length)
 
 Each pinned bottle flipped to `cellar :any` pours at any prefix with no
 length limit and no new machinery.
 
-4. Reconcile checker divergences: pull `brew bottle --verbose` CI logs for
-   the `abseil` class, fix whatever diverges, then batch re-mark provably
-   clean pins `cellar :any` with no rebuild (sha256 unchanged).
-5. ELF-aware checker: map string offsets to sections (elftools is already
-   vendored via patchelf.rb) and stop counting stale `.dynstr` corpses.
-   Flips the glib/gobject-introspection cluster and much of the Linux-only
-   pinned set on their next rebottle.
-6. node-gyp debris: delete `build/**/obj.target`, `*.o` and `*.d` from
-   npm-installed trees and strip or debug-prefix-map compiled `.node`
-   addons. Flips the npm cluster.
+4. Reconcile checker divergences: resolved. The `abseil` class was pinned
+   by `file_linked_libraries` resolving `@rpath`/`@loader_path` load
+   commands against the live keg at bottle time, turning relocatable
+   linkage into absolute build-prefix paths; the checker now reads raw
+   load-command names. Text matches never recorded it because googletest
+   include-path strings hit the `ignores` filters, which also explains
+   why only arm64 macOS pinned: `/usr/local/include/...` never byte-matched
+   Intel's `/usr/local/opt` and `/usr/local/Cellar` search strings and
+   Linux has no linkage check. Remaining: once the fix is deployed to CI,
+   batch re-mark provably clean pins `cellar :any` with no rebuild
+   (sha256 unchanged) in homebrew/core, starting from the 127 formulae
+   pinned on all arm64 macOS tags yet `:any` on `x86_64_linux` (e.g.
+   `abseil`, `boost`, `binutils`, `aws-sdk-cpp`).
 7. Data-driven ignore extensions where blocker diagnostics show a class is
    functionally dead.
 
@@ -307,15 +327,15 @@ the reason, so the exceptions list stays short, visible and countable.
   minus the named exceptions list.
 - `brew install` at any prefix up to 64 bytes never falls back to source
   because of relocation on the target platforms.
-- Default-prefix pours are measurably faster than before Phase 0.
+- Default-prefix pours are measurably faster than before the metadata-driven
+  pour (`brew benchmark` at implementation: 1.67x faster end-to-end on a
+  5,000-file synthetic keg, relocation cost itself dropping from ~320ms to
+  ~1ms), with gains accruing as bottles are rebottled with metadata.
 - CI fails when a formula regresses from relocatable-or-patchable without an
   annotation.
 
 ## Open questions
 
-- The `abseil`-class anomaly: why did CI pin bottles whose contents pass the
-  current checker? Needs a `brew bottle --verbose` CI log to reconcile
-  before trusting the checker's output as blocker metadata.
 - Symbolic cellar spelling and JSON API versioning for third-party
   consumers.
 - How many formulae fail to build at all at a 64-byte prefix

@@ -230,16 +230,44 @@ RSpec.describe Homebrew::Bundle::Flatpak do
   end
 
   describe "installing" do
-    context "when Flatpak is not installed", :needs_linux do
+    context "when Flatpak is not installed" do
       before do
         described_class.reset!
         allow(described_class).to receive(:package_manager_executable).and_return(nil)
       end
 
-      it "returns false without attempting installation" do
+      it "fails with installation guidance without attempting installation" do
         expect(Homebrew::Bundle).not_to receive(:system)
-        expect(described_class.preinstall!("org.gnome.Calculator")).to be(false)
-        expect(described_class.install!("org.gnome.Calculator")).to be(true)
+        expect(described_class.preinstall!("org.gnome.Calculator")).to be(true)
+        expect { expect(described_class.install!("org.gnome.Calculator")).to be(false) }
+          .to output(/flatpak is not installed.*distribution's package manager/).to_stderr
+      end
+    end
+
+    describe "native batches" do
+      before do
+        allow(described_class).to receive(:package_manager_executable).and_return(Pathname.new("flatpak"))
+      end
+
+      it "installs refs sharing a remote in one batch" do
+        entries = [
+          Homebrew::Bundle::Dsl::Entry.new(:flatpak, "org.gnome.Calculator", remote: "flathub"),
+          Homebrew::Bundle::Dsl::Entry.new(:flatpak, "org.gnome.Characters", remote: "flathub"),
+        ]
+        expect(described_class.batch_installable?("org.gnome.Calculator", remote: "flathub")).to be(true)
+        expect(Homebrew::Bundle).to receive(:system)
+          .with("flatpak", "install", "-y", "--system", "flathub",
+                "org.gnome.Calculator", "org.gnome.Characters", verbose: false)
+          .and_return(true)
+
+        expect(described_class.install_batch!(entries, verbose: false)).to be(true)
+      end
+
+      it "does not batch entries that need their own remote" do
+        expect(described_class.batch_installable?(
+                 "org.godotengine.Godot",
+                 remote: "https://dl.flathub.org/beta-repo/",
+               )).to be(false)
       end
     end
 

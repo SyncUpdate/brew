@@ -3,7 +3,7 @@
 
 require "formula"
 require "formula_installer"
-Warnings.ignore(/circular require considered harmful/) { require "install" }
+require "install"
 require "keg"
 require "sandbox"
 require "tab"
@@ -11,6 +11,7 @@ require "trust"
 require "cmd/install"
 require "test/support/fixtures/testball"
 require "test/support/fixtures/testball_bottle"
+require "test/support/fixtures/testball_fetch"
 require "test/support/fixtures/failball"
 require "test/support/fixtures/failball_offline_install"
 
@@ -81,6 +82,34 @@ RSpec.describe FormulaInstaller do
     expect { temporary_install(FailballOfflineInstall.new) }.to raise_error(BuildError) if Sandbox.available?
   end
 
+  it "releases its formula locks when installation raises" do
+    locked = []
+    allow(described_class).to receive(:locked).and_return(locked)
+    first_formula = formula("first-failure") do
+      T.bind(self, T.class_of(Formula))
+      url "foo-1.0"
+    end
+    second_formula = formula("second-failure") do
+      T.bind(self, T.class_of(Formula))
+      url "foo-1.0"
+    end
+    first_installer = described_class.new(first_formula, ignore_deps: true)
+    second_installer = described_class.new(second_formula, ignore_deps: true)
+
+    [first_installer, second_installer].each do |installer|
+      allow(installer).to receive_messages(pour_bottle?: true, quiet?: true)
+      allow(installer).to receive(:check_conflicts).and_raise("install failed")
+    end
+    expect(first_formula).to receive(:lock).ordered
+    expect(first_formula).to receive(:unlock).ordered
+    expect(second_formula).to receive(:lock).ordered
+    expect(second_formula).to receive(:unlock).ordered
+
+    expect { first_installer.install }.to raise_error("install failed")
+    expect { second_installer.install }.to raise_error("install failed")
+    expect(locked).to be_empty
+  end
+
   specify "Formula is not poured from bottle when compiler specified" do
     temporary_install(TestballBottle.new, cc: "clang") do |f|
       tab = Tab.for_formula(f)
@@ -143,6 +172,37 @@ RSpec.describe FormulaInstaller do
       expect(installer).to receive(:post_install).ordered
 
       installer.finish
+    end
+  end
+
+  specify "installation runs fetch before install in a shared staging directory" do
+    temporary_install(TestballFetch.new) do |f|
+      expect(f.prefix/"fetched").to be_a_file
+    end
+  end
+
+  describe "#run_fetch" do
+    it "runs the fetch phase with network access and a writable cache" do
+      formula = formula("sandboxed-fetch") do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+
+        def fetch; end
+      end
+      installer = described_class.new(formula)
+      sandbox = instance_double(Sandbox).as_null_object
+
+      allow(formula).to receive(:logs).and_return(mktmpdir)
+      allow(Sandbox).to receive_messages(new: sandbox, use_for?: true)
+      expect(sandbox).to receive(:allow_write_temp_and_cache)
+      expect(sandbox).not_to receive(:allow_write_cellar)
+      expect(sandbox).not_to receive(:deny_all_network)
+      expect(sandbox).to receive(:run) do |*args|
+        expect(args).to include(HOMEBREW_LIBRARY_PATH/"build.rb", formula.path)
+        expect(ENV.fetch("HOMEBREW_BUILD_FETCH_PHASE")).to eq("1")
+      end
+
+      installer.run_fetch
     end
   end
 
@@ -251,7 +311,8 @@ RSpec.describe FormulaInstaller do
     let(:downloader) { instance_double(AbstractDownloadStrategy, basename: "missing-bottle-tab", stage: nil) }
     let(:downloadable) { instance_double(Resource, downloader:) }
     let(:tab) do
-      instance_double(Tab, changed_files: nil, source: { "versions" => {} }, write: nil).as_null_object
+      instance_double(Tab, changed_files: nil, linkage_files: nil, binary_relocation_files: nil,
+                      source: { "versions" => {} }, write: nil).as_null_object
     end
     let(:keg) { instance_double(Keg) }
 
@@ -265,7 +326,7 @@ RSpec.describe FormulaInstaller do
     end
 
     it "preserves the skip-linkage decision for the default bottle domain" do
-      expect(keg).to receive(:replace_placeholders_with_locations).with(nil, skip_linkage: true)
+      expect(keg).to receive(:replace_placeholders_with_locations).with(nil, skip_linkage: true, linkage_files: nil)
 
       installer.pour
     end
@@ -273,7 +334,7 @@ RSpec.describe FormulaInstaller do
     it "relocates dynamic linkage without metadata from a bottle mirror" do
       ENV["HOMEBREW_BOTTLE_DOMAIN"] = "https://mirror.example.com"
 
-      expect(keg).to receive(:replace_placeholders_with_locations).with(nil, skip_linkage: false)
+      expect(keg).to receive(:replace_placeholders_with_locations).with(nil, skip_linkage: false, linkage_files: nil)
 
       installer.pour
     end
@@ -1552,6 +1613,34 @@ RSpec.describe FormulaInstaller do
       installer.build
 
       expect(installer.formula).to eq(source_formula)
+    end
+
+    it "builds offline in the fetch phase's staging directory when fetch is defined" do
+      formula = formula("offline-build") do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+
+        def fetch; end
+      end
+      installer = described_class.new(formula)
+      sandbox = instance_double(Sandbox).as_null_object
+
+      allow(formula).to receive(:logs).and_return(mktmpdir)
+      allow(Sandbox).to receive_messages(new: sandbox, use_for?: true)
+      expect(installer).to receive(:run_fetch) do |staging_path:|
+        expect(staging_path).to be_a_directory
+      end
+      expect(sandbox).to receive(:deny_all_network)
+      expect(sandbox).not_to receive(:allow_write_temp_and_cache)
+      expect(sandbox).to receive(:run) do
+        staging_path = Pathname(ENV.fetch("HOMEBREW_BUILD_STAGING_PATH"))
+        expect(staging_path).to be_a_directory
+        FileUtils.rm_r(staging_path)
+        (formula.prefix/"bin").mkpath
+        (formula.prefix/"bin/foo").write ""
+      end
+
+      installer.build
     end
 
     it "raises when formula is loaded from API and source download fails" do

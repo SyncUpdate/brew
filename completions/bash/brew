@@ -838,7 +838,6 @@ install)
         --force-cleanup
         --global
         --help
-        --jobs
         --no-upgrade
         --quiet
         --upgrade
@@ -3096,6 +3095,7 @@ _brew_tests() {
       --fail-fast
       --generic
       --help
+      --load-only
       --no-parallel
       --online
       --only
