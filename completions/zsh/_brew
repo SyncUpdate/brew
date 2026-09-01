@@ -165,6 +165,7 @@ __brew_internal_commands() {
     '--taps:Display the path to Homebrew’s Taps directory'
     '--version:Print the version numbers of Homebrew, Homebrew/homebrew-core and Homebrew/homebrew-cask (if tapped) to standard output'
     'alias:Show an alias'\''s command'
+    'analytics:Control Homebrew'\''s anonymous aggregate user behaviour analytics'
     'as-console-user:Run a Homebrew command as the active macOS console user'
     'audit:Check formula or cask for Homebrew coding style violations'
     'autoremove:Uninstall formulae that were only installed as a dependency of another formula and are now no longer needed'
@@ -240,7 +241,7 @@ __brew_internal_commands() {
     'source:Open a formula'\''s source repository in a browser, or open Homebrew'\''s own repository if no argument is provided'
     'style:Check formulae or files for conformance to Homebrew style guidelines'
     'tab:Edit tab information for installed formulae or casks'
-    'tap:Tap a formula repository'
+    'tap:Tap a repository containing formulae, casks, or external commands'
     'tap-info:Show detailed information about one or more taps'
     'tap-new:Generate the template files for a new tap'
     'test:Run the test method provided by an installed formula'
@@ -274,7 +275,6 @@ __brew_internal_commands() {
   if [[ -n ${HOMEBREW_DEVELOPER:-} ]]; then
     commands+=(
       'advisory-match:Match formula against OSV.dev (GIT, language-registry and distro ecosystems) and CPANSA to produce candidate `BREW-*` advisory records for https://github.com/Homebrew/advisory-database'
-      'analytics:Control Homebrew'\''s anonymous aggregate user behaviour analytics'
       'determine-test-runners:Determines the runners used to test formulae or their dependents'
       'dispatch-build-bottle:Build bottles for these formulae with GitHub Actions'
       'formula-analytics:Query Homebrew'\''s analytics'
@@ -540,7 +540,7 @@ _brew_audit() {
     '--display-filename[Prefix every line of output with the file or formula name being audited, to make output easy to grep]' \
     '(--only)--except[Specify a comma-separated method list to skip running the methods named `audit_`method]' \
     '(--only-cops --strict --only-cops --only)--except-cops[Specify a comma-separated cops list to skip checking for violations of the listed RuboCop cops]' \
-    '--fix[Fix style violations automatically using RuboCop'\''s auto-correct feature]' \
+    '--fix[Fix style violations automatically using RuboCop'\''s auto-correct feature. When passed with `--online` for casks, also correct the `depends_on macos:` stanza and the case of artifact stanzas]' \
     '--git[Run additional, slower style checks that navigate the Git repository]' \
     '--help[Show this message]' \
     '(--changed --tap)--installed[Only check formulae and casks that are currently installed]' \
@@ -2532,7 +2532,7 @@ _brew_test_bot() {
 # brew tests
 _brew_tests() {
   _arguments \
-    '(--only)--changed[Only runs tests on files that were changed from the `main` branch]' \
+    '(--only --shard)--changed[Only runs tests on files that were changed from the `main` branch]' \
     '--coverage[Generate code coverage reports]' \
     '--debug[Enable debugging using `ruby/debug`, or surface the standard `odebug` output]' \
     '--fail-fast[Exit early on the first failing test]' \
@@ -2541,11 +2541,12 @@ _brew_tests() {
     '--load-only[Load each test file independently without running its examples]' \
     '--no-parallel[Run tests serially]' \
     '--online[Include tests that use the GitHub API and tests that use any of the taps for official external commands]' \
-    '(--changed)--only[Run only `test_script_spec.rb`. Appending `:line_number` will start at a specific line]' \
+    '(--changed --shard)--only[Run only `test_script_spec.rb`. Appending `:line_number` will start at a specific line]' \
     '--profile[Output the n slowest tests. When run without `--no-parallel` this will output the slowest tests for each parallel test process]' \
     '--quiet[Make some output more quiet]' \
     '(--stackprof --vernier)--ruby-prof[Use `ruby-prof` to profile tests]' \
     '--seed[Randomise tests with the specified value instead of a random seed]' \
+    '(--changed --only)--shard[Run only `index` of `total` test shards]' \
     '(--vernier --ruby-prof)--stackprof[Use `stackprof` to profile tests]' \
     '--verbose[Make some output more verbose]' \
     '(--stackprof --ruby-prof)--vernier[Use `vernier` to profile tests]'

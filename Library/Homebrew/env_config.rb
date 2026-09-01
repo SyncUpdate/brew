@@ -612,6 +612,11 @@ module Homebrew
                      "shadowed by other commands earlier on `$PATH`.",
         boolean:     true,
       },
+      HOMEBREW_NO_RELOCATE_BUILD_PREFIX:         {
+        description: "If set, do not relocate bottles built for a different prefix at install time. " \
+                     "Homebrew will build from source instead.",
+        boolean:     true,
+      },
       HOMEBREW_NO_REQUIRE_TAP_TRUST:             {
         # odeprecated: remove in a later release after tap trust checks are the default.
         description: "If set, do not require non-official tap formulae, casks or commands to be trusted. " \

@@ -550,7 +550,8 @@ class Formula
   # The {Bottle} object for the currently active {SoftwareSpec}.
   sig { returns(T.nilable(Bottle)) }
   def bottle
-    @bottle ||= T.let(Bottle.new(self, bottle_specification), T.nilable(Bottle)) if bottled?
+    bottle = @bottle_candidate ||= T.let(bottle_for_tag(Utils::Bottles.tag), T.nilable(Bottle))
+    bottle if bottle && (force_bottle || bottle.compatible_locations?)
   end
 
   # The {Bottle} object for given tag.
@@ -2160,7 +2161,7 @@ class Formula
       -DCMAKE_FIND_FRAMEWORK=#{find_framework}
       -DCMAKE_VERBOSE_MAKEFILE=ON
       -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=#{HOMEBREW_LIBRARY_PATH}/cmake/trap_fetchcontent_provider.cmake
-      -Wno-dev
+      -Wno-author
       -DBUILD_TESTING=OFF
       -DCCACHE_FOUND=OFF
     ]
@@ -3528,7 +3529,7 @@ class Formula
   # {#std_cmake_args}:
   #
   # ```ruby
-  # system "cmake", ".", *std_cmake_args
+  # system "cmake", "-S", ".", "-B", "build", *std_cmake_args
   # ```
   #
   # If the arguments given to `configure` (or `make` or `cmake`) are depending

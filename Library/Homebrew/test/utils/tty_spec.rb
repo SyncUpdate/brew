@@ -6,6 +6,29 @@ RSpec.describe Tty do
     it "removes ANSI escape codes from a string" do
       expect(described_class.strip_ansi("\033[36;7mhello\033[0m")).to eq("hello")
     end
+
+    it "removes terminal control strings, C1 controls, bells, and carriage returns" do
+      string = [
+        "\e[31mred\e[0m",
+        "\e]0;title\a",
+        "\ePdevice-control\e\\",
+        "\e_application-command\e\\",
+        "\e^privacy-message\e\\",
+        "\u009B31mC1 red\u009B0m",
+        "\u009Dtitle\u009C",
+        "bell\a carriage\rreturn",
+        "lone escape\e",
+      ].join(" ")
+
+      expect(described_class.strip_ansi(string)).to eq("red     C1 red  bell carriagereturn lone escape")
+    end
+
+    it "sanitises binary strings without changing their encoding" do
+      string = "A\xFF\e[31mB".b
+      sanitised = described_class.strip_ansi(string)
+
+      expect([sanitised, sanitised.encoding]).to eq(["A\xFFB".b, Encoding::ASCII_8BIT])
+    end
   end
 
   describe "::collapse_carriage_returns" do
@@ -37,6 +60,24 @@ RSpec.describe Tty do
   describe "::end_synchronized_update" do
     it "returns the DEC private mode 2026 reset sequence" do
       expect(described_class.end_synchronized_update).to eq("\033[?2026l")
+    end
+  end
+
+  describe "::size" do
+    before do
+      described_class.remove_instance_variable(:@size) if described_class.instance_variable_defined?(:@size)
+    end
+
+    after do
+      described_class.remove_instance_variable(:@size) if described_class.instance_variable_defined?(:@size)
+    end
+
+    it "memoises a failed `stty size` probe instead of respawning it" do
+      expect(described_class).to receive(:`).with("/bin/stty size 2>/dev/null").once.and_return("")
+
+      # We call this twice to check the failure is memoised
+      expect(described_class.size).to be_nil
+      expect(described_class.size).to be_nil
     end
   end
 

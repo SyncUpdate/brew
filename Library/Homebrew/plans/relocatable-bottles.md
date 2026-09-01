@@ -5,8 +5,8 @@
 Every Homebrew/core bottle pours at every prefix under 65 characters long.
 
 - This applies on x86_64 Linux, arm64 Linux and arm64 macOS; longer prefixes
-  build from source. Intel macOS keeps its legacy `/usr/local` bottling
-  until EOL and is out of scope.
+  build from source. Intel macOS is out of scope: Homebrew/core no longer
+  builds Intel bottles outside the portable Ruby toolchain.
 - It includes today's non-relocatable (cellar-pinned) bottles, i.e. those
   that are neither `cellar :any` nor `cellar :any_skip_relocation`. The
   padded-prefix scheme below handles most of them; the residual classes in
@@ -16,7 +16,8 @@ Every Homebrew/core bottle pours at every prefix under 65 characters long.
   performance helps everyone on every prefix, making more bottles
   relocatable helps every custom prefix at any length, pour-time patching
   helps short custom prefixes, and the 64-byte migration extends that to
-  long ones. Phases run sequentially, not in parallel.
+  long ones. Phases run sequentially, not in parallel, with a multi-month
+  user soak before catalogue-wide padded builds begin.
 
 This is a living document: edit or remove steps as they are implemented so
 it always describes the remaining work.
@@ -30,6 +31,10 @@ This change is part of [`plans/relocatable-bottles.md`](https://github.com/Homeb
 Any benchmark quoted in a commit message must be the full hyperfine
 output from `brew benchmark` (using its `--exec` mode for bespoke
 workloads), never hand-summarised numbers.
+
+Changes to homebrew/core (re-marks, formula fixes, sweeps) use one commit
+per formula with the subject `<formula>: <change>`, never one commit
+spanning many formulae.
 
 Pull requests must always fill in the repository's pull request
 template (`.github/PULL_REQUEST_TEMPLATE.md`), never bypass it
@@ -83,17 +88,19 @@ Raw C strings are the only length-limited content at pour time:
 - ELF RPATHs and interpreters can grow because patchelf.rb rewrites them into
   a new segment.
 - A raw C string can only be replaced by an equal-or-shorter string, padded
-  with NUL bytes.
+  with NUL bytes; a string in an ELF dynamic string table that a linker has
+  suffix-merged (referenced from its interior) is instead padded with extra
+  path separators after the prefix so those references keep their offsets.
 
 `Keg#relocate_build_prefix` (`keg_relocate.rb`) implements that NUL-padded
 patching and re-signs patched Mach-O files, and
 `BottleSpecification#compatible_locations?` allows pouring a pinned bottle
-into an equal-or-shorter prefix, both gated behind the undocumented
-`HOMEBREW_RELOCATE_BUILD_PREFIX` environment variable. History: added
-default-on in #12534 (December 2021), reverted twice, then gated behind the
-variable in #13217 after #13209 reported hard install failures at a prefix
-longer than the bottled one. It is referenced nowhere in homebrew/core,
-homebrew-test-bot, homebrew/actions or homebrew/install today.
+into an equal-or-shorter prefix by default. The documented
+`HOMEBREW_NO_RELOCATE_BUILD_PREFIX` variable disables this. History:
+default-on was added in #12534 (December 2021), reverted twice, then gated
+behind a positive variable in #13217 after #13209 reported hard failures at
+a prefix longer than the bottled one. The length check now prevents that
+case and the positive variable was removed when default-on was restored.
 
 Prior art: conda-forge builds packages under a long placeholder prefix (up
 to 255 characters) and rewrites it at install time, including NUL-padded
@@ -135,14 +142,18 @@ Replaying the exact `keg_contain?` logic over the contents of 17 pinned and
 2. Push logic and metadata generation to bottle time and away from pour time
    whenever possible: bottle time runs once on CI, pour time runs on every
    user's machine.
-3. The patching feature is pour-time only in its effect. Eligibility and
-   patching are entirely client-side, so it works retroactively for
-   published bottles and needs no homebrew/core changes. Bottle time only
-   adds accelerator metadata, always with a scan fallback, so there is no
-   version coupling.
-4. Bottling migrates to a canonical 64-byte padded build prefix per platform.
-   Every embedded C string then carries 64 bytes of patchable material, so
-   bottles patch down to any prefix up to 64 bytes, including the defaults.
+3. Legacy short-built bottle patching is pour-time only in its effect.
+   Eligibility and patching are entirely client-side, so it works
+   retroactively for published bottles and needs no homebrew/core changes.
+   Bottle time only adds accelerator metadata, always with a scan fallback,
+   so there is no version coupling for that stage.
+4. Bottling uses a canonical 64-byte padded build prefix per platform. Its
+   tab records `padded_prefix: true`, while formulae retain the tag's default
+   cellar. Every embedded C string then carries 64 bytes of patchable
+   material, so bottles patch down to any prefix up to 64 bytes, including
+   the defaults. Clients must understand the tab marker before the first
+   padded bottles are published, so the brew release precedes the
+   infrastructure cutover.
    64 rather than conda's 255 because CI runs `brew test` at the padded
    prefix, where Unix socket paths (`sun_path` is 104 bytes) and shebang
    limits punish very long prefixes.
@@ -155,17 +166,18 @@ Replaying the exact `keg_contain?` logic over the contents of 17 pinned and
 6. A bottle built at a non-default prefix records the literal prefix string
    as `built_prefix` in its tab; absence means the tag's default prefix, so
    tabs for today's bottles are unchanged. The literal string, not a
-   name/version pair, so the constant can change without a mapping.
+   name/version pair, so the constant can change without a mapping. A
+   canonical padded build also records `padded_prefix: true` there.
 7. The user contract is global, not per-bottle, for comprehensibility: one
    number (64) once migration completes; until then the interim rule is
    prefix length up to the bottled default (13 for arm64 macOS, 26 for
    Linux).
-8. Relocation-by-patching defaults on only when the whole catalogue is
-   64-built on the target platforms.
-9. `HOMEBREW_RELOCATE_BUILD_PREFIX` is added to `env_config.rb` with
-   `hidden: true` until the feature is hardened and diagnosable, and is
-   ultimately retired in favour of a `HOMEBREW_NO_RELOCATE_BUILD_PREFIX`
-   escape hatch.
+8. Relocation-by-patching defaults on for equal-or-shorter prefixes. This
+   initially means up to 13 bytes on arm64 macOS and 26 on Linux. Only after
+   a multi-month soak and the padded catalogue migration does the default
+   contract expand to 64 bytes.
+9. `HOMEBREW_NO_RELOCATE_BUILD_PREFIX` is the documented escape hatch,
+   retained through the soak and padded migration.
 10. Non-intuitive logic must always be commented, especially relocation edge
     cases (NUL padding, string-table subtleties, codesign behaviour): this
     code is touched rarely and debugged under pressure.
@@ -175,7 +187,7 @@ Replaying the exact `keg_contain?` logic over the contents of 17 pinned and
     sequence in a file as a pin: a wrongly pinned bottle forces source
     builds for every non-default-prefix user and poisons its whole
     dependent subtree, whereas a wrongly relocatable one surfaces as a
-    per-formula bug report with a trivial fix and is caught by the Phase 2
+    per-formula bug report with a trivial fix and is caught by the Phase 4
     validation sweep and the test-bot relocated-pour test. Concretely, ELF
     files are scanned by structure rather than as a whole: only the
     interpreter the loader uses, the dynamic strings the loader references
@@ -190,7 +202,8 @@ Replaying the exact `keg_contain?` logic over the contents of 17 pinned and
 Each pinned bottle flipped to `cellar :any` pours at any prefix with no
 length limit and no new machinery.
 
-4. Reconcile checker divergences: resolved. The `abseil` class was pinned
+4. **Completed August 2026.**
+   Reconcile checker divergences: resolved. The `abseil` class was pinned
    by `file_linked_libraries` resolving `@rpath`/`@loader_path` load
    commands against the live keg at bottle time, turning relocatable
    linkage into absolute build-prefix paths; the checker now reads raw
@@ -206,44 +219,45 @@ length limit and no new machinery.
 7. Data-driven ignore extensions where blocker diagnostics show a class is
    functionally dead.
 
-### Phase 2: pour-time patching for pinned bottles (helps short custom prefixes)
+### Phase 2: pour-time patching for pinned bottles (completed August 2026)
 
-Whole dependency closures become pourable at prefixes up to the bottled
-default length (13 bytes arm64 macOS, 26 Linux), covering the hub formulae
+Whole dependency closures now pour at prefixes up to the bottled default
+length (13 bytes arm64 macOS, 26 Linux), covering the hub formulae
 (`openssl@3`, `gettext`, `glib`, `python@3.x`) that Phase 1 cannot.
+Relocation is the default for equal-or-shorter prefixes and
+`HOMEBREW_NO_RELOCATE_BUILD_PREFIX` provides a documented escape hatch.
+This exercises the already-published catalogue across more real custom
+prefixes before Homebrew commits to padded production builds.
 
-8. Hardening tests and fixes for `Keg#relocate_build_prefix`:
-   multi-occurrence strings, several strings per file, hardlinks, the
-   sharball skip, the size-mismatch failure path, codesign on macOS and
-   no-op on Linux, suffix-merged string tables and prefix strings inside
-   load commands.
-9. Observability and diagnostics: the poured keg's tab records patched state
-   and files; the pour decline message (`formula_installer.rb`) compares
-   prefix lengths and states the actionable cause ("prefix 8 characters too
-   long to patch, building from source" versus "patchable: enable
-   relocation").
-10. Add `HOMEBREW_RELOCATE_BUILD_PREFIX` to `env_config.rb` with
-    `hidden: true` so it is typed and testable but not yet public.
-11. Validation workflow: pour all pinned bottles into scratch prefixes with
-    `brew linkage` and smoke tests.
+During a soak of at least a few months, Homebrew/brew CI pairs its existing
+default-prefix test-bot jobs with padded-prefix jobs on x86_64 Linux, arm64
+Linux and arm64 macOS. Both variants run the same source-build, bottle,
+reinstall, linkage and formula-test workflow; the padded jobs neither
+publish nor upload their bottles.
+
+All remaining homebrew/brew and individual-formula fixes (the brew side of
+Phase 3, the upstream hub track and the Completeness items) come before
+anything that touches homebrew/core CI or runs at catalogue scale.
 
 ### Phase 3: migrate bottling to the 64-byte prefix (extends to long prefixes)
 
-12. Shadow builds first: build a pinned plus path-length-sensitive sample at
-    the candidate 64-byte prefixes on all three target platforms.
-13. brew: canonical 64-byte padded prefix constants for x86_64 Linux, arm64
-    Linux and arm64 macOS; bottling emits a symbolic cellar for pinned
-    padded-built bottles (never a 64-character literal in formulae); pour
-    patches down whenever `built_prefix` differs from the local prefix and
-    fits. Patching is unconditional once a bottle is padded-built, because
-    the default prefix is then just another shorter prefix; the hidden
-    variable covers only legacy short-built pinned bottles at custom
-    prefixes until they churn out.
-14. JSON API and formulae.brew.sh: symbolic cellar representation,
-    version-gated for existing consumers.
-15. test-bot: build and test at the padded prefix; relocated-pour smoke test
-    for changed formulae (pour the fresh bottle into a scratch short
-    prefix), Linux first.
+**Client foundations completed August 2026:** canonical 64-byte prefixes
+exist, padded eligibility remains in tab or manifest metadata only and bottle
+selection uses that manifest data. Begin the production steps below only
+after Phase 2 has soaked for at least a few months.
+
+13. Extend the paired test-bot jobs to cover a pinned plus
+    path-length-sensitive sample and representative pinned dependency
+    closures at the candidate 64-byte prefixes on all three target platforms.
+15. test-bot: build changed formulae at the padded prefix, pour each fresh
+    bottle into a scratch short prefix, then run `brew linkage --test` and
+    `brew test`.
+Before cutover, version-gate symbolic cellar and `padded_prefix` metadata
+consumers, release supporting clients and ensure the marker remains
+per-platform rather than merging into `:all`. Resolve socket, shebang and
+build-path failures, audit scanner blind spots, decide the glibc strategy and
+retire or justify `pour_bottle? only_if: :default_prefix` gates.
+
 16. Infra cutover in order: x86_64 Linux runners first (no SIP, biggest
     pinned share), arm64 Linux second, arm64 macOS third.
 
@@ -260,13 +274,20 @@ default length (13 bytes arm64 macOS, 26 Linux), covering the hub formulae
     Old pinned bottles keep pouring unchanged at default prefixes
     throughout.
 
-### Phase 5: default on
+19. Validation sweep, in homebrew/core CI (`workflow_dispatch`) once the
+    stages above are done: pour every pinned bottle into a scratch prefix
+    shorter than the bottled one on each target platform with patching
+    enabled, confirm each tab records `relocated_build_prefix`, run
+    `brew linkage --test` and `brew test`, and report a per-formula table;
+    this is the functional catch-all for scanner blind spots. Not before:
+    it is a mass run whose results change with every rebottle.
 
-19. Only when the catalogue is fully 64-built on the target platforms:
-    relocation-by-patching becomes the default for every prefix up to 64
-    bytes; the hidden variable is retired for
-    `HOMEBREW_NO_RELOCATE_BUILD_PREFIX`; `docs/Bottles.md`,
-    `docs/Installation.md` and homebrew/install messaging state the single
+### Phase 5: extend the default to 64 bytes
+
+20. Only when the catalogue is fully 64-built on the target platforms:
+    relocation-by-patching expands to every prefix up to 64 bytes; retain
+    `HOMEBREW_NO_RELOCATE_BUILD_PREFIX`; update `docs/Bottles.md`,
+    `docs/Installation.md` and homebrew/install messaging with the single
     global contract.
 
 ### Upstream fixes for the hubs
@@ -285,22 +306,21 @@ The padded-prefix scheme alone does not cover every non-`:any` bottle. Each
 residual class below is a goal with its own strategy, tracked to zero or to
 a named, formula-annotated exception:
 
-1. **Absolute symlinks into the prefix.** The checker pins bottles
-   containing them and nothing rewrites symlink targets at pour. Strategy:
-   at bottle time convert self-keg absolute symlinks to relative ones
-   (functionally identical); at pour time retarget remaining absolute
-   in-prefix targets as part of patching. Lands with Phase 2 hardening.
+1. **Absolute symlinks into the prefix.** Done: `brew bottle` rewrites
+   absolute symlinks into the prefix or cellar as relative ones
+   (functionally identical) and pouring retargets any left in older
+   bottles from the prefix they were built for.
 2. **Files patchelf must skip** (`protodesc_cold`/`.bun` sections, e.g.
    bun): these keep raw RPATH strings and auto-pin today. Strategy: the
    NUL-padded string patcher handles them at pour. A shortened NUL-padded
    `.dynstr` entry is valid (the loader reads to the first NUL), and under
-   padded builds the replacement always fits. Verified with bun in Phase 2
-   validation.
+   padded builds the replacement always fits. Verified with bun in the
+   Phase 4 validation sweep.
 3. **Scanner blind spots**: prefix strings inside compressed, serialised or
    length-prefixed data that `strings`-based scanning cannot see. Under
    padded builds these become a correctness risk for default-prefix users
    too, since an unseen string never gets patched. Strategy: bottle-time
-   audit of known container formats with warnings; the Phase 2 pour
+   audit of known container formats with warnings; the Phase 4
    validation sweep and the test-bot relocated-pour test are the functional
    catch-all; findings become per-formula fixes. NUL padding inside a
    length-prefixed field can also corrupt rare formats, which the same
@@ -336,8 +356,6 @@ the reason, so the exceptions list stays short, visible and countable.
 
 ## Open questions
 
-- Symbolic cellar spelling and JSON API versioning for third-party
-  consumers.
 - How many formulae fail to build at all at a 64-byte prefix
   (path-length-sensitive build systems), discovered by the Phase 3 shadow
   builds; these block the sweep rather than staying pinned.

@@ -151,6 +151,7 @@ class FormulaInstaller
     @download_queue = download_queue
     @api_bottle = T.let(nil, T.nilable(Bottle))
     @api_bottle_loaded = T.let(false, T::Boolean)
+    @selected_bottle = T.let(nil, T.nilable(Bottle))
     @enqueued_bottle_download = T.let(nil, T.nilable(Downloadable))
 
     # Take the original formula instance, which might have been swapped from an API instance to a source instance
@@ -274,16 +275,24 @@ class FormulaInstaller
 
     return true if formula.local_bottle_path
 
-    bottle = api_bottle || formula.bottle_for_tag(Utils::Bottles.tag)
+    bottle = selected_bottle
     return false if bottle.nil?
 
     unless bottle.compatible_locations?
       if output_warning
-        prefix = Pathname(bottle.cellar.to_s).parent
+        cellar = bottle.built_cellar.to_s
+        prefix = Pathname(cellar).parent
+        cause = if Homebrew::EnvConfig.no_relocate_build_prefix?
+          "`HOMEBREW_NO_RELOCATE_BUILD_PREFIX` disables bottle build-prefix relocation."
+        else
+          "Your prefix `#{HOMEBREW_PREFIX}` is #{HOMEBREW_PREFIX.to_s.length} characters long, but this bottle " \
+            "can only be relocated to a prefix with a maximum length of #{prefix.to_s.length} characters."
+        end
         opoo <<~EOS
           Building #{formula.full_name} from source as the bottle needs:
-          - `HOMEBREW_CELLAR=#{bottle.cellar}` (yours is #{HOMEBREW_CELLAR})
+          - `HOMEBREW_CELLAR=#{cellar}` (yours is #{HOMEBREW_CELLAR})
           - `HOMEBREW_PREFIX=#{prefix}` (yours is #{HOMEBREW_PREFIX})
+          #{cause}
         EOS
       end
       return false
@@ -374,12 +383,12 @@ class FormulaInstaller
     # Setup bottle_tab_runtime_dependencies for compute_dependencies and
     # bottle_built_os_version for dependency resolution.
     begin
-      bottle_tab_attributes = formula.bottle_tab_attributes
+      bottle = selected_bottle
+      bottle_tab_attributes = bottle&.tab_attributes || {}
       raw_deps = bottle_tab_attributes.fetch("runtime_dependencies", []).then { |deps| deps || [] }
       @bottle_tab_runtime_dependencies = raw_deps.to_h { |dep| [dep["full_name"], dep] }.freeze
 
-      if (bottle_tag = formula.bottle_for_tag(Utils::Bottles.tag)&.tag) &&
-         bottle_tag.system != :all
+      if bottle && bottle.tag.system != :all
         # Extract the OS version the bottle was built on.
         # This ensures that when installing older bottles (e.g. Sonoma bottle on Sequoia),
         # we resolve dependencies according to the bottle's built OS, not the current OS.
@@ -1047,7 +1056,7 @@ on_request: installed_on_request?, options:)
           SBOM.spdxfile(formula),
           homebrew_version: HOMEBREW_VERSION,
           time:             install_time,
-          supplement:       (api_bottle || formula.bottle)&.sbom_supplement,
+          supplement:       selected_bottle&.sbom_supplement,
         )
       end
     elsif Homebrew::EnvConfig.sbom? && !build_bottle?
@@ -1513,15 +1522,22 @@ on_request: installed_on_request?, options:)
     end
   end
 
-  sig { params(quiet: T::Boolean, enqueue: T::Boolean).void }
-  def fetch_bottle_tab(quiet: false, enqueue: false)
+  sig { params(quiet: T::Boolean, enqueue: T::Boolean, bottle: T.nilable(Bottle)).void }
+  def fetch_bottle_tab(quiet: false, enqueue: false, bottle: nil)
     return if @fetch_bottle_tab
     return if formula.local_bottle_path
 
-    if (bottle = api_bottle || formula.bottle) &&
-       (manifest_resource = bottle.github_packages_manifest_resource) &&
-       enqueue
-      download_queue.enqueue(manifest_resource) unless manifest_resource.downloaded_and_valid?
+    bottle ||= selected_bottle
+    if bottle && (manifest_resource = bottle.github_packages_manifest_resource)
+      if enqueue
+        download_queue.enqueue(manifest_resource) unless manifest_resource.downloaded_and_valid?
+      else
+        begin
+          bottle.fetch_tab(quiet:)
+        rescue DownloadError, Resource::BottleManifest::Error
+          # do nothing
+        end
+      end
     else
       begin
         formula.fetch_bottle_tab(quiet: quiet)
@@ -1613,7 +1629,7 @@ on_request: installed_on_request?, options:)
     if (bottle_path = formula.local_bottle_path)
       Resource::Local.new(bottle_path.to_s)
     elsif pour_bottle?
-      bottle = api_bottle || formula.bottle
+      bottle = selected_bottle
       odie "Bottle for #{formula.full_name} is unavailable." if bottle.nil?
 
       bottle
@@ -1623,6 +1639,11 @@ on_request: installed_on_request?, options:)
 
       resource
     end
+  end
+
+  sig { returns(T.nilable(Bottle)) }
+  def selected_bottle
+    @selected_bottle ||= api_bottle || formula.bottle || formula.bottle_for_tag(Utils::Bottles.tag)
   end
 
   sig { returns(T.nilable(Bottle)) }
@@ -1636,6 +1657,7 @@ on_request: installed_on_request?, options:)
     @api_bottle = Homebrew::API::FormulaBottle.bottle(
       name:           formula.name,
       formula_struct: Homebrew::API::Internal.formula_struct(formula.name),
+      formula:,
     )
   end
 
@@ -1701,15 +1723,33 @@ on_request: installed_on_request?, options:)
     end
     keg.replace_placeholders_with_locations(tab.changed_files, skip_linkage:, linkage_files: tab.linkage_files)
 
-    cellar = formula.bottle_specification.tag_to_cellar(Utils::Bottles.tag)
+    # Older bottles may still contain absolute symlinks into their build prefix.
+    build_cellar = if tab.built_prefix
+      "#{tab.built_prefix}/Cellar"
+    else
+      Utils::Bottles.tag.default_cellar
+    end
+    build_prefix = Pathname(build_cellar).parent.to_s
+    if build_prefix != HOMEBREW_PREFIX.to_s
+      keg.relativize_prefix_symlinks!(prefix: build_prefix,
+                                      cellar: build_cellar)
+    end
+
+    bottle_specification = formula.bottle_specification
+    tag = Utils::Bottles.tag
+    cellar = bottle_specification.tag_to_cellar(tag)
     return if BottleSpecification::RELOCATABLE_CELLARS.include?(cellar)
 
-    prefix = Pathname(cellar).parent.to_s
-    return if cellar == HOMEBREW_CELLAR.to_s && prefix == HOMEBREW_PREFIX.to_s
+    prefix = tab.built_prefix || Pathname(cellar.to_s).parent.to_s
+    build_cellar = tab.built_prefix ? "#{prefix}/Cellar" : cellar.to_s
+    return if build_cellar == HOMEBREW_CELLAR.to_s && prefix == HOMEBREW_PREFIX.to_s
 
-    return unless ENV["HOMEBREW_RELOCATE_BUILD_PREFIX"]
+    return if Homebrew::EnvConfig.no_relocate_build_prefix?
 
-    keg.relocate_build_prefix(keg, prefix, HOMEBREW_PREFIX, files: tab.binary_relocation_files)
+    tab.relocated_build_prefix = prefix
+    tab.relocated_files = keg.relocate_build_prefix(keg, prefix, HOMEBREW_PREFIX,
+                                                    files: tab.binary_relocation_files)
+    tab.write
   end
 
   sig { override.params(output: T.nilable(String)).void }

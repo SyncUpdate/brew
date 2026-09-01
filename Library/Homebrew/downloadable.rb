@@ -14,47 +14,128 @@ module Downloadable
   abstract!
   requires_ancestor { Kernel }
 
-  # Remembers which files have already been checksum-verified in this process,
-  # so the same unchanged file is not hashed once per download object that
-  # references it.
+  # Remembers the SHA-256 digest of each file hashed in this process, keyed
+  # by its resolved path, size and modification time, so a file is hashed
+  # at most once per on-disk state no matter how many download objects or
+  # verifications reference it.
   class VerificationCache
     include Context
     include Utils::Output::Mixin
 
-    sig { void }
-    def initialize
-      require "concurrent/set"
+    # Raised by the integration-test-only check in `Pathname#sha256` when an
+    # unchanged file is hashed again without this cache being involved.
+    class RepeatedHashingError < RuntimeError; end
 
-      @verified = T.let(Concurrent::Set.new, Concurrent::Set)
-    end
+    CACHE_MEDIATED_HASHING_KEY = :homebrew_verification_cache_mediated_hashing
 
-    # Verifies the file against the checksum unless this file, in this
-    # state, has already been verified against it in this process.
-    sig { params(filename: Pathname, checksum: T.nilable(Checksum)).void }
-    def verify(filename, checksum)
-      key = key_for(filename, checksum)
-
-      if key && @verified.include?(key)
-        odebug "Skipping checksum verification for '#{filename.basename}' (already verified in this run)"
-        return
+    class << self
+      # The identity and change metadata that determine whether a file can
+      # be considered unchanged on disk: the device, inode, size and
+      # nanosecond modification and change times ensure a replaced or
+      # rewritten file is treated as new, even when its size and
+      # modification time are restored, as the change time cannot be set
+      # from userland.
+      sig { params(filename: Pathname).returns(T.nilable(String)) }
+      def on_disk_state(filename)
+        stat = filename.stat
+        "#{stat.dev}|#{stat.ino}|#{stat.size}|" \
+          "#{stat.mtime.to_i}.#{stat.mtime.nsec}|#{stat.ctime.to_i}.#{stat.ctime.nsec}"
+      rescue SystemCallError
+        nil
       end
 
-      ohai "Verifying checksum for '#{filename.basename}'" if verbose?
-      filename.verify_checksum(checksum)
+      # Guards against repeated verification creeping in without this cache:
+      # every `Pathname#sha256` call reports here and, in `brew` commands
+      # run by integration tests only, rehashing an unchanged file outside
+      # the cache raises. Hashing is cheap there while a repeat in real use
+      # would rehash a download that can be hundreds of megabytes.
+      sig { params(filename: Pathname).void }
+      def check_repeated_hashing(filename)
+        return if ENV["HOMEBREW_CHECK_REPEATED_HASHING"].blank?
 
-      @verified.add(key) if key
+        state = on_disk_state(filename)
+        return if state.nil?
+
+        require "concurrent/set"
+        @hashed_states ||= T.let(Concurrent::Set.new, T.nilable(Concurrent::Set))
+        # `add?` atomically records the state and reports whether it was new.
+        return unless @hashed_states.add?(state).nil?
+        return if Thread.current[CACHE_MEDIATED_HASHING_KEY]
+
+        raise RepeatedHashingError, <<~ERROR
+          Refusing to hash '#{filename}' again: its unchanged contents were already hashed in this process.
+          Verify downloads through `Downloadable#verify_download_integrity` so its digest cache reuses the existing hash.
+          This check only runs when `$HOMEBREW_CHECK_REPEATED_HASHING` is set, e.g. in Homebrew's integration tests.
+        ERROR
+      end
+
+      sig { type_parameters(:U).params(_block: T.proc.returns(T.type_parameter(:U))).returns(T.type_parameter(:U)) }
+      def while_hashing_through_cache(&_block)
+        Thread.current[CACHE_MEDIATED_HASHING_KEY] = true
+        yield
+      ensure
+        Thread.current[CACHE_MEDIATED_HASHING_KEY] = nil
+      end
+    end
+
+    sig { void }
+    def initialize
+      require "concurrent/map"
+
+      @digests = T.let(Concurrent::Map.new, Concurrent::Map)
+    end
+
+    # Verifies the file against the checksum. Repeated verifications of a
+    # file unchanged on disk only compare against its remembered digest.
+    sig { params(filename: Pathname, checksum: T.nilable(Checksum)).void }
+    def verify(filename, checksum)
+      raise ChecksumMissingError if checksum.blank?
+
+      ohai "Verifying checksum for '#{filename.basename}'" if verbose?
+      actual = Checksum.new(sha256(filename))
+      return if checksum == actual
+
+      raise ChecksumMismatchError.new(filename, checksum, actual)
+    end
+
+    # The file's SHA-256 digest, hashing its contents at most once per
+    # on-disk state in this process.
+    sig { params(filename: Pathname).returns(String) }
+    def sha256(filename)
+      key = key_for(filename)
+      if key && (digest = @digests[key])
+        odebug "Skipping SHA-256 hashing for '#{filename.basename}' (unchanged since last hashed in this run)"
+        return digest
+      end
+
+      digest = self.class.while_hashing_through_cache { filename.sha256 }
+      # Only remember the digest when the file did not change while its
+      # contents were being hashed.
+      @digests[key] = digest if key && key == key_for(filename)
+      digest
+    end
+
+    # Forgets the remembered digest for the file's current on-disk state,
+    # for callers that suspect its contents changed without the metadata
+    # that keys this cache changing, e.g. in-place corruption suggested by
+    # a failed extraction.
+    sig { params(filename: Pathname).void }
+    def invalidate!(filename)
+      key = key_for(filename)
+      @digests.delete(key) if key
     end
 
     private
 
-    # The size and modification time ensure a file downloaded again to the
-    # same path (e.g. after `--force` cleared the cache) is verified again.
-    sig { params(filename: Pathname, checksum: T.nilable(Checksum)).returns(T.nilable(String)) }
-    def key_for(filename, checksum)
-      return if checksum.nil?
+    # The resolved path unifies verifications through a symlink with those
+    # through its target, e.g. a download verified once at its cache
+    # location and once through the cache's symlink to it.
+    sig { params(filename: Pathname).returns(T.nilable(String)) }
+    def key_for(filename)
+      state = self.class.on_disk_state(filename)
+      return if state.nil?
 
-      stat = filename.stat
-      "#{filename.expand_path}|#{checksum.hexdigest}|#{stat.size}|#{stat.mtime.to_f}"
+      "#{filename.realpath}|#{state}"
     rescue SystemCallError
       nil
     end
@@ -248,7 +329,7 @@ module Downloadable
       Cannot verify integrity of '#{filename.basename}'.
       No checksum was provided.
       For your reference, the checksum is:
-        sha256 "#{filename.sha256}"
+        sha256 "#{Downloadable.verification_cache.sha256(filename)}"
     EOS
   end
 

@@ -123,6 +123,39 @@ RSpec.describe Homebrew::DownloadQueue do
     expect(Homebrew).not_to have_failed
   end
 
+  it "removes known-bad cached files for checksum mismatch failures" do
+    cached_download.dirname.mkpath
+    cached_download.write("corrupt")
+    allow(retryable_download).to receive(:fetch)
+      .and_raise(ChecksumMismatchError.new(cached_download, Checksum.new("aa" * 32), Checksum.new("bb" * 32)))
+
+    download_queue.enqueue(downloadable)
+
+    # The reported checksum comes from the failed verification rather than
+    # rehashing the file, which the report itself has already removed.
+    expect { download_queue.fetch }
+      .to output(/reports different checksum: +#{"aa" * 32}/).to_stderr
+      .and output(/checksum of downloaded file: +#{"bb" * 32}/).to_stdout
+    expect(download_queue.failed_downloads).to eq([downloadable])
+    expect(cached_download).not_to exist
+    expect(Homebrew).to have_failed
+  end
+
+  it "removes known-bad cached files for checksum mismatch failures in serial mode" do
+    allow(Homebrew::EnvConfig).to receive(:download_concurrency).and_return(1)
+    cached_download.dirname.mkpath
+    cached_download.write("corrupt")
+    allow(retryable_download).to receive(:fetch)
+      .and_raise(ChecksumMismatchError.new(cached_download, Checksum.new("aa" * 32), Checksum.new("bb" * 32)))
+
+    download_queue.enqueue(downloadable)
+
+    expect { download_queue.fetch }.to output(/reports different checksum/).to_stderr
+    expect(download_queue.failed_downloads).to eq([downloadable])
+    expect(cached_download).not_to exist
+    expect(Homebrew).to have_failed
+  end
+
   it "removes known-bad cached files for tolerated checksum mismatches" do
     cached_download.dirname.mkpath
     cached_download.write("corrupt")
@@ -148,6 +181,58 @@ RSpec.describe Homebrew::DownloadQueue do
     expect { download_queue.fetch(allow_failures: true) }.to output(/✘/).to_stderr
     expect(cached_download).not_to exist
     expect(Homebrew).not_to have_failed
+  end
+
+  it "removes known-bad cached files for fatal checksum mismatches" do
+    cached_download.dirname.mkpath
+    cached_download.write("corrupt")
+    allow(retryable_download).to receive(:fetch)
+      .and_raise(ChecksumMismatchError.new(cached_download, Checksum.new("aa" * 32), Checksum.new("bb" * 32)))
+
+    download_queue.enqueue(downloadable)
+
+    expect { download_queue.fetch }.to output(/different checksum/).to_stderr
+    expect(cached_download).not_to exist
+    expect(download_queue.failed_downloads).to eq([downloadable])
+  end
+
+  it "reports every fatal checksum mismatch when downloads share a cached file" do
+    cached_download.dirname.mkpath
+    cached_download.write("corrupt")
+    shared_downloadable = instance_double(
+      Downloadable,
+      cached_download:,
+      checksum:                        nil,
+      downloaded_and_valid?:           false,
+      downloader:                      nil,
+      download_queue_message:          "API Source testball",
+      download_queue_name:             "testball",
+      download_queue_type:             "API Source",
+      staged_path_from_download_queue: nil,
+    )
+    allow(retryable_download).to receive(:fetch)
+      .and_raise(ChecksumMismatchError.new(cached_download, Checksum.new("aa" * 32), Checksum.new("bb" * 32)))
+
+    download_queue.enqueue(downloadable)
+    download_queue.enqueue(shared_downloadable)
+
+    expect { download_queue.fetch }.to output(/different checksum.*different checksum/m).to_stderr
+    expect(cached_download).not_to exist
+    expect(download_queue.failed_downloads).to contain_exactly(downloadable, shared_downloadable)
+  end
+
+  it "removes known-bad cached files for fatal checksum mismatches in serial mode" do
+    allow(Homebrew::EnvConfig).to receive(:download_concurrency).and_return(1)
+    cached_download.dirname.mkpath
+    cached_download.write("corrupt")
+    allow(retryable_download).to receive(:fetch)
+      .and_raise(ChecksumMismatchError.new(cached_download, Checksum.new("aa" * 32), Checksum.new("bb" * 32)))
+
+    download_queue.enqueue(downloadable)
+
+    expect { download_queue.fetch }.to output(/different checksum/).to_stderr
+    expect(cached_download).not_to exist
+    expect(download_queue.failed_downloads).to eq([downloadable])
   end
 
   it "cancels remaining downloads and raises on a bottle manifest failure in serial mode" do

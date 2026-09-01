@@ -144,6 +144,10 @@ class Bottle
     retry
   end
 
+  # Whether the cached bottle can be reused without downloading it again. An
+  # immutable GitHub Packages blob is named after its own digest, so matching
+  # that name is enough to skip the download — but it says nothing about the
+  # file's contents, which every consumer must still verify before extracting.
   sig { override.returns(T::Boolean) }
   def downloaded_and_valid?
     return false unless cached_download.file?
@@ -158,15 +162,18 @@ class Bottle
     downloader.bottle_blob_sha256 == resource_checksum.hexdigest
   end
 
-  # A cached immutable blob is trusted without rehashing it (see
-  # `downloaded_and_valid?`), so a locally corrupted bottle would fail to
-  # extract on every run: verify it after a failed extraction and, when it was
-  # indeed corrupt, discard it and retry with a freshly downloaded one.
+  # Callers verify the cached download before consuming it. On failure, discard
+  # the cached file only when it is genuinely corrupt and retry once with a
+  # fresh download; a file that matches its checksum is kept and the original
+  # error re-raised.
   sig { params(quiet: T::Boolean, _block: T.proc.void).void }
   def with_corrupt_download_retry(quiet: false, &_block)
     yield
-  rescue
-    discard_corrupt_cached_download
+  rescue => e
+    # A checksum mismatch has already hashed the file and proven it
+    # corrupt; only other failures, e.g. during extraction, need a fresh
+    # hash to decide whether the file can be kept.
+    discard_corrupt_cached_download(known_corrupt: e.is_a?(ChecksumMismatchError))
     raise if cached_download.exist?
 
     downloading!
@@ -175,12 +182,20 @@ class Bottle
     yield
   end
 
-  sig { void }
-  def discard_corrupt_cached_download
+  sig { params(known_corrupt: T::Boolean).void }
+  def discard_corrupt_cached_download(known_corrupt: false)
     expected_checksum = resource.checksum
     return if expected_checksum.nil?
     return unless cached_download.file?
-    return if cached_download.sha256 == expected_checksum.hexdigest
+
+    unless known_corrupt
+      # The remembered digest cannot be trusted here: the failed extraction
+      # may mean the file was corrupted in place without changing the
+      # metadata that keys the digest cache, so forget it and hash afresh.
+      verification_cache = Downloadable.verification_cache
+      verification_cache.invalidate!(cached_download)
+      return if verification_cache.sha256(cached_download) == expected_checksum.hexdigest
+    end
 
     opoo "Removing corrupt cached download: #{cached_download.basename}"
     clear_cache
@@ -200,7 +215,22 @@ class Bottle
 
   sig { returns(T::Boolean) }
   def compatible_locations?
-    @spec.compatible_locations?(tag: @tag)
+    return true if compatible_locations_from_tab?
+
+    fetch_tab(quiet: true)
+    compatible_locations_from_tab?
+  rescue DownloadError, Resource::BottleManifest::Error
+    false
+  end
+
+  sig { returns(T.any(Symbol, String)) }
+  def built_cellar
+    tab = tab_attributes
+    if tab["padded_prefix"] == true && (built_prefix = tab["built_prefix"])
+      "#{built_prefix}/Cellar"
+    else
+      @spec.tag_to_cellar(@tag)
+    end
   end
 
   # Does the bottle need to be relocated?
@@ -212,7 +242,18 @@ class Bottle
   end
 
   sig { void }
-  def stage = with_corrupt_download_retry { downloader.stage }
+  def stage
+    with_corrupt_download_retry do
+      verify_download_integrity(cached_download)
+      downloader.stage
+    end
+  rescue ChecksumMismatchError
+    # The retry's fresh download can itself fail verification, raising from
+    # inside the rescue clause above: remove the known-bad download so the
+    # next attempt fetches it again.
+    clear_cache
+    raise
+  end
 
   sig { params(timeout: T.nilable(T.any(Integer, Float)), quiet: T::Boolean).void }
   def fetch_tab(timeout: nil, quiet: false)
@@ -307,6 +348,7 @@ class Bottle
       FileUtils.rm(bottle_poured_file) if bottle_poured_file.symlink?
       FileUtils.rm_r(bottle_tmp_keg) if bottle_tmp_keg.directory?
 
+      verify_download_integrity(download)
       UnpackStrategy.detect(download, prioritize_extension: true)
                     .extract_nestedly(to: HOMEBREW_TEMP_CELLAR)
 
@@ -372,6 +414,13 @@ class Bottle
   def download_queue_name = "#{name} (#{resource.version})"
 
   private
+
+  sig { returns(T::Boolean) }
+  def compatible_locations_from_tab?
+    tab = tab_attributes
+    @spec.compatible_locations?(tag: @tag, built_prefix: tab["built_prefix"],
+                                padded_prefix: tab["padded_prefix"] == true)
+  end
 
   sig { params(specs: T::Hash[Symbol, T.anything]).returns(T::Hash[Symbol, T.anything]) }
   def select_download_strategy(specs)

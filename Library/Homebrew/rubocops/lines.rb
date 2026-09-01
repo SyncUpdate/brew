@@ -8,28 +8,6 @@ require "utils/shell_completion"
 module RuboCop
   module Cop
     module FormulaAudit
-      # This cop checks for various miscellaneous Homebrew coding styles.
-      class Lines < FormulaCop
-        sig { override.params(_formula_nodes: FormulaNodes).void }
-        def audit_formula(_formula_nodes)
-          [:automake, :ant, :autoconf, :emacs, :expat, :libtool, :mysql, :perl,
-           :postgresql, :python, :python3, :rbenv, :ruby].each do |dependency|
-            next unless depends_on?(dependency)
-
-            problem ":#{dependency} is deprecated. Usage should be \"#{dependency}\"."
-          end
-
-          { apr: "apr-util", fortran: "gcc", gpg: "gnupg", hg: "mercurial",
-            mpi: "open-mpi", python2: "python" }.each do |requirement, dependency|
-            next unless depends_on?(requirement)
-
-            problem ":#{requirement} is deprecated. Usage should be \"#{dependency}\"."
-          end
-
-          problem ":tex is deprecated." if depends_on?(:tex)
-        end
-      end
-
       # This cop makes sure that a space is used for class inheritance.
       class ClassInheritance < FormulaCop
         sig { override.params(formula_nodes: FormulaNodes).void }
@@ -225,26 +203,6 @@ module RuboCop
         EOS
       end
 
-      # This cop makes sure that formulae depend on `open-mpi` instead of `mpich`.
-      class MpiCheck < FormulaCop
-        extend AutoCorrector
-
-        sig { override.params(formula_nodes: FormulaNodes).void }
-        def audit_formula(formula_nodes)
-          return if (body_node = formula_nodes.body_node).nil?
-
-          # Enforce use of OpenMPI for MPI dependency in core
-          return if formula_tap != "homebrew-core"
-
-          find_method_with_args(body_node, :depends_on, "mpich") do
-            problem "Formulae in homebrew/core should use `depends_on \"open-mpi\"` " \
-                    "instead of `#{T.must(@offensive_node).source}`." do |corrector|
-              corrector.replace(T.must(@offensive_node).source_range, "depends_on \"open-mpi\"")
-            end
-          end
-        end
-      end
-
       # This cop makes sure that formulae use `std_npm_args` instead of older
       # `local_npm_install_args` and `std_npm_install_args`.
       class StdNpmArgs < FormulaCop
@@ -280,6 +238,44 @@ module RuboCop
 
             offending_node(method)
             problem "Use `std_npm_args` for npm install"
+          end
+        end
+      end
+
+      # This cop makes sure that formulae depend on `jpeg-turbo` instead of `jpeg`.
+      class JpegCheck < FormulaCop
+        extend AutoCorrector
+
+        sig { override.params(formula_nodes: FormulaNodes).void }
+        def audit_formula(formula_nodes)
+          return if (body_node = formula_nodes.body_node).nil?
+          return if formula_tap != "homebrew-core"
+
+          find_method_with_args(body_node, :depends_on, "jpeg") do
+            problem "Formulae in homebrew/core should use `depends_on \"jpeg-turbo\"` " \
+                    "instead of `#{T.must(@offensive_node).source}`." do |corrector|
+              corrector.replace(T.must(@offensive_node).source_range, "depends_on \"jpeg-turbo\"")
+            end
+          end
+        end
+      end
+
+      # This cop makes sure that formulae depend on `open-mpi` instead of `mpich`.
+      class MpiCheck < FormulaCop
+        extend AutoCorrector
+
+        sig { override.params(formula_nodes: FormulaNodes).void }
+        def audit_formula(formula_nodes)
+          return if (body_node = formula_nodes.body_node).nil?
+
+          # Enforce use of OpenMPI for MPI dependency in core
+          return if formula_tap != "homebrew-core"
+
+          find_method_with_args(body_node, :depends_on, "mpich") do
+            problem "Formulae in homebrew/core should use `depends_on \"open-mpi\"` " \
+                    "instead of `#{T.must(@offensive_node).source}`." do |corrector|
+              corrector.replace(T.must(@offensive_node).source_range, "depends_on \"open-mpi\"")
+            end
           end
         end
       end
@@ -1019,10 +1015,6 @@ module RuboCop
 
           find_method_with_args(body_node, :fails_with, :llvm) do
             problem "`fails_with :llvm` is now a no-op and should be removed"
-          end
-
-          find_method_with_args(body_node, :needs, :openmp) do
-            problem "`needs :openmp` should be replaced with `depends_on \"gcc\"`"
           end
 
           find_method_with_args(body_node, :system, /^(otool|install_name_tool|lipo)/) do

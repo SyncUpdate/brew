@@ -112,6 +112,23 @@ Show an alias's command. If no alias is given, print the whole list.
 : Edit aliases in a text editor. Either one or all aliases may be opened at
   once. If the given alias doesn't exist it'll be pre-populated with a template.
 
+### `analytics` \[*`subcommand`*\]
+
+Control Homebrew's anonymous aggregate user behaviour analytics. Read more at
+<https://docs.brew.sh/Analytics>.
+
+`brew analytics` \[`state`\]
+
+: Display the current state of Homebrew's analytics.
+
+`brew analytics on`
+
+: Turn Homebrew's analytics on.
+
+`brew analytics off`
+
+: Turn Homebrew's analytics off.
+
 ### `as-console-user` *`command`* \[*`args`* ...\]
 
 Run a Homebrew command as the active macOS console user.
@@ -2166,17 +2183,19 @@ request.
 
 ### `tap` \[*`options`*\] \[*`user`*`/`*`repo`*\] \[*`URL`*\]
 
-Tap a formula repository. If no arguments are provided, list all installed taps.
+Tap a repository containing formulae, casks, or external commands. If no
+arguments are provided, list all installed taps.
 
-With *`URL`* unspecified, tap a formula repository from GitHub using HTTPS.
-Since so many taps are hosted on GitHub, this command is a shortcut for `brew
-tap` *`user`*`/`*`repo`* `https://github.com/`*`user`*`/homebrew-`*`repo`*.
+With *`URL`* unspecified, tap a repository from GitHub using HTTPS. Since so
+many taps are hosted on GitHub, this command is a shortcut for:
 
-With *`URL`* specified, tap a formula repository from anywhere, using any
-transport protocol that `git`(1) handles. The one-argument form of `tap`
-simplifies but also limits. This two-argument command makes no assumptions, so
-taps can be cloned from places other than GitHub and using protocols other than
-HTTPS, e.g. SSH, git, HTTP, FTP(S), rsync.
+`brew tap` *`user`*`/`*`repo`* `https://github.com/`*`user`*`/homebrew-`*`repo`*
+
+With *`URL`* specified, tap a repository from anywhere, using any transport
+protocol that `git`(1) handles. Unlike the one-argument form of `tap` which
+simplifies things, the two-argument form makes no assumptions, so taps can be
+cloned from places other than GitHub and using protocols other than HTTPS, e.g.
+SSH, git, HTTP, FTP(S), rsync.
 
 `--custom-remote`
 
@@ -2751,7 +2770,9 @@ checks. Will exit with a non-zero status if any errors are found.
 
 `--fix`
 
-: Fix style violations automatically using RuboCop's auto-correct feature.
+: Fix style violations automatically using RuboCop's auto-correct feature. When
+  passed with `--online` for casks, also correct the `depends_on macos:` stanza
+  and the case of artifact stanzas.
 
 `--display-filename`
 
@@ -3923,6 +3944,10 @@ Run Homebrew's unit and integration tests.
 : Run only `<test_script>_spec.rb`. Appending `:<line_number>` will start at a
   specific line.
 
+`--shard`
+
+: Run only `<index>` of `<total>` test shards.
+
 `--profile`
 
 : Output the *`n`* slowest tests. When run without `--no-parallel` this will
@@ -4976,6 +5001,11 @@ command execution (e.g. `$(cat file)`).
 
 : If set, `brew info` and `brew install` will not warn when a formula's
   executables are shadowed by other commands earlier on `$PATH`.
+
+`HOMEBREW_NO_RELOCATE_BUILD_PREFIX`
+
+: If set, do not relocate bottles built for a different prefix at install time.
+  Homebrew will build from source instead.
 
 `HOMEBREW_NO_REQUIRE_TAP_TRUST`
 

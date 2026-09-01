@@ -29,7 +29,8 @@ module Homebrew
       sig { params(name: String).void }
       def self.fetch_formula_json!(name)
         endpoint = "formula/#{name}.json"
-        json_formula, updated = Homebrew::API.fetch_json_api_file endpoint
+        json_formula, updated = Homebrew::API.fetch_json_api_file endpoint,
+                                                                  stale_seconds: Homebrew::API::UNSIGNED_API_STALE_SECONDS
 
         json_formula = JSON.parse((HOMEBREW_CACHE_API/endpoint).read) unless updated
 
@@ -61,15 +62,26 @@ module Homebrew
         download = Homebrew::API::SourceDownload.new(
           "https://raw.githubusercontent.com/#{tap}/#{git_head}/#{path}",
           checksum,
-          cache: HOMEBREW_CACHE_API_SOURCE/"#{tap}/#{git_head}"/path.dirname,
+          formula:,
+          cache:   HOMEBREW_CACHE_API_SOURCE/"#{tap}/#{git_head}"/path.dirname,
         )
 
         if enqueue
           require "download_queue"
           download_queue ||= Homebrew.default_download_queue
           download_queue.enqueue(download)
-        elsif !download.symlink_location.exist? || !download.symlink_location.symlink?
-          download.fetch
+        else
+          begin
+            if !download.symlink_location.exist? || !download.symlink_location.symlink?
+              download.fetch
+            elsif checksum
+              download.verify_download_integrity(download.symlink_location)
+            end
+          rescue ChecksumMismatchError
+            # Remove the known-bad download so the next attempt fetches it again.
+            download.clear_cache
+            raise
+          end
         end
 
         download

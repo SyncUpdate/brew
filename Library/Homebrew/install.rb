@@ -14,11 +14,14 @@ require "messages"
 require "utils/output"
 require "utils/topological_hash"
 require "install/check"
+require "api/source_download"
 
 module Homebrew
   # Helper module for performing (pre-)install checks.
   module Install
     extend Utils::Output::Mixin
+
+    DependencySummary = T.type_alias { T::Hash[Symbol, T::Array[String]] }
 
     class << self
       sig { params(all_fatal: T::Boolean).void }
@@ -198,15 +201,34 @@ module Homebrew
                download_queue:     Homebrew::DownloadQueue).returns(T::Array[FormulaInstaller])
       }
       def reject_failed_downloads(formula_installers, download_queue:)
-        failed_names = download_queue.failed_downloads.filter_map do |downloadable|
-          case downloadable
-          when Bottle then downloadable.name
-          when Resource then downloadable.owner&.name
-          end
-        end
-        return formula_installers if failed_names.empty?
+        failed_full_names = unmark_failed_formulae(download_queue.failed_downloads)
+        return formula_installers if failed_full_names.empty?
 
-        formula_installers.reject { |fi| failed_names.include?(fi.formula.name) }
+        formula_installers.reject { |fi| failed_full_names.include?(fi.formula.full_name) }
+      end
+
+      # A formula whose download failed must not stay marked as fetched:
+      # `FormulaInstaller#enqueue_fetch` marks formulae as fetched when their
+      # downloads are enqueued, so a later retry pass would otherwise skip
+      # fetching entirely and install from a known-bad cached download without
+      # any checksum verification (issue 23714).
+      sig { params(downloadables: T::Array[Downloadable]).returns(T::Array[String]) }
+      def unmark_failed_formulae(downloadables)
+        failed_full_names = downloadables.filter_map do |downloadable|
+          owner = case downloadable
+          when Bottle
+            downloadable.resource.owner
+          when Resource
+            downloadable.owner
+          when Homebrew::API::SourceDownload
+            downloadable.formula
+          end
+          owner = owner.owner if owner.is_a?(SoftwareSpec)
+          owner.full_name if owner.is_a?(Formula)
+        end
+
+        FormulaInstaller.fetched.delete_if { |formula| failed_full_names.include?(formula.full_name) }
+        failed_full_names
       end
 
       sig {
@@ -409,10 +431,11 @@ module Homebrew
           formula:            Formula,
           dependencies:       T::Array[Dependency],
           skip_formula_names: T::Array[String],
+          dependency_summary: T.nilable(DependencySummary),
           _block:             T.proc.params(arg0: Formula).returns(String),
         ).void
       }
-      def print_dry_run_dependencies(formula, dependencies, skip_formula_names: [], &_block)
+      def print_dry_run_dependencies(formula, dependencies, skip_formula_names: [], dependency_summary: nil, &_block)
         return if dependencies.empty?
 
         entries = dependencies.filter_map do |dep|
@@ -423,12 +446,23 @@ module Homebrew
         end
 
         upgrade, install = entries.partition(&:first)
-        { install:, upgrade: }.each do |verb, group|
+        summary = { install: install.map(&:last), upgrade: upgrade.map(&:last) }
+        if dependency_summary
+          summary.each { |verb, group| dependency_summary.fetch(verb).concat(group) }
+        else
+          print_dry_run_dependency_summary(summary, formula:)
+        end
+      end
+
+      sig { params(summary: DependencySummary, formula: T.nilable(Formula)).void }
+      def print_dry_run_dependency_summary(summary, formula: nil)
+        { install: summary.fetch(:install), upgrade: summary.fetch(:upgrade) }.each do |verb, group|
+          group = group.uniq
           next if group.empty?
 
-          ohai "Would #{verb} #{Utils.pluralize("dependency", group.count, include_count: true)} " \
-               "for #{formula.name}:"
-          puts Upgrade.format_upgrade_summary(group.map(&:last))
+          ohai "Would #{verb} #{Utils.pluralize("dependency", group.count, include_count: true)}" \
+               "#{" for #{formula.name}" if formula}:"
+          puts Upgrade.format_upgrade_summary(group)
         end
       end
 

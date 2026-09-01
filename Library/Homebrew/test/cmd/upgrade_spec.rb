@@ -135,6 +135,25 @@ RSpec.describe Homebrew::Cmd::UpgradeCmd do
     end
   end
 
+  it "does not upgrade a Formula whose download has a checksum mismatch", :integration_test do
+    formula_name = "testball"
+    formula_rack = HOMEBREW_CELLAR/formula_name
+    tarball = TEST_FIXTURE_DIR/"tarballs/testball-0.1.tbz"
+    write_formula formula_name, <<~RUBY
+      url "file://#{tarball}"
+      version "0.2"
+      sha256 "#{"bad0" * 16}"
+    RUBY
+    (formula_rack/"0.1/foo").mkpath
+
+    expect { brew "upgrade" }
+      .to output(/reports different checksum/).to_stderr
+      .and not_to_output(/Upgrading testball/).to_stdout
+      .and be_a_failure
+
+    expect(formula_rack/"0.2").not_to exist
+  end
+
   # links newer version when upgrade was interrupted
   it "links a newer Formula version when upgrade was interrupted" do
     formula_name = "testball_bottle"
@@ -740,7 +759,8 @@ RSpec.describe Homebrew::Cmd::UpgradeCmd do
   it "does not print aggregate package sizes" do
     cmd = described_class.new(["--dry-run"])
     summary = Homebrew::Cmd::UpgradeCmd::FinalUpgradeSummary.new(
-      version_changes: ["testball 0.1 -> 0.2 (500B)", "codex 1.0 -> 2.0"],
+      version_changes:           ["testball 0.1 -> 0.2 (500B)"],
+      dependent_version_changes: ["codex 1.0 -> 2.0"],
     )
 
     allow(cmd).to receive(:final_upgrade_summary).and_return(summary)
@@ -749,6 +769,24 @@ RSpec.describe Homebrew::Cmd::UpgradeCmd do
       ==> Would upgrade 2 outdated packages
       testball  0.1 -> 0.2 (500B)
       codex     1.0 -> 2.0
+    EOS
+  end
+
+  it "separates requested upgrades from dependent upgrades" do
+    cmd = described_class.new(["--dry-run", "z3"])
+    summary = Homebrew::Cmd::UpgradeCmd::FinalUpgradeSummary.new(
+      version_changes:           ["z3 4.16.0 -> 5.1.0"],
+      dependent_version_changes: ["llvm 22.1.8 -> 22.1.8_2", "rust 1.97.1 -> 1.98.0"],
+    )
+
+    allow(cmd).to receive(:final_upgrade_summary).and_return(summary)
+
+    expect { cmd.show_final_upgrade_summary }.to output(<<~EOS).to_stdout
+      ==> Would upgrade 1 requested outdated package
+      z3 4.16.0 -> 5.1.0
+      ==> Would upgrade 2 dependents
+      llvm  22.1.8 -> 22.1.8_2
+      rust  1.97.1 -> 1.98.0
     EOS
   end
 
@@ -1186,13 +1224,21 @@ RSpec.describe Homebrew::Cmd::UpgradeCmd do
   end
 
   it "only distrusts the formula half of a shared prefetch whose bottle download failed" do
-    expect(run_upgrade_with_failed_shared_prefetch(instance_double(Bottle)))
-      .to eq(use_prefetched: false, skip_prefetch: true)
+    bottle_spec = BottleSpecification.new
+    bottle_spec.sha256(arm64_big_sur: "deadbeef" * 8)
+    formula = formula("deno") do
+      T.bind(self, T.class_of(Formula))
+      url "https://brew.sh/deno-2.7.11.tar.gz"
+    end
+    failed_bottle = Bottle.new(formula, bottle_spec, Utils::Bottles::Tag.from_symbol(:arm64_big_sur))
+
+    expect(run_upgrade_with_failed_shared_prefetch(failed_bottle))
+      .to eq(use_prefetched: false, skip_prefetch: true, failed_formula_fetched: false)
   end
 
   it "only distrusts the cask half of a shared prefetch whose cask download failed" do
     expect(run_upgrade_with_failed_shared_prefetch(Cask::Download.new(Cask::Cask.new("codex"))))
-      .to eq(use_prefetched: true, skip_prefetch: false)
+      .to eq(use_prefetched: true, skip_prefetch: false, failed_formula_fetched: true)
   end
 
   def run_upgrade_with_failed_shared_prefetch(failed_download)
@@ -1210,6 +1256,11 @@ RSpec.describe Homebrew::Cmd::UpgradeCmd do
       version:           "0.118.0",
     )
     installer = Cask::Installer.allocate
+    failed_formula = formula("deno") do
+      T.bind(self, T.class_of(Formula))
+      url "https://brew.sh/deno-2.7.11.tar.gz"
+    end
+    FormulaInstaller.fetched << failed_formula
     allow(installer).to receive_messages(cask:, check_requirements: nil, downloader: failed_download,
                                          download_failed!: nil, download_failed?: false, enqueue_downloads: nil,
                                          enqueue_dependency_downloads: nil)
@@ -1247,6 +1298,7 @@ RSpec.describe Homebrew::Cmd::UpgradeCmd do
     allow(Homebrew.messages).to receive(:display_messages)
 
     cmd.run
+    upgraded[:failed_formula_fetched] = FormulaInstaller.fetched.include?(failed_formula)
     upgraded
   end
 
@@ -1466,8 +1518,10 @@ RSpec.describe Homebrew::Cmd::UpgradeCmd do
 
     cmd.upgrade_outdated_formulae!([])
 
-    expect(cmd.final_upgrade_summary.version_changes)
-      .to contain_exactly("testball 0.1 -> 0.2", "upgraded-dependent 0.1 -> 0.2")
+    expect(cmd.final_upgrade_summary).to have_attributes(
+      version_changes:           contain_exactly("testball 0.1 -> 0.2"),
+      dependent_version_changes: contain_exactly("upgraded-dependent 0.1 -> 0.2"),
+    )
   end
 
   it_behaves_like "reinstall_pkgconf_if_needed"

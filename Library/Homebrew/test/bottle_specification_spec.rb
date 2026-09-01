@@ -45,6 +45,38 @@ RSpec.describe BottleSpecification do
     it "checks if the bottle cellar is relocatable" do
       expect(bottle_spec.compatible_locations?).to be false
     end
+
+    it "accepts a longer bottle cellar by default" do
+      bottle_spec.sha256(cellar: "#{HOMEBREW_CELLAR}-longer", Utils::Bottles.tag.to_sym => "deadbeef" * 8)
+
+      expect(bottle_spec.compatible_locations?).to be true
+    end
+
+    it "rejects a longer bottle cellar when build prefix relocation is disabled" do
+      ENV["HOMEBREW_NO_RELOCATE_BUILD_PREFIX"] = "1"
+      bottle_spec.sha256(cellar: "#{HOMEBREW_CELLAR}-longer", Utils::Bottles.tag.to_sym => "deadbeef" * 8)
+
+      expect(bottle_spec.compatible_locations?).to be false
+    end
+
+    it "accepts a padded bottle from tab metadata" do
+      tag = Utils::Bottles::Tag.from_symbol(:arm64_tahoe)
+      bottle_spec.sha256(tag.to_sym => "deadbeef" * 8)
+      stub_const("HOMEBREW_PREFIX", Pathname("/short"))
+      stub_const("HOMEBREW_CELLAR", HOMEBREW_PREFIX/"Cellar")
+
+      expect(bottle_spec.compatible_locations?(tag:, built_prefix: tag.padded_prefix, padded_prefix: true)).to be true
+    end
+
+    it "rejects a padded bottle when the local prefix is longer than 64 bytes" do
+      tag = Utils::Bottles::Tag.from_symbol(:arm64_tahoe)
+      bottle_spec.sha256(tag.to_sym => "deadbeef" * 8)
+      stub_const("HOMEBREW_PREFIX", Pathname("/#{"p" * 64}"))
+      stub_const("HOMEBREW_CELLAR", HOMEBREW_PREFIX/"Cellar")
+
+      expect(bottle_spec.compatible_locations?(tag:, built_prefix: tag.padded_prefix,
+                                               padded_prefix: true)).to be false
+    end
   end
 
   describe "#tag_to_cellar" do

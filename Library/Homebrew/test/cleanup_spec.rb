@@ -79,7 +79,7 @@ RSpec.describe Homebrew::Cleanup do
       end
     end
 
-    it "only reports packages that were cleaned", :cask do
+    it "reports cleanup paths in real time without package headings", :cask do
       formula = Testball.new
       cask = Cask::Cask.new("local-caffeine")
       stale_path = mktmpdir/"testball--0.0"
@@ -88,7 +88,10 @@ RSpec.describe Homebrew::Cleanup do
       allow(described_class).to receive(:install_cleanup_formulae).with([formula]).and_return([formula])
       expect_any_instance_of(described_class).to receive(:cleanup_formula) do |cleanup, package, **|
         expect(package).to be(formula)
-        cleanup.cleanup_path(stale_path) { stale_path.unlink }
+        cleanup.cleanup_path(stale_path) do
+          expect($stdout.string).to include("Removing: #{stale_path}...")
+          stale_path.unlink
+        end
       end
       expect_any_instance_of(described_class).to receive(:cleanup_cask)
         .with(cask, cleanup_unreferenced: false)
@@ -98,7 +101,6 @@ RSpec.describe Homebrew::Cleanup do
       with_env(HOMEBREW_NO_ENV_HINTS: "1") do
         expect { described_class.install_clean!(formulae: [formula], casks: [cask]) }.to output(<<~EOS).to_stdout
           ==> Cleanup
-          ==> testball
           Removing: #{stale_path}... (#{stale_path.abv})
         EOS
       end
@@ -717,6 +719,32 @@ RSpec.describe Homebrew::Cleanup do
       described_class.new(days: 0).cleanup_cache
 
       expect(api_package_files.map(&:exist?)).to eq([true, true])
+    end
+
+    it "cleans up per-resource API files when pruning" do
+      cache = mktmpdir/"cache"
+      api_resource_files = [cache/"api/cask/foo.json", cache/"api/formula/foo.json"]
+      api_resource_files.each do |file|
+        file.dirname.mkpath
+        FileUtils.touch file
+      end
+
+      described_class.new(days: 0, cache:).cleanup_cache
+
+      expect(api_resource_files.map(&:exist?)).to eq([false, false])
+    end
+
+    it "cleans up per-resource API files with scrub" do
+      cache = mktmpdir/"cache"
+      api_resource_files = [cache/"api/cask/foo.json", cache/"api/formula/foo.json"]
+      api_resource_files.each do |file|
+        file.dirname.mkpath
+        FileUtils.touch file
+      end
+
+      described_class.new(scrub: true, cache:).cleanup_cache
+
+      expect(api_resource_files.map(&:exist?)).to eq([false, false])
     end
 
     it "cleans up non-current internal package API files with scrub" do

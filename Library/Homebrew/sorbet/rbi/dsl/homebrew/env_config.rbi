@@ -389,6 +389,9 @@ module Homebrew::EnvConfig
     def no_proxy; end
 
     sig { returns(T::Boolean) }
+    def no_relocate_build_prefix?; end
+
+    sig { returns(T::Boolean) }
     def no_require_tap_trust?; end
 
     sig { returns(T::Boolean) }
