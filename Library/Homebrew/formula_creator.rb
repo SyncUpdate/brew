@@ -205,6 +205,12 @@ module Homebrew
           depends_on "node"
         <% elsif @mode == :perl %>
           uses_from_macos "perl"
+
+          # Add CPAN dependencies as resources
+          # resource "" do
+          #   url ""
+          #   sha256 ""
+          # end
         <% elsif @mode == :python %>
           depends_on "#{latest_versioned_formula("python")}"
         <% elsif @mode == :ruby %>
@@ -217,17 +223,41 @@ module Homebrew
           # depends_on "cmake" => :build
         <% end %>
 
-        <% if @mode == :perl || :python || :ruby %>
-          # Additional dependency
-          # resource "" do
-          #   url ""
-          #   sha256 ""
-          # end
+        <% if [:crystal, :node, :python].exclude? @mode %>
+          deny_network_access!
+
+        <% end %>
+        <% if @mode == :cabal %>
+          def fetch
+            system "cabal", "v2-update"
+            system "cabal", "v2-install", "--only-download", *std_cabal_v2_args
+          end
+
+        <% elsif @mode == :go %>
+          def fetch
+            system "go", "mod", "download"
+          end
+
+        <% elsif @mode == :ruby %>
+          def fetch
+            ENV["BUNDLE_PATH"] = ".bundle"
+
+            system "bundle", "cache", "--no-install"
+          end
+
+        <% elsif @mode == :rust %>
+          def fetch
+            system "cargo", "fetch", "--locked", "--target", "host-tuple"
+          end
+
+        <% elsif @mode == :zig %>
+          def fetch
+            system "zig", "build", "--fetch"
+          end
 
         <% end %>
           def install
         <% if @mode == :cabal %>
-            system "cabal", "v2-update"
             system "cabal", "v2-install", *std_cabal_v2_args
         <% elsif @mode == :cmake %>
             system "cmake", "-S", ".", "-B", "build", *std_cmake_args
@@ -273,12 +303,9 @@ module Homebrew
         <% elsif @mode == :python %>
             virtualenv_install_with_resources
         <% elsif @mode == :ruby %>
-            ENV["BUNDLE_FORCE_RUBY_PLATFORM"] = "1"
-            ENV["BUNDLE_VERSION"] = "system" # Avoid installing Bundler into the keg
-            ENV["BUNDLE_WITHOUT"] = "development test"
             ENV["GEM_HOME"] = libexec
 
-            system "bundle", "install"
+            system "bundle", "install", "--local"
             system "gem", "build", "\#{name}.gemspec"
             system "gem", "install", "--ignore-dependencies", "\#{name}-\#{version}.gem"
 
@@ -301,8 +328,7 @@ module Homebrew
             #
             # This test will fail and we won't accept that! For Homebrew/homebrew-core
             # this will need to be a test that verifies the functionality of the
-            # software. Run the test with `brew test #{name}`. Options passed
-            # to `brew install` such as `--HEAD` also need to be provided to `brew test`.
+            # software. Run the test with `brew test #{name}`.
             #
             # The installed folder is not in the path, so use the entire path to any
             # executables being tested: `system bin/"program", "do", "something"`.

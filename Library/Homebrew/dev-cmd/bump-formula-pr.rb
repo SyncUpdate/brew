@@ -97,7 +97,7 @@ module Homebrew
 
       sig { override.void }
       def run
-        Homebrew.install_bundler_gems!(groups: ["ast"])
+        Utils::GemSetup.install_bundler_gems!(groups: ["ast"])
         require "utils/ast"
         require "utils/pypi"
 
@@ -150,7 +150,7 @@ module Homebrew
 
         # This will be run by `brew audit` later so run it first to not start
         # spamming during normal output.
-        Homebrew.install_bundler_gems!(groups: ["audit", "style"]) unless args.no_audit?
+        Utils::GemSetup.install_bundler_gems!(groups: ["audit", "style"]) unless args.no_audit?
 
         tap_remote_repo = tap.remote_repository
         odie "#{tap.name} tap does not have a remote repository!" if tap_remote_repo.nil?
@@ -288,7 +288,7 @@ module Homebrew
             if formula_ast.stable_stanza?(:version)
               formula_ast.replace_stable_stanza_value(:version, T.must(new_version))
             else
-              stanzas_to_add << [:version, T.must(new_version)]
+              stanzas_to_add << [:version, "version #{new_version.inspect}"]
             end
           elsif forced_version && new_version == "0"
             formula_ast.remove_stable_stanza(:version) if formula_ast.stable_stanza?(:version)
@@ -359,7 +359,7 @@ module Homebrew
 
           formula_checkboxes = []
 
-          if failed_updates.any? || (resources_checked.nil? && unchecked_resources.any?)
+          if failed_updates.any? || (!resources_checked && unchecked_resources.any?)
             formula_checkboxes << "- [ ] `resource` blocks have been checked for updates."
 
             if failed_updates.any?
@@ -782,7 +782,7 @@ module Homebrew
           if formula_ast.resource_stanza?(resource_name, :version)
             formula_ast.replace_resource_stanza_value(resource_name, :version, new_version)
           else
-            formula_ast.add_stanzas_after(:sha256, [[:version, new_version]],
+            formula_ast.add_stanzas_after(:sha256, [[:version, "version #{new_version.inspect}"]],
                                           parent: formula_ast.resource(resource_name))
           end
         end

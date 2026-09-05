@@ -1,6 +1,7 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "api/env"
 require "cask/cask_loader"
 require "cask/denylist"
 require "cask/download"
@@ -388,6 +389,36 @@ module Cask
     end
 
     sig { void }
+    def audit_appimage_versioned_target
+      # `app_image` artifacts live inside `on_linux` blocks,
+      # so an audit running on another OS would not materialize them.
+      # Evaluate every tag (restoring the default afterwards)
+      # so the check runs regardless of the audit host.
+      basenames = if cask.on_system_blocks_exist?
+        begin
+          OnSystem::VALID_OS_ARCH_TAGS.flat_map do |tag|
+            cask.refresh_for_tag(tag) { appimage_target_basenames } || []
+          end
+        ensure
+          cask.refresh
+        end
+      else
+        appimage_target_basenames
+      end
+
+      basenames.uniq.each do |basename|
+        # electron-updater renames the AppImage on self-update
+        # if its basename contains an `X.Y.Z` version,
+        # which leaves the Caskroom back-symlink dangling.
+        # A version-less target is overwritten in place instead.
+        next unless basename.match?(/\d+\.\d+\.\d+/)
+
+        add_error "app_image target '#{basename}' should not embed a version; " \
+                  "use a version-less `target:` so self-updaters overwrite it in place"
+      end
+    end
+
+    sig { void }
     def audit_no_string_version_latest
       return unless cask.version
 
@@ -507,7 +538,6 @@ module Cask
 
     sig { void }
     def audit_unnecessary_verified
-      return unless new_cask?
       return unless cask.url
       return unless verified_present?
 
@@ -543,7 +573,7 @@ module Cask
 
     sig { void }
     def audit_token_conflicts
-      Homebrew.with_no_api_env do
+      Homebrew::API.with_no_api_env do
         return unless core_formula_names.include?(cask.token)
 
         add_error("cask token conflicts with an existing homebrew/core formula: #{Formatter.url(core_formula_url)}")
@@ -610,7 +640,11 @@ module Cask
       return if url.nil?
 
       return if !cask.tap&.official? && !signing?
-      return if cask.deprecated? && cask.deprecation_reason != :fails_gatekeeper_check
+
+      deprecated_or_disabled = cask.deprecated? || cask.disabled?
+      deprecate_disable_reason = cask.disabled? ? cask.disable_reason : cask.deprecation_reason
+      gatekeeper_failure_expected = deprecate_disable_reason == :fails_gatekeeper_check
+      return if deprecated_or_disabled && !gatekeeper_failure_expected
 
       unless Quarantine.available?
         odebug "Quarantine support is not available, skipping signing audit"
@@ -675,7 +709,7 @@ module Cask
           end
 
           next false if result.success?
-          next true if cask.deprecated? && cask.deprecation_reason == :fails_gatekeeper_check
+          next true if gatekeeper_failure_expected
           next true if is_in_skiplist
 
           signing_failure_message = <<~EOS
@@ -699,11 +733,10 @@ module Cask
 
         add_error "Cask is in the signing audit skiplist, but does not need to be skipped!" if is_in_skiplist
 
-        return unless cask.deprecated?
-        return if cask.deprecation_reason != :fails_gatekeeper_check
+        return unless gatekeeper_failure_expected
 
         add_error <<~EOS
-          Cask is deprecated because it failed Gatekeeper checks but all artifacts now pass!
+          Cask is deprecated/disabled because it failed Gatekeeper checks but all artifacts now pass!
           Remove the deprecate/disable stanza or update the deprecate/disable reason.
         EOS
       end
@@ -1108,7 +1141,7 @@ module Cask
     def audit_conflicts_with
       return if !cask.tap&.official? || cask.conflicts_with.nil?
 
-      Homebrew.with_no_api_env do
+      Homebrew::API.with_no_api_env do
         nonexisting_conflicting_casks = cask.conflicts_with.fetch(:cask, Set.new) - core_cask_tokens
         nonexisting_conflicting_casks.each do |c|
           add_error("cask conflicts with non-existing cask `#{c}`")
@@ -1220,6 +1253,15 @@ module Cask
     end
 
     private
+
+    sig { returns(T::Array[String]) }
+    def appimage_target_basenames
+      cask.artifacts.filter_map do |artifact|
+        next unless artifact.is_a?(Artifact::AppImage)
+
+        artifact.target.basename.to_s
+      end
+    end
 
     # Rewrites the cask's source file when `--fix` was passed, restoring it if
     # the rewrite doesn't load. Returns whether the problem was corrected.

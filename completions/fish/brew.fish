@@ -342,6 +342,7 @@ __fish_brew_complete_arg 'advisory-match' -l json -d 'Output candidate records a
 __fish_brew_complete_arg 'advisory-match' -l new-history -d 'Walk `FormulaVersions` only for records whose reviewed ranges are not already in directory'
 __fish_brew_complete_arg 'advisory-match' -l no-history -d 'Skip the `FormulaVersions` walk for the `fixed` boundary; use the current `pkg_version` instead'
 __fish_brew_complete_arg 'advisory-match' -l output -d 'Write each record to directory as `BREW-formula-id.json`, preserving existing `published`/`ranges` fields'
+__fish_brew_complete_arg 'advisory-match' -l overrides -d 'Load reviewed formula and advisory matching overrides from file'
 __fish_brew_complete_arg 'advisory-match' -l quiet -d 'Make some output more quiet'
 __fish_brew_complete_arg 'advisory-match' -l repology -d 'Load the formula to distro-package index from file instead of the published `data/repology.json`'
 __fish_brew_complete_arg 'advisory-match' -l verbose -d 'Make some output more verbose'
@@ -880,7 +881,7 @@ __fish_brew_complete_arg 'contributions' -l csv -d 'Print a CSV of contributions
 __fish_brew_complete_arg 'contributions' -l debug -d 'Display any debugging information'
 __fish_brew_complete_arg 'contributions' -l from -d 'Date (ISO 8601 format) to start searching contributions. Omitting this flag searches the past year'
 __fish_brew_complete_arg 'contributions' -l help -d 'Show this message'
-__fish_brew_complete_arg 'contributions' -l maintainer-report-csv -d 'Print a CSV of Maintainer and Lead Maintainer activity criteria using fetched Git histories and GitHub\'s existing approved-review search for the Homebrew governance quarter, for example `--maintainer-report-csv=2026-2`. Also write it in the current directory as `brew-contributions-FROM-to-TO.csv`, or `brew-contributions-FROM-to-TO-USER.csv` when filtered with `--user`. Only Maintainers listed at the end of that quarter are included. The `new role` value must show a downgrade for two consecutive quarters before a downgrade is applied. Review searches return at most 100 results and other counts are capped at 500 per repository and contribution type. Repository-scoped follow-up searches ensure role activity checks remain accurate when a count is capped. Completed-period GitHub searches are cached in Homebrew\'s cache and removed by normal cache pruning. `YEAR-1` is December of the previous year through February, `YEAR-2` is March through May, `YEAR-3` is June through August and `YEAR-4` is September through November'
+__fish_brew_complete_arg 'contributions' -l maintainer-report-csv -d 'Print a CSV of Maintainer and Lead Maintainer activity criteria using fetched Git histories and GitHub\'s existing approved-review search for the Homebrew governance quarter, for example `--maintainer-report-csv=2026-2`. Also write it in the current directory as `brew-contributions-FROM-to-TO.csv`, or `brew-contributions-FROM-to-TO-USER.csv` when filtered with `--user`. Only Maintainers listed at the end of that quarter are included. Review searches return at most 100 results and other counts are capped at 500 per repository and contribution type. Repository-scoped follow-up searches ensure role activity checks remain accurate when a count is capped. Completed-period GitHub searches are cached in Homebrew\'s cache and removed by normal cache pruning. `YEAR-1` is December of the previous year through February, `YEAR-2` is March through May, `YEAR-3` is June through August and `YEAR-4` is September through November'
 __fish_brew_complete_arg 'contributions' -l organisation -d 'Specify the organisation to populate sources repositories from. Omitting this flag searches the Homebrew primary repositories'
 __fish_brew_complete_arg 'contributions' -l quarter -d 'Homebrew contributions quarter to search (1-4). Omitting this flag searches the past year. If `--from` or `--to` are set, they take precedence'
 __fish_brew_complete_arg 'contributions' -l quiet -d 'Make some output more quiet'
@@ -1096,6 +1097,13 @@ __fish_brew_complete_arg 'fetch; and not __fish_seen_argument -l cask -l casks' 
 __fish_brew_complete_arg 'fetch; and not __fish_seen_argument -l formula -l formulae' -a '(__fish_brew_suggest_casks_all)'
 
 
+__fish_brew_complete_cmd 'find-appcast' 'Find the appcast of the app bundle at app_path, for use in a cask `livecheck` block'
+__fish_brew_complete_arg 'find-appcast' -l debug -d 'Display any debugging information'
+__fish_brew_complete_arg 'find-appcast' -l help -d 'Show this message'
+__fish_brew_complete_arg 'find-appcast' -l quiet -d 'Make some output more quiet'
+__fish_brew_complete_arg 'find-appcast' -l verbose -d 'Make some output more verbose'
+
+
 __fish_brew_complete_cmd 'formula' 'Display the path where formula is located'
 __fish_brew_complete_arg 'formula' -l debug -d 'Display any debugging information'
 __fish_brew_complete_arg 'formula' -l help -d 'Show this message'
@@ -1168,6 +1176,13 @@ __fish_brew_complete_arg 'generate-cask-ci-matrix' -l syntax-only -d 'Only run s
 __fish_brew_complete_arg 'generate-cask-ci-matrix' -l url -d 'Treat named argument as a pull request URL'
 __fish_brew_complete_arg 'generate-cask-ci-matrix' -l verbose -d 'Make some output more verbose'
 __fish_brew_complete_arg 'generate-cask-ci-matrix' -a '(__fish_brew_suggest_casks_all)'
+
+
+__fish_brew_complete_cmd 'generate-cask-token' 'Generate a cask token, filename and header line for an application, following the token conventions described in the Cask Cookbook'
+__fish_brew_complete_arg 'generate-cask-token' -l debug -d 'Display any debugging information'
+__fish_brew_complete_arg 'generate-cask-token' -l help -d 'Show this message'
+__fish_brew_complete_arg 'generate-cask-token' -l quiet -d 'Make some output more quiet'
+__fish_brew_complete_arg 'generate-cask-token' -l verbose -d 'Make some output more verbose'
 
 
 complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'generate-formula-api' -d 'Generate `homebrew/core` API data files for https://formulae.brew.sh'

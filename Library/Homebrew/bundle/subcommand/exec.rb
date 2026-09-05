@@ -1,6 +1,8 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "utils/shell"
+
 require "abstract_subcommand"
 
 require "English"
@@ -356,18 +358,14 @@ module Homebrew
           entries_formulae.filter_map do |entry, formula|
             service_file = Homebrew::Bundle::Brew::Services.versioned_service_file(entry.name)
 
-            unless service_file&.file?
+            if service_file.nil?
               prefix = formula.any_installed_prefix
               next if prefix.nil?
 
-              service_file = if Homebrew::Services::System.launchctl?
-                prefix/"#{formula.plist_name}.plist"
-              else
-                prefix/"#{formula.service_name}.service"
-              end
+              service_file = Homebrew::Bundle::Brew::Services.service_file_for(formula, prefix)
             end
 
-            next unless service_file.file?
+            next if service_file.nil?
 
             info = services_info.find { |candidate| candidate["name"] == formula.name }
             conflicting_services = services_info.select do |candidate|

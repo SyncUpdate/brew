@@ -254,11 +254,6 @@ RSpec.configure do |config|
 
     svn_paths = PATH.new(ENV.fetch("PATH"))
 
-    if OS.mac?
-      xcrun_svn = Utils.popen_read("xcrun", "-f", "svn")
-      svn_paths.append(File.dirname(xcrun_svn)) if $CHILD_STATUS.success? && xcrun_svn.present?
-    end
-
     svn_shim = HOMEBREW_SHIMS_PATH/"shared/svn"
     unless quiet_system svn_shim, "--version"
       svn_client_skip_reason = "Subversion is not installed."
@@ -397,7 +392,7 @@ RSpec.configure do |config|
       # Shut down and drop any memoized download queue so an example that
       # stubbed `DownloadQueue.new` cannot leak a double into later examples
       # or the `at_exit` shutdown hook.
-      Homebrew.reset_default_download_queue if Homebrew.respond_to?(:reset_default_download_queue)
+      Homebrew::DownloadQueue.reset_default if defined?(Homebrew::DownloadQueue)
 
       $stdout.reopen(@__stdout)
       $stderr.reopen(@__stderr)

@@ -1,6 +1,8 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "utils/profiling"
+
 require "abstract_command"
 require "diagnostic"
 require "diagnostic/finding"
@@ -33,7 +35,7 @@ module Homebrew
 
       sig { override.void }
       def run
-        Homebrew.inject_dump_stats!(Diagnostic::Checks, /^check_*/) if args.audit_debug?
+        Utils::Profiling.inject_stats!(Diagnostic::Checks, /^check_*/) if args.audit_debug?
 
         checks = Diagnostic::Checks.new(verbose: args.verbose?)
 
@@ -63,7 +65,7 @@ module Homebrew
           end
 
           finding         = checks.public_send(method)
-          method_findings = T.let(Array(finding).compact, T::Array[T.any(Diagnostic::Finding, String)])
+          method_findings = T.let(Array(finding).compact, T::Array[Diagnostic::Finding])
           next if method_findings.empty?
 
           finding_collection.concat(method_findings.compact)
@@ -83,8 +85,7 @@ module Homebrew
           first_warning = false
         end
 
-        # TODO: Remove string filtering when all diagnostics are Finding objects
-        finding_maps = finding_collection.grep_v(String).map(&:to_h)
+        finding_maps = finding_collection.map(&:to_h)
         tier = (finding_maps.max_by { |f| f[:tier] } || {}).fetch(:tier, 1)
         if args.json?
           puts JSON.pretty_generate({ tier:, findings: finding_maps }).gsub(/\[\n\n\s*\]/, "[]")

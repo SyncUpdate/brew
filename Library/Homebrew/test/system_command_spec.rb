@@ -4,6 +4,31 @@
 require "system_command"
 
 RSpec.describe SystemCommand do
+  describe ".safe_system" do
+    it "raises when the command fails" do
+      expect { described_class.safe_system("false") }.to raise_error(ErrorDuringExecution)
+    end
+  end
+
+  describe ".quiet_system" do
+    it "returns the command status" do
+      expect(described_class.quiet_system("true")).to be true
+      expect(described_class.quiet_system("false")).to be false
+    end
+  end
+
+  describe SystemCommand::Helpers do
+    subject(:helpers) { Class.new { include SystemCommand::Helpers }.new }
+
+    it "provides positional system helpers" do
+      expect(SystemCommand).to receive(:safe_system).with("true")
+      expect(SystemCommand).to receive(:quiet_system).with("true").and_return(true)
+
+      helpers.safe_system("true")
+      expect(helpers.quiet_system("true")).to be true
+    end
+  end
+
   describe "#initialize" do
     subject(:command) do
       described_class.new(
@@ -257,6 +282,23 @@ RSpec.describe SystemCommand do
 
     it "returns without deadlocking", timeout: 30 do
       expect(described_class.run(command, **options)).to be_a_success
+    end
+  end
+
+  context "when the timeout expires" do
+    it "kills the whole process group, including descendants ignoring TERM" do
+      pid_file = mktmpdir/"pid"
+      script = "(trap '' TERM; exec sleep 30) & echo $! > #{pid_file}; wait"
+      expect { described_class.run("/bin/sh", args: ["-c", script], timeout: 0.5) }.to raise_error(Timeout::Error)
+
+      grandchild_pid = pid_file.read.to_i
+      # The orphaned grandchild is reaped by `init`/`launchd` asynchronously.
+      expect do
+        10.times do
+          Process.kill(0, grandchild_pid)
+          sleep(0.1)
+        end
+      end.to raise_error(Errno::ESRCH)
     end
   end
 

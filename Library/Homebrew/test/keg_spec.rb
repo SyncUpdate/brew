@@ -63,15 +63,43 @@ RSpec.describe Keg do
     expect(keg.oldname_opt_records).to eq([oldname_opt_record])
   end
 
-  specify "#remove_oldname_opt_records" do
-    oldname_opt_record = HOMEBREW_PREFIX/"opt/oldfoo"
-    oldname_opt_record.make_relative_symlink(HOMEBREW_CELLAR/"foo/2.0")
-    keg.remove_oldname_opt_records
-    expect(oldname_opt_record).to be_a_symlink
-    oldname_opt_record.unlink
-    oldname_opt_record.make_relative_symlink(HOMEBREW_CELLAR/"foo/1.0")
-    keg.remove_oldname_opt_records
-    expect(oldname_opt_record).not_to be_a_symlink
+  describe "#remove_oldname_opt_records" do
+    let(:oldname_opt_record) { HOMEBREW_PREFIX/"opt/oldfoo" }
+
+    before { setup_test_keg("foo", "2.0") }
+
+    it "does not modify an opt record for a different keg" do
+      oldname_opt_record.make_relative_symlink(HOMEBREW_CELLAR/"foo/2.0")
+      keg.remove_oldname_opt_records
+      expect(oldname_opt_record).to be_a_symlink
+    end
+
+    it "removes an opt record for the specified keg" do
+      oldname_opt_record.make_relative_symlink(HOMEBREW_CELLAR/"foo/1.0")
+      keg.remove_oldname_opt_records
+      expect(oldname_opt_record).not_to be_a_symlink
+    end
+
+    it "handles multiple opt records correctly" do
+      related_records = [
+        oldname_opt_record,
+        HOMEBREW_PREFIX/"opt/oldfoo@1",
+        HOMEBREW_PREFIX/"opt/related",
+      ]
+      unrelated_records = [
+        HOMEBREW_PREFIX/"opt/oldfoo2",
+        HOMEBREW_PREFIX/"opt/oldfoo@2",
+        HOMEBREW_PREFIX/"opt/unrelated",
+      ]
+      related_records.each { |record| record.make_relative_symlink(HOMEBREW_CELLAR/"foo/1.0") }
+      unrelated_records.each { |record| record.make_relative_symlink(HOMEBREW_CELLAR/"foo/2.0") }
+      allow(keg).to receive(:oldname_opt_records).and_return(unrelated_records + related_records)
+
+      keg.remove_oldname_opt_records
+
+      expect(related_records).not_to include(be_a_symlink)
+      expect(unrelated_records).to all be_a_symlink
+    end
   end
 
   describe "#link" do
@@ -467,6 +495,25 @@ RSpec.describe Keg do
       keg.strip_node_gyp_addons!
 
       expect(addon.read).to eq "unstripped"
+    end
+
+    it "re-signs addons that were stripped" do
+      allow(keg).to receive(:quiet_system) do |*command|
+        File.write(command.fetch(3), "stripped")
+        true
+      end
+
+      expect(keg).to receive(:codesign_patched_binaries).with([addon])
+
+      keg.strip_node_gyp_addons!
+    end
+
+    it "does not re-sign addons when strip fails" do
+      allow(keg).to receive(:quiet_system).and_return(false)
+
+      expect(keg).to receive(:codesign_patched_binaries).with([])
+
+      keg.strip_node_gyp_addons!
     end
   end
 

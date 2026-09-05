@@ -79,7 +79,9 @@ RSpec.describe FormulaInstaller do
   end
 
   specify "offline installation" do
-    expect { temporary_install(FailballOfflineInstall.new) }.to raise_error(BuildError) if Sandbox.available?
+    skip "Sandbox not in use." unless Sandbox.use_for?("testing offline installation", warn_without_sandbox: false)
+
+    expect { temporary_install(FailballOfflineInstall.new) }.to raise_error(BuildError)
   end
 
   it "releases its formula locks when installation raises" do
@@ -1656,8 +1658,11 @@ RSpec.describe FormulaInstaller do
         installer.install_service
       end.not_to output(/Error: Failed to install service files/).to_stderr
 
-      expect(launchd_service_path).to exist
-      expect(service_path).to exist
+      expect([
+        launchd_service_path.basename.to_s,
+        launchd_service_path.exist?,
+        service_path.exist?,
+      ]).to eq(["sh.brew.testball.plist", true, true])
     end
 
     it "works if timed service is set" do
@@ -1788,7 +1793,7 @@ RSpec.describe FormulaInstaller do
       sandbox = instance_double(Sandbox)
 
       allow(installer).to receive(:build_argv).and_return([])
-      allow(Sandbox).to receive_messages(available?: true, new: sandbox)
+      allow(Sandbox).to receive_messages(available?: true, avoid_nested_sandboxing?: false, new: sandbox)
       allow(sandbox).to receive_messages(record_log: nil, allow_read_if_exists: nil, allow_write_temp_and_cache: nil,
                                          allow_write_log: nil, allow_cvs: nil, allow_fossil: nil,
                                          allow_write_xcode: nil, allow_write_cellar: nil, deny_read_home: nil,

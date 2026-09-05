@@ -1,6 +1,7 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "api/env"
 require "abstract_command"
 require "extend/object/deep_dup"
 require "fileutils"
@@ -32,6 +33,8 @@ module Homebrew
         flag   "--repology=",
                description: "Load the formula to distro-package index from " \
                             "<file> instead of the published `data/repology.json`."
+        flag   "--overrides=",
+               description: "Load reviewed formula and advisory matching overrides from <file>."
         switch "--no-history",
                description: "Skip the `FormulaVersions` walk for the `fixed` " \
                             "boundary; use the current `pkg_version` instead."
@@ -53,10 +56,12 @@ module Homebrew
       sig { override.void }
       def run
         Formulary.enable_factory_cache!
-        Homebrew.with_no_api_env do
+        Homebrew::API.with_no_api_env do
           latest_macos = MacOSVersion.new((HOMEBREW_MACOS_NEWEST_UNSUPPORTED.to_i - 1).to_s).to_sym
           Homebrew::SimulateSystem.with(os: latest_macos, arch: :arm) do
-            matcher = Homebrew::Vulns::Match.new(repology: local_repology, bulk: args.all? || args.index?)
+            matcher = Homebrew::Vulns::Match.new(repology:  local_repology,
+                                                 overrides: local_overrides,
+                                                 bulk:      args.all? || args.index?)
             next emit_index(matcher) if args.index?
 
             emitter = build_emitter
@@ -66,7 +71,7 @@ module Homebrew
                 # A below-introduced hit would otherwise look open to OSV
                 # consumers; it must not participate in alias maintenance.
                 actionable = hits.filter_map do |hit|
-                  status, = matcher.range_status(hit)
+                  status, = matcher.range_status(hit, formula_name: formula.name)
                   [hit, status] if status&.state != :not_applicable
                 end
                 record_ids_by_canonical = actionable.to_h do |hit, _status|
@@ -146,6 +151,13 @@ module Homebrew
         Homebrew::Vulns::Repology.from_file(Pathname(path))
       end
 
+      sig { returns(T.nilable(Homebrew::Vulns::AdvisoryOverrides)) }
+      def local_overrides
+        return unless (path = args.overrides)
+
+        Homebrew::Vulns::AdvisoryOverrides.from_file(Pathname(path))
+      end
+
       sig { returns(T::Enumerator[Formula]) }
       def each_formula
         return args.named.to_resolved_formulae.each unless args.all?
@@ -181,7 +193,7 @@ module Homebrew
         end
         hits.sort_by { |h| [-h.vulnerability.severity_level, h.canonical_id] }.each do |hit|
           v = hit.vulnerability
-          status, = matcher.range_status(hit)
+          status, = matcher.range_status(hit, formula_name: formula.name)
           state = case status&.state
           when nil       then "uncomparable"
           when :affected then "AFFECTED#{", upstream fix #{status&.fixed_in}" if status&.fixed_in}"

@@ -3,6 +3,7 @@
 
 require "abstract_command"
 require "fileutils"
+require "utils/executable"
 require "utils/github"
 require "utils/github/artifacts"
 require "tmpdir"
@@ -79,7 +80,7 @@ module Homebrew
       sig { override.void }
       def run
         # Needed when extracting the CI artifact.
-        ensure_executable!("unzip", reason: "extracting CI artifacts")
+        Utils::Executable.ensure!("unzip", reason: "extracting CI artifacts")
 
         workflows = args.workflows.presence || ["tests.yml"]
         artifact_pattern = args.artifact_pattern || "bottles{,_*}"
@@ -521,11 +522,7 @@ module Homebrew
             opoo "Can't check if updated bottles are necessary as `$HOMEBREW_DISABLE_LOAD_FORMULA` is set!"
             break []
           end
-          begin
-            Formulary.resolve(name)
-          rescue FormulaUnavailableError
-            nil
-          end
+          Formulary.resolve(name)
         end
         casks = Utils.popen_read("git", "-C", tap.path, "diff-tree",
                                  "-r", "--name-only", "--diff-filter=AM",

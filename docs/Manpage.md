@@ -3256,15 +3256,14 @@ Summarise contributions to Homebrew repositories.
   governance quarter, for example `--maintainer-report-csv=2026-2`. Also write
   it in the current directory as `brew-contributions-FROM-to-TO.csv`, or
   `brew-contributions-FROM-to-TO-USER.csv` when filtered with `--user`. Only
-  Maintainers listed at the end of that quarter are included. The `new role`
-  value must show a downgrade for two consecutive quarters before a downgrade is
-  applied. Review searches return at most 100 results and other counts are
-  capped at 500 per repository and contribution type. Repository-scoped
-  follow-up searches ensure role activity checks remain accurate when a count is
-  capped. Completed-period GitHub searches are cached in Homebrew's cache and
-  removed by normal cache pruning. `YEAR-1` is December of the previous year
-  through February, `YEAR-2` is March through May, `YEAR-3` is June through
-  August and `YEAR-4` is September through November.
+  Maintainers listed at the end of that quarter are included. Review searches
+  return at most 100 results and other counts are capped at 500 per repository
+  and contribution type. Repository-scoped follow-up searches ensure role
+  activity checks remain accurate when a count is capped. Completed-period
+  GitHub searches are cached in Homebrew's cache and removed by normal cache
+  pruning. `YEAR-1` is December of the previous year through February, `YEAR-2`
+  is March through May, `YEAR-3` is June through August and `YEAR-4` is
+  September through November.
 
 ### `create` \[*`options`*\] *`URL`*
 
@@ -3408,9 +3407,25 @@ form of *`user`*`/`*`repo`*`/`*`formula`*.
 
 : Overwrite the destination formula if it already exists.
 
+### `find-appcast` *`app_path`*
+
+Find the appcast of the app bundle at *`app_path`*, for use in a cask
+`livecheck` block.
+
+Checks for a Sparkle `SUFeedURL` and Electron Builder update metadata.
+
 ### `formula` *`formula`* \[...\]
 
 Display the path where *`formula`* is located.
+
+### `generate-cask-token` *`app_or_name`*
+
+Generate a cask token, filename and header line for an application, following
+the token conventions described in the Cask Cookbook.
+
+The argument may be either a path to an application bundle (e.g.
+`/Applications/Example App.app`) or the vendor's name for the software (e.g.
+`Example App`).
 
 ### `generate-man-completions` \[`--no-exit-code`\]
 
@@ -5198,8 +5213,8 @@ Ruoyu Zhong, Sam Ford and Sean Molenaar.
 
 Homebrew's other Maintainers are Andrew Nesbitt, Anton Melnikov, Bo Anderson,
 Branch Vincent, Caleb Xu, Daeho Ro, Douglas Eichelberger, Dustin Rodrigues, FX
-Coudert, Klaus Hipp, Markus Reiter, Michka Popoff, Rylan Polster, Štefan
-Baebler, Thierry Moisan and William Woodruff.
+Coudert, Klaus Hipp, Markus Reiter, Michka Popoff, Štefan Baebler, Thierry
+Moisan and William Woodruff.
 
 ## BUGS
 

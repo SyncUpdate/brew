@@ -1,6 +1,9 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "utils/output"
+require "utils/shell"
+
 require "ipaddr"
 require "on_system"
 require "utils/path"
@@ -49,6 +52,7 @@ module Homebrew
       @macos_legacy_timers = T.let(false, T::Boolean)
       @nice = T.let(nil, T.nilable(Integer))
       @plist_name = T.let(default_plist_name, String)
+      @plist_name_explicitly_set = T.let(false, T::Boolean)
       @process_type = T.let(nil, T.nilable(Symbol))
       @require_root = T.let(false, T::Boolean)
       @restart_delay = T.let(nil, T.nilable(Integer))
@@ -59,6 +63,7 @@ module Homebrew
       @run_params = T.let(nil, T.any(RunParam, T::Hash[Symbol, RunParam]))
       @run_type = T.let(RUN_TYPE_IMMEDIATE, Symbol)
       @service_name = T.let(default_service_name, String)
+      @service_name_explicitly_set = T.let(false, T::Boolean)
       @sockets = T.let({}, Sockets)
       @stop_timeout = T.let(nil, T.nilable(Integer))
       @working_dir = T.let(nil, T.nilable(String))
@@ -79,12 +84,46 @@ module Homebrew
 
     sig { returns(String) }
     def default_plist_name
+      canonical_plist_name
+    end
+
+    sig { returns(String) }
+    def legacy_plist_name
       "homebrew.mxcl.#{@formula.name}"
     end
 
     sig { returns(String) }
+    def canonical_plist_name
+      "sh.brew.#{@formula.name}"
+    end
+
+    sig { returns(T::Array[String]) }
+    def plist_names
+      return [plist_name] if @plist_name_explicitly_set
+
+      [plist_name, canonical_plist_name, legacy_plist_name].uniq
+    end
+
+    sig { returns(String) }
     def default_service_name
+      legacy_service_name
+    end
+
+    sig { returns(String) }
+    def legacy_service_name
       "homebrew.#{@formula.name}"
+    end
+
+    sig { returns(String) }
+    def canonical_service_name
+      "sh.brew.#{@formula.name}"
+    end
+
+    sig { returns(T::Array[String]) }
+    def service_names
+      return [service_name] if @service_name_explicitly_set
+
+      [service_name, canonical_service_name, legacy_service_name].uniq
     end
 
     # A hash with the `launchd` service name on macOS and/or the `systemd`
@@ -96,8 +135,14 @@ module Homebrew
     def name(macos: nil, linux: nil)
       raise TypeError, "Service#name expects at least one String" if [macos, linux].none?(String)
 
-      @plist_name = macos if macos
-      @service_name = linux if linux
+      if macos
+        @plist_name = macos
+        @plist_name_explicitly_set = true
+      end
+      return unless linux
+
+      @service_name = linux
+      @service_name_explicitly_set = true
     end
 
     # The command to execute: an array with arguments or a path.
@@ -714,8 +759,8 @@ module Homebrew
     sig { returns(T::Hash[Symbol, T.untyped]) }
     def to_hash
       name_params = {
-        macos: (plist_name if plist_name != default_plist_name),
-        linux: (service_name if service_name != default_service_name),
+        macos: (plist_name if @plist_name_explicitly_set),
+        linux: (service_name if @service_name_explicitly_set),
       }.compact
 
       return { name: name_params }.compact_blank if @run_params.blank?

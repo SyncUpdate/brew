@@ -78,4 +78,62 @@ RSpec.describe Homebrew::FormulaCreator do
       end
     end
   end
+
+  describe "#write_formula!" do
+    shared_examples "expected" do |mode, includes:, excludes:|
+      sig { returns(Pathname) }
+      subject(:formula) do
+        described_class.new(url: "https://brew.sh/foo-0.1.tgz", mode:).write_formula!
+      end
+
+      specify "when using #{mode} template" do
+        expect(formula).to be_a_file
+        contents = formula.read
+        expect(contents).to include(*includes)
+        expect(contents).not_to include(*excludes)
+      end
+    end
+
+    it_behaves_like "expected", :autotools,
+                    includes: ["deny_network_access!", "std_configure_args", "unrecognized options"],
+                    excludes: ['resource "']
+
+    it_behaves_like "expected", :cabal,
+                    includes: ["deny_network_access!", "std_cabal_v2_args", /"cabal".*"--only-download"/],
+                    excludes: ["unrecognized options", 'resource "']
+
+    it_behaves_like "expected", :cmake,
+                    includes: ["deny_network_access!", "std_cmake_args"],
+                    excludes: ["unrecognized options", 'resource "']
+
+    it_behaves_like "expected", :go,
+                    includes: ["deny_network_access!", "std_go_args", /"go".*"download"/],
+                    excludes: ["unrecognized options", 'resource "']
+
+    it_behaves_like "expected", :meson,
+                    includes: ["deny_network_access!", "std_meson_args"],
+                    excludes: ["unrecognized options", 'resource "']
+
+    it_behaves_like "expected", :perl,
+                    includes: ["deny_network_access!", "PERL5LIB", 'resource "'],
+                    excludes: ["unrecognized options"]
+
+    it_behaves_like "expected", :ruby,
+                    includes: ["deny_network_access!", /"cache".*"--no-install"/, /"install".*"--local"/],
+                    excludes: ["unrecognized options", 'resource "']
+
+    it_behaves_like "expected", :rust,
+                    includes: ["deny_network_access!",
+                               '"cargo", "install", *std_cargo_args',
+                               '"cargo", "fetch"'],
+                    excludes: ["unrecognized options", 'resource "']
+
+    it_behaves_like "expected", :zig,
+                    includes: ["deny_network_access!", "std_zig_args", "--fetch"],
+                    excludes: ["unrecognized options", 'resource "']
+
+    it_behaves_like "expected", nil,
+                    includes: ["deny_network_access!", "unrecognized options"],
+                    excludes: ['resource "']
+  end
 end

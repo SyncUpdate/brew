@@ -46,6 +46,13 @@ module Superenv
   sig { returns(T.nilable(Pathname)) }
   def self.bin; end
 
+  sig { params(env: T.nilable(String)).returns(T::Boolean) }
+  def self.enabled_for?(env)
+    return false if env == "std"
+
+    !bin.nil?
+  end
+
   sig { void }
   def initialize
     @keg_only_deps = T.let([], T::Array[Formula])
@@ -118,6 +125,10 @@ module Superenv
     self["HIDAPI_SYSTEM_HIDAPI"] = "1"
     self["PYZMQ_NO_BUNDLE"] = "1"
     self["SODIUM_INSTALL"] = "system"
+    # Set defaults for Bundler installs
+    self["BUNDLE_FORCE_RUBY_PLATFORM"] = "true"
+    self["BUNDLE_VERSION"] = "system"
+    self["BUNDLE_WITHOUT"] = "development:test"
 
     set_debug_symbols if debug_symbols
 

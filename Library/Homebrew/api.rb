@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "api/analytics"
+require "api/env"
 require "utils/output"
 
 # Runtime signature checks happen before lazy method-body requires run.
@@ -21,35 +22,12 @@ module Homebrew
 
     extend Utils::Output::Mixin
 
-    extend T::Generic
-    extend Cachable
-
-    Cache = type_template { { fixed: T::Hash[String, T.untyped] } }
-
     HOMEBREW_CACHE_API = T.let((HOMEBREW_CACHE/"api").freeze, Pathname)
     HOMEBREW_CACHE_API_SOURCE = T.let((HOMEBREW_CACHE/"api-source").freeze, Pathname)
     DEFAULT_API_STALE_SECONDS = T.let(7 * 24 * 60 * 60, Integer) # 7 days
     # Revalidate unsigned per-resource responses hourly to limit how long a
     # poisoned cache can persist without requiring a request for every command.
     UNSIGNED_API_STALE_SECONDS = T.let(60 * 60, Integer)
-
-    sig { params(endpoint: String).returns(T::Hash[String, T.untyped]) }
-    def self.fetch(endpoint)
-      return cache[endpoint] if cache.present? && cache.key?(endpoint)
-
-      api_url = "#{Homebrew::EnvConfig.api_domain}/#{endpoint}"
-      output = Utils::Curl.curl_output("--fail", api_url)
-      if !output.success? && Homebrew::EnvConfig.api_domain != HOMEBREW_API_DEFAULT_DOMAIN
-        # Fall back to the default API domain and try again
-        api_url = "#{HOMEBREW_API_DEFAULT_DOMAIN}/#{endpoint}"
-        output = Utils::Curl.curl_output("--fail", api_url)
-      end
-      raise ArgumentError, "No file found at: #{Tty.underline}#{api_url}#{Tty.reset}" unless output.success?
-
-      cache[endpoint] = JSON.parse(output.stdout, freeze: true)
-    rescue JSON::ParserError
-      raise ArgumentError, "Invalid JSON file: #{Tty.underline}#{api_url}#{Tty.reset}"
-    end
 
     sig { params(target: Pathname, stale_seconds: T.nilable(Integer)).returns(T::Boolean) }
     def self.skip_download?(target:, stale_seconds:)
@@ -102,7 +80,7 @@ module Homebrew
         unless skip_download
           require "download_queue"
           require "api/json_download"
-          download_queue ||= Homebrew.default_download_queue
+          download_queue ||= Homebrew::DownloadQueue.default
           download = Homebrew::API::JSONDownload.new(endpoint, target:, stale_seconds:)
           download_queue.enqueue(download)
         end
@@ -611,24 +589,5 @@ module Homebrew
     def self.cached_cask_json_file_path
       Homebrew::API::Internal.cached_packages_json_file_path
     end
-  end
-
-  sig { type_parameters(:U).params(block: T.proc.returns(T.type_parameter(:U))).returns(T.type_parameter(:U)) }
-  def self.with_no_api_env(&block)
-    return yield if Homebrew::EnvConfig.no_install_from_api?
-
-    with_env(HOMEBREW_NO_INSTALL_FROM_API: "1", HOMEBREW_AUTOMATICALLY_SET_NO_INSTALL_FROM_API: "1", &block)
-  end
-
-  sig {
-    type_parameters(:U).params(
-      condition: T::Boolean,
-      block:     T.proc.returns(T.type_parameter(:U)),
-    ).returns(T.type_parameter(:U))
-  }
-  def self.with_no_api_env_if_needed(condition, &block)
-    return yield unless condition
-
-    with_no_api_env(&block)
   end
 end

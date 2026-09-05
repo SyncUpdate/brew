@@ -157,6 +157,62 @@ RSpec.describe Formula do
     end
   end
 
+  describe "#python3" do
+    it "returns the stable executable for a direct Python dependency" do
+      f = formula "python-runtime-dependent" do
+        url "foo-1.0"
+        depends_on "python@3.14"
+      end
+
+      expect(f.python3).to eq HOMEBREW_PREFIX/"opt/python@3.14/bin/python3.14"
+    end
+
+    it "includes build and test dependencies" do
+      f = formula "python-build-test-dependent" do
+        url "foo-1.0"
+        depends_on "python@3.13" => [:build, :test]
+      end
+
+      expect(f.python3).to eq HOMEBREW_PREFIX/"opt/python@3.13/bin/python3.13"
+    end
+
+    it "de-duplicates the same Python dependency declared with separate tags" do
+      f = formula "python-split-tags" do
+        url "foo-1.0"
+        depends_on "python@3.14" => :build
+        depends_on "python@3.14" => :test
+      end
+
+      expect(f.python3).to eq HOMEBREW_PREFIX/"opt/python@3.14/bin/python3.14"
+    end
+
+    it "fails without a direct versioned Python 3 dependency" do
+      f = formula "unversioned-python" do
+        url "foo-1.0"
+        depends_on "python"
+        depends_on "boost-python3"
+      end
+
+      expect { f.python3 }
+        .to raise_error(RuntimeError,
+                        "`unversioned-python` must have exactly one `python@3.x` dependency to use `python3`; " \
+                        "found none.")
+    end
+
+    it "fails when there are multiple direct Python dependencies" do
+      f = formula "multiple-python-dependencies" do
+        url "foo-1.0"
+        depends_on "python@3.13" => [:build, :test]
+        depends_on "python@3.14" => [:build, :test]
+      end
+
+      expect { f.python3 }
+        .to raise_error(RuntimeError,
+                        "`multiple-python-dependencies` must have exactly one `python@3.x` dependency to use " \
+                        "`python3`; found python@3.13, python@3.14.")
+    end
+  end
+
   describe "#versioned_formulae" do
     let(:f) do
       formula "foo" do
@@ -1496,8 +1552,90 @@ RSpec.describe Formula do
       end
 
       expect(f.plist_name).to eq("custom.macos.beanstalkd")
+      expect(f.plist_names).to eq(["custom.macos.beanstalkd"])
       expect(f.service_name).to eq("custom.linux.beanstalkd")
+      expect(f.service_names).to eq(["custom.linux.beanstalkd"])
       expect(f.service.to_hash.keys).to contain_exactly(:name)
+    end
+
+    specify "explicit default and compatible macOS service names remain explicit when serialized" do
+      canonical_formula = formula "canonical_name" do
+        url "https://brew.sh/canonical-1.0.tbz"
+        service do
+          name macos: "sh.brew.canonical_name"
+        end
+      end
+      legacy_formula = formula "legacy_name" do
+        url "https://brew.sh/legacy-1.0.tbz"
+        service do
+          name macos: "homebrew.mxcl.legacy_name"
+        end
+      end
+
+      expect([
+        canonical_formula.service.to_hash,
+        canonical_formula.plist_names,
+        legacy_formula.service.to_hash,
+        legacy_formula.plist_names,
+      ]).to eq([
+        { name: { macos: "sh.brew.canonical_name" } },
+        ["sh.brew.canonical_name"],
+        { name: { macos: "homebrew.mxcl.legacy_name" } },
+        ["homebrew.mxcl.legacy_name"],
+      ])
+    end
+
+    specify "explicit default and compatible systemd service names remain explicit when serialized" do
+      legacy_formula = formula "legacy_name" do
+        url "https://brew.sh/legacy-1.0.tbz"
+        service do
+          name linux: "homebrew.legacy_name"
+        end
+      end
+      canonical_formula = formula "canonical_name" do
+        url "https://brew.sh/canonical-1.0.tbz"
+        service do
+          name linux: "sh.brew.canonical_name"
+        end
+      end
+
+      expect([
+        legacy_formula.service.to_hash,
+        legacy_formula.service_names,
+        canonical_formula.service.to_hash,
+        canonical_formula.service_names,
+      ]).to eq([
+        { name: { linux: "homebrew.legacy_name" } },
+        ["homebrew.legacy_name"],
+        { name: { linux: "sh.brew.canonical_name" } },
+        ["sh.brew.canonical_name"],
+      ])
+    end
+
+    specify "service with an overridden plist_name" do
+      f = formula do
+        T.bind(self, T.class_of(Formula))
+        url "https://brew.sh/test-1.0.tbz"
+
+        def plist_name = "custom.override.name"
+      end
+
+      expect(f.plist_name).to eq("custom.override.name")
+      expect(f.plist_names).to eq(["custom.override.name"])
+      expect(f.launchd_service_paths).to eq([HOMEBREW_PREFIX/"opt/formula_name/custom.override.name.plist"])
+    end
+
+    specify "service with an overridden service_name" do
+      f = formula do
+        T.bind(self, T.class_of(Formula))
+        url "https://brew.sh/test-1.0.tbz"
+
+        def service_name = "custom.override.name"
+      end
+
+      expect(f.service_name).to eq("custom.override.name")
+      expect(f.service_names).to eq(["custom.override.name"])
+      expect(f.systemd_service_paths).to eq([HOMEBREW_PREFIX/"opt/formula_name/custom.override.name.service"])
     end
 
     specify "service helpers return data" do
@@ -1506,11 +1644,25 @@ RSpec.describe Formula do
         url "https://brew.sh/test-1.0.tbz"
       end
 
-      expect(f.plist_name).to eq("homebrew.mxcl.formula_name")
+      expect(f.plist_name).to eq("sh.brew.formula_name")
+      expect(f.plist_names).to eq(["sh.brew.formula_name", "homebrew.mxcl.formula_name"])
       expect(f.service_name).to eq("homebrew.formula_name")
-      expect(f.launchd_service_path).to eq(HOMEBREW_PREFIX/"opt/formula_name/homebrew.mxcl.formula_name.plist")
+      expect(f.service_names).to eq(["homebrew.formula_name", "sh.brew.formula_name"])
+      expect(f.launchd_service_path).to eq(HOMEBREW_PREFIX/"opt/formula_name/sh.brew.formula_name.plist")
+      expect(f.launchd_service_paths).to eq([
+        HOMEBREW_PREFIX/"opt/formula_name/sh.brew.formula_name.plist",
+        HOMEBREW_PREFIX/"opt/formula_name/homebrew.mxcl.formula_name.plist",
+      ])
       expect(f.systemd_service_path).to eq(HOMEBREW_PREFIX/"opt/formula_name/homebrew.formula_name.service")
+      expect(f.systemd_service_paths).to eq([
+        HOMEBREW_PREFIX/"opt/formula_name/homebrew.formula_name.service",
+        HOMEBREW_PREFIX/"opt/formula_name/sh.brew.formula_name.service",
+      ])
       expect(f.systemd_timer_path).to eq(HOMEBREW_PREFIX/"opt/formula_name/homebrew.formula_name.timer")
+      expect(f.systemd_timer_paths).to eq([
+        HOMEBREW_PREFIX/"opt/formula_name/homebrew.formula_name.timer",
+        HOMEBREW_PREFIX/"opt/formula_name/sh.brew.formula_name.timer",
+      ])
     end
   end
 
@@ -3348,6 +3500,27 @@ RSpec.describe Formula do
         allow(Hardware::CPU).to receive(:arm?).and_return(false)
         expect(f.std_cabal_v2_args).not_to include("--ghc-option=-pie")
       end
+    end
+  end
+
+  describe "#std_cargo_args" do
+    before { allow(ENV).to receive(:make_jobs).and_return(10) }
+
+    it "excludes `--offline` by default" do
+      f = formula do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+      end
+      expect(f.std_cargo_args).not_to include("--offline")
+    end
+
+    it "includes `--offline` when formula has fetch phase" do
+      f = formula do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+        def fetch; end
+      end
+      expect(f.std_cargo_args).to include("--offline")
     end
   end
 

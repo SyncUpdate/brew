@@ -20,6 +20,7 @@ require "build_environment"
 require "build_options"
 require "formulary"
 require "software_spec"
+require "system_command"
 require "bottle"
 require "pour_bottle_check"
 require "head_software_spec"
@@ -84,6 +85,7 @@ class Formula
   include FileUtils
   include Utils::Shebang
   include Utils::Shell
+  include SystemCommand::Helpers
   include Utils::Output::Mixin
   include Utils::Path
   include Context
@@ -910,6 +912,22 @@ class Formula
   # @api public
   delegate deps: :active_spec
 
+  # The stable path to the executable provided by this formula's direct Python 3 dependency.
+  #
+  # @raise [RuntimeError] if the formula does not have exactly one `python@3.x` dependency
+  # @api public
+  sig { returns(Pathname) }
+  def python3
+    python_deps = Language::Python.direct_dependency_paths(self, pattern: /\Apython@3\.\d+\z/)
+
+    if python_deps.length != 1
+      found = python_deps.empty? ? "none" : python_deps.keys.join(", ")
+      raise "`#{full_name}` must have exactly one `python@3.x` dependency to use `python3`; found #{found}."
+    end
+
+    python_deps.values.fetch(0)
+  end
+
   # The declared {Dependency}s for the currently active {SoftwareSpec} (i.e. including those provided by macOS).
   delegate declared_deps: :active_spec
 
@@ -1468,21 +1486,58 @@ class Formula
   sig { returns(String) }
   def plist_name = service.plist_name
 
+  # The generated launchd {.plist} service names, including compatible defaults.
+  sig { returns(T::Array[String]) }
+  def plist_names
+    return [plist_name] if plist_name != service.plist_name
+
+    service.plist_names
+  end
+
   # The generated service name.
   sig { returns(String) }
   def service_name = service.service_name
 
-  # The generated launchd {.service} file path.
+  # The generated systemd service names, including compatible defaults.
+  sig { returns(T::Array[String]) }
+  def service_names
+    return [service_name] if service_name != service.service_name
+
+    service.service_names
+  end
+
+  # The generated launchd {.plist} file path.
   sig { returns(Pathname) }
-  def launchd_service_path = (any_installed_prefix || opt_prefix)/"#{plist_name}.plist"
+  def launchd_service_path = launchd_service_paths.fetch(0)
+
+  # The generated launchd {.plist} file paths, including compatible defaults.
+  sig { returns(T::Array[Pathname]) }
+  def launchd_service_paths
+    prefix = any_installed_prefix || opt_prefix
+    plist_names.map { |name| prefix/"#{name}.plist" }
+  end
 
   # The generated systemd {.service} file path.
   sig { returns(Pathname) }
-  def systemd_service_path = (any_installed_prefix || opt_prefix)/"#{service_name}.service"
+  def systemd_service_path = systemd_service_paths.fetch(0)
+
+  # The generated systemd {.service} file paths, including compatible defaults.
+  sig { returns(T::Array[Pathname]) }
+  def systemd_service_paths
+    prefix = any_installed_prefix || opt_prefix
+    service_names.map { |name| prefix/"#{name}.service" }
+  end
 
   # The generated systemd {.timer} file path.
   sig { returns(Pathname) }
-  def systemd_timer_path = (any_installed_prefix || opt_prefix)/"#{service_name}.timer"
+  def systemd_timer_path = systemd_timer_paths.fetch(0)
+
+  # The generated systemd {.timer} file paths, including compatible defaults.
+  sig { returns(T::Array[Pathname]) }
+  def systemd_timer_paths
+    prefix = any_installed_prefix || opt_prefix
+    service_names.map { |name| prefix/"#{name}.timer" }
+  end
 
   # The service specification for the software.
   #
@@ -1589,11 +1644,11 @@ class Formula
   #
   # ```ruby
   # def fetch
-  #   system "cargo", "fetch", "--locked"
+  #   system "cargo", "fetch", "--locked", "--target", "host-tuple"
   # end
   #
   # def install
-  #   system "cargo", "install", "--offline", *std_cargo_args
+  #   system "cargo", "install", *std_cargo_args
   # end
   # ```
   #
@@ -2136,6 +2191,7 @@ class Formula
   def std_cargo_args(root: prefix, path: ".", features: nil)
     args = ["--jobs", ENV.make_jobs.to_s, "--locked", "--root=#{root}", "--path=#{path}"]
     args += ["--features=#{Array(features).join(",")}"] if features
+    args << "--offline" if fetch_defined?
     args
   end
 

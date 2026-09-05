@@ -13,9 +13,12 @@ RSpec.describe Sandbox, :needs_macos do
 
   before do
     skip "Sandbox not implemented." unless described_class.available?
+    if described_class.nested_sandbox? && !RSpec.current_example&.metadata&.key?(:tests_nested_sandbox_detection)
+      skip "Nested sandboxing is not supported."
+    end
   end
 
-  describe ".avoid_nested_sandboxing?" do
+  describe ".avoid_nested_sandboxing?", :tests_nested_sandbox_detection do
     before do
       allow(Homebrew::EnvConfig).to receive(:avoid_nested_sandboxing?).and_return(true)
       allow(described_class).to receive(:nested_sandbox?).and_return(true)
@@ -136,6 +139,34 @@ RSpec.describe Sandbox, :needs_macos do
         sandbox.allow_write_path(path)
         expect { sandbox.run "chmod", "4000", path/"foo" }.not_to raise_error
       end
+    end
+  end
+
+  describe "#allow_write_xcode" do
+    let(:home) { mktmpdir }
+
+    before do
+      allow(Dir).to receive(:home).with(ENV.fetch("USER")).and_return(home)
+    end
+
+    it "allows writing to directories used by Xcode" do
+      developer = (home/"Library/Developer").mkpath
+      swiftpm = (home/"Library/Caches/org.swift.swiftpm").mkpath
+
+      sandbox.allow_write_xcode
+
+      allow_rules = sandbox.profile.rules.select { |rule| rule.operation == "file-write*" }
+      allow_paths = allow_rules.map { |rule| rule.filter&.path }
+      expect(allow_paths).to eq [
+        developer.to_s,
+        swiftpm.to_s,
+        "^/private/var/folders/[^/]+/[^/]+/T/xcrun_db(-[^/]+)?$",
+      ]
+
+      # Skipping xcrun_db regex as we cannot mock the path
+      expect { sandbox.run "touch", developer/"foo" }.not_to raise_error
+      expect { sandbox.run "touch", swiftpm/"foo" }.not_to raise_error
+      expect { sandbox.run "touch", home/"foo" }.to raise_error(ErrorDuringExecution)
     end
   end
 end

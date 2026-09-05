@@ -853,33 +853,16 @@ module Cask
       return artifacts if artifacts
       return [] unless api_fallback
 
-      artifacts ||= begin
-        tap_loader = (FromNameLoader.try_new(token, warn: false) if tap.nil? && FromAPILoader.try_new(token).nil?)
-
-        if tap && !tap.core_cask_tap?
-          load("#{tap}/#{token}", warn: false).artifacts_list(uninstall_only: true)
-        elsif tap_loader
-          tap_loader.load(config: nil).artifacts_list(uninstall_only: true)
+      begin
+        cask = if tap && !tap.core_cask_tap?
+          load("#{tap}/#{token}", warn: false)
+        elsif (loader = FromAPILoader.try_new(token) || FromNameLoader.try_new(token, warn: false))
+          loader.load(config: nil)
         end
-      rescue CaskError, MethodDeprecatedError, JSON::ParserError, ErrorDuringExecution, SystemExit
-        nil
+        cask&.artifacts_list(uninstall_only: true) || []
+      rescue CaskError, MethodDeprecatedError, JSON::ParserError, KeyError, ErrorDuringExecution, SystemExit
+        []
       end
-
-      # API fetch failures must not abort best-effort installed metadata recovery. Skip the
-      # per-cask endpoint only when the token is definitively absent from the current API;
-      # a membership-check failure is treated as unknown so recovery still tries the endpoint.
-      artifacts ||= begin
-        definitely_absent = begin
-          !Homebrew::API.cask_token?(token)
-        rescue ErrorDuringExecution, SystemExit
-          false
-        end
-        Homebrew::API::Cask.cask_json(token)["artifacts"] unless definitely_absent
-      rescue ErrorDuringExecution, SystemExit
-        nil
-      end
-      artifacts ||= []
-      artifacts
     end
 
     sig {

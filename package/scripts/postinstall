@@ -44,7 +44,7 @@ git_no_hooks() {
 
 # reset Git repository
 cd "${homebrew_directory}"
-rm -rf "${homebrew_directory}/.git/hooks"
+rm -rf "${homebrew_directory}/.git/hooks" "${homebrew_directory}/.gitconfig" "${homebrew_directory}/.config/git"
 git config --global --add safe.directory "${homebrew_directory}"
 latest_tag="$(git_no_hooks -C "${homebrew_directory}" tag --list --sort="-version:refname" | head -n1)"
 git_no_hooks -C "${homebrew_directory}" checkout --force -B stable
@@ -61,7 +61,7 @@ then
     mv "${homebrew_directory}/cache_api" "/usr/local/Homebrew/"
 
     export HOME="/usr/local/Homebrew"
-    rm -rf "/usr/local/Homebrew/.git/hooks"
+    rm -rf "/usr/local/Homebrew/.git/hooks" "/usr/local/Homebrew/.gitconfig" "/usr/local/Homebrew/.config/git"
     git config --global --add safe.directory "/usr/local/Homebrew"
     git_no_hooks -C "/usr/local/Homebrew" checkout --force -B stable
     git_no_hooks -C "/usr/local/Homebrew" reset --hard
@@ -157,9 +157,10 @@ user_home_dir="$(homebrew-user-home "${homebrew_pkg_user}")" ||
   }
 user_cache_dir="${user_home_dir}/Library/Caches/Homebrew"
 user_api_cache_dir="${user_cache_dir}/api"
-mkdir -vp "${user_api_cache_dir}"
-cp -vpR "${homebrew_directory}/cache_api/." "${user_api_cache_dir}"
-chown -R "${homebrew_pkg_user}:staff" "${user_cache_dir}"
+# Seed the cache as the install user: as root, `cp` follows a symlink planted at the
+# destination, and the `chown -R` this removes would reach anything hard-linked into the tree.
+sudo -u "${homebrew_pkg_user}" mkdir -vp "${user_api_cache_dir}"
+sudo -u "${homebrew_pkg_user}" cp -vpR "${homebrew_directory}/cache_api/." "${user_api_cache_dir}"
 rm -vrf "${homebrew_directory}/cache_api"
 
 # create paths.d file for /opt/homebrew installs
