@@ -66,10 +66,10 @@ module Homebrew
             # Formula name: "foo"
             String,
             # Formula name and dependency type: { "foo" => :build }
-            # Formula name, dependency type, and version bounds: { "foo" => :build, since: :catalina }
+            # Formula name, dependency type, and version bounds: { "foo" => :build, since: :big_sur }
             T::Hash[T.any(String, Symbol), T.any(Symbol, T::Array[Symbol])],
           ),
-          # If the first argument is only a name, this argument contains the version bounds: { since: :catalina }
+          # If the first argument is only a name, this argument contains the version bounds: { since: :big_sur }
           T::Hash[Symbol, Symbol],
         ]
       end
@@ -138,7 +138,7 @@ module Homebrew
         bottle_checksums.each do |bottle_info|
           bottle_info = bottle_info.dup
           cellar = bottle_info.delete(:cellar) || :any
-          tag = T.must(bottle_info.keys.first)
+          tag = bottle_info.keys.fetch(0)
           checksum = T.cast(bottle_info.values.first, String)
 
           bottle_collector.add(
@@ -230,7 +230,7 @@ module Homebrew
       #
       #  format_arg_pair(["foo"], last: {})                       # => ["foo", {}]
       #  format_arg_pair([{ "foo" => :build }], last: {})         # => [{ "foo" => :build }, {}]
-      #  format_arg_pair(["foo", { since: :catalina }], last: {}) # => ["foo", { since: :catalina }]
+      #  format_arg_pair(["foo", { since: :big_sur }], last: {}) # => ["foo", { since: :big_sur }]
       sig {
         type_parameters(:U, :V)
           .params(
@@ -239,15 +239,14 @@ module Homebrew
           ).returns([T.type_parameter(:U), T.type_parameter(:V)])
       }
       def self.format_arg_pair(args, last:)
-        args = case args
+        case args
         in [elem]
           [elem, last]
         in [elem1, elem2]
           [elem1, elem2]
+        else
+          raise ArgumentError, "Expected one or two elements, got #{args.inspect}"
         end
-
-        # The case above is exhaustive so args will never be nil, but sorbet cannot infer that.
-        T.must(args)
       end
     end
   end

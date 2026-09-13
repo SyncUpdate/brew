@@ -37,6 +37,16 @@ RSpec.describe "patching", type: :system do
     end
   end
 
+  let(:local_patch_tap) { Tap.fetch("homebrew", "local-patch-test") }
+  let(:local_patch_formula) do
+    formula(path: local_patch_tap.path/"Formula/testball.rb", tap: local_patch_tap) do
+      T.bind(self, T.class_of(Formula))
+      patch do
+        file "patches/noop-a.diff"
+      end
+    end
+  end
+
   def formula(name = "formula_name", path: Formulary.core_path(name), spec: :stable, alias_path: nil, tap: nil,
               &block)
     formula_subclass.class_eval(&block)
@@ -177,21 +187,13 @@ RSpec.describe "patching", type: :system do
   end
 
   specify "local_patch_dsl_resolves_tapped_formulae_from_tap_root" do
-    tap = Tap.fetch("homebrew", "local-patch-test")
-    (tap.path/"Formula").mkpath
-    (tap.path/"patches").mkpath
-    FileUtils.cp patch_fixture("noop-a"), tap.path/"patches/noop-a.diff"
+    (local_patch_tap.path/"Formula").mkpath
+    (local_patch_tap.path/"patches").mkpath
+    FileUtils.cp patch_fixture("noop-a"), local_patch_tap.path/"patches/noop-a.diff"
 
-    expect(
-      formula(path: tap.path/"Formula/testball.rb", tap:) do
-        T.bind(self, T.class_of(Formula))
-        patch do
-          file "patches/noop-a.diff"
-        end
-      end,
-    ).to be_patched
+    expect(local_patch_formula).to be_patched
   ensure
-    FileUtils.rm_rf tap.path if tap
+    FileUtils.rm_rf local_patch_tap.path
   end
 
   specify "local_patch_dsl_missing_file_fail" do
@@ -364,19 +366,23 @@ RSpec.describe "patching", type: :system do
   end
 
   specify "patch_string" do
+    patch_contents = File.read(patch_fixture("noop-a"))
+
     expect(
       formula do
         T.bind(self, T.class_of(Formula))
-        patch File.read(patch_fixture("noop-a"))
+        patch patch_contents
       end,
     ).to be_patched
   end
 
   specify "patch_string_with_strip" do
+    patch_contents = File.read(patch_fixture("noop-b"))
+
     expect(
       formula do
         T.bind(self, T.class_of(Formula))
-        patch :p0, File.read(patch_fixture("noop-b"))
+        patch :p0, patch_contents
       end,
     ).to be_patched
   end

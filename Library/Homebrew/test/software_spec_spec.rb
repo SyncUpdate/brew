@@ -1,4 +1,4 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require "software_spec"
@@ -13,12 +13,18 @@ RSpec.describe SoftwareSpec do
 
   describe "#resource" do
     it "defines a resource" do
-      spec.resource("foo") { url "foo-1.0" }
+      spec.resource("foo") do
+        T.bind(self, Resource)
+        url "foo-1.0"
+      end
       expect(spec).to have_defined_resource("foo")
     end
 
     it "sets itself to be the resource's owner" do
-      spec.resource("foo") { url "foo-1.0" }
+      spec.resource("foo") do
+        T.bind(self, Resource)
+        url "foo-1.0"
+      end
       spec.owner = owner
       spec.resources.each_value do |r|
         expect(r.owner).to eq(spec)
@@ -27,16 +33,25 @@ RSpec.describe SoftwareSpec do
 
     it "receives the owner's version if it has no own version" do
       spec.url("foo-42")
-      spec.resource("bar") { url "bar" }
+      spec.resource("bar") do
+        T.bind(self, Resource)
+        url "bar"
+      end
       spec.owner = owner
 
       expect(spec.resource("bar").version).to eq("42")
     end
 
     it "raises an error when duplicate resources are defined" do
-      spec.resource("foo") { url "foo-1.0" }
+      spec.resource("foo") do
+        T.bind(self, Resource)
+        url "foo-1.0"
+      end
       expect do
-        spec.resource("foo") { url "foo-1.0" }
+        spec.resource("foo") do
+          T.bind(self, Resource)
+          url "foo-1.0"
+        end
       end.to raise_error(DuplicateResourceError)
     end
 
@@ -286,6 +301,7 @@ RSpec.describe SoftwareSpec do
 
     it "doesn't add a patch with no url" do
       spec.patch do
+        T.bind(self, Resource::Patch)
         sha256 "7852a7a365f518b12a1afd763a6a80ece88ac7aeea3c9023aa6c1fe46ac5a1ae"
       end
       expect(spec.patches.empty?).to be true

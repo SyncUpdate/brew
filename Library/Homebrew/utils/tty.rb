@@ -1,6 +1,9 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "io/console"
+require "utils/popen"
+
 # Various helper functions for interacting with TTYs.
 module Tty
   @stream = T.let($stdout, T.nilable(T.any(IO, StringIO)))
@@ -139,22 +142,26 @@ module Tty
     def size
       return @size if defined?(@size)
 
-      @size = T.let(nil, T.nilable([Integer, Integer]))
-      height, width = `/bin/stty size 2>/dev/null`.presence&.split&.map(&:to_i)
-      @size = [height, width] if height && width
-
-      @size
+      @size = T.let(($stdin.winsize if $stdin.tty?), T.nilable([Integer, Integer]))
+    rescue IOError, SystemCallError
+      @size = nil
     end
 
     sig { returns(Integer) }
     def height
-      @height ||= T.let(size&.first || `/usr/bin/tput lines 2>/dev/null`.presence&.to_i || 40, T.nilable(Integer))
+      @height ||= T.let(
+        size&.first || Utils.popen_read_text("/usr/bin/tput", "lines", err: File::NULL).presence&.to_i || 40,
+        T.nilable(Integer),
+      )
     end
 
     # Keep in sync with `columns` in Library/Homebrew/utils/tty.sh.
     sig { returns(Integer) }
     def width
-      @width ||= T.let(size&.second || `/usr/bin/tput cols 2>/dev/null`.presence&.to_i || 80, T.nilable(Integer))
+      @width ||= T.let(
+        size&.second || Utils.popen_read_text("/usr/bin/tput", "cols", err: File::NULL).presence&.to_i || 80,
+        T.nilable(Integer),
+      )
     end
 
     sig { params(string: String).returns(String) }

@@ -1,6 +1,8 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "utils/browser"
+
 require "abstract_command"
 require "fileutils"
 require "hardware"
@@ -115,19 +117,28 @@ module Homebrew
           else
             "#{HOMEBREW_CACHE}/#{parallel_rspec_log_name}"
           end
-          ENV["PARALLEL_RSPEC_LOG_PATH"] = parallel_rspec_log_path
+          # A run that may not record every file must not replace the log a full run
+          # reads: `--only`, `--changed` and `--shard` cover a subset by design, and
+          # `--fail-fast` stops its workers early.
+          ENV["PARALLEL_RSPEC_LOG_PATH"] = if only || args.changed? || args.shard || args.fail_fast?
+            "#{parallel_rspec_log_path}.partial"
+          else
+            parallel_rspec_log_path
+          end
 
           parallel_args = if ENV["CI"]
-            %W[
+            %w[
               --combine-stderr
               --serialize-stdout
-              --runtime-log #{parallel_rspec_log_path}
             ]
           else
             %w[
               --nice
             ]
           end
+          # Group by recorded runtime rather than source file size, which barely
+          # correlates with how long a file takes.
+          parallel_args += ["--runtime-log", parallel_rspec_log_path]
 
           # Generate seed ourselves and output later to avoid multiple different
           # seeds being output when running parallel tests.
@@ -176,13 +187,6 @@ module Homebrew
 
           ENV["HOMEBREW_DEBUG"] = "1" if args.debug? # Used in spec_helper.rb to require the "debug" gem.
 
-          # Workaround for:
-          #
-          # ```
-          # ruby: no -r allowed while running setuid (SecurityError)
-          # ```
-          Process::UID.change_privilege(Process.euid) if Process.euid != Process.uid
-
           test_prof = "#{HOMEBREW_LIBRARY_PATH}/tmp/test_prof"
           if args.stackprof?
             ENV["TEST_STACK_PROF"] = "1"
@@ -212,9 +216,12 @@ module Homebrew
           end
           success = $CHILD_STATUS.success?
 
-          safe_system "stackprof --d3-flamegraph #{prof_input_filename} > #{prof_filename}" if args.stackprof?
+          if args.stackprof?
+            SystemCommand.safe_system "/bin/sh", "-c",
+                                      "stackprof --d3-flamegraph #{prof_input_filename} > #{prof_filename}"
+          end
 
-          exec_browser prof_filename if prof_filename
+          Utils::Browser.open prof_filename if prof_filename
 
           return if success
 
@@ -274,6 +281,8 @@ module Homebrew
         ENV["HOME"] = "#{HOMEBREW_LIBRARY_PATH}/test"
         # Keep generic tool caches (e.g. RuboCop) out of the sandboxed test home.
         ENV["XDG_CACHE_HOME"] = "#{HOMEBREW_CACHE}/tests"
+        # Same for tool state, e.g. `mise` writes `.local/state/mise` under `$HOME`.
+        ENV["XDG_STATE_HOME"] = "#{HOMEBREW_CACHE}/tests-state"
         # Sandbox the config home too, so the spec teardown can't delete the real `trust.json`.
         ENV["HOMEBREW_USER_CONFIG_HOME"] = "#{Dir.home}/.homebrew"
 

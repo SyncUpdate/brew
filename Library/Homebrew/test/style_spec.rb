@@ -256,5 +256,37 @@ RSpec.describe Homebrew::Style do
 
       described_class.run_rubocop([ruby_file], :json, fix: true, todo: true)
     end
+
+    it "roots RuboCop at the tap when every file is in one tap" do
+      tap_path = HOMEBREW_TAP_DIRECTORY/"homebrew/homebrew-foo"
+      script = tap_path/"cmd/foo.rb"
+      script.dirname.mkpath
+      script.write "# frozen_string_literal: true\n"
+      result = double(status: double(exitstatus: 0), stdout: '{"files":[]}')
+
+      expect(described_class).to receive(:system_command).with(
+        anything,
+        hash_including(args: include("--config", HOMEBREW_LIBRARY/"tap_rubocop_style.yml", script), chdir: tap_path),
+      ).and_return(result)
+
+      described_class.run_rubocop([script], :json)
+    end
+
+    it "uses the shared config when files span multiple taps" do
+      scripts = %w[foo bar].map do |name|
+        script = HOMEBREW_TAP_DIRECTORY/"homebrew/homebrew-#{name}/cmd/#{name}.rb"
+        script.dirname.mkpath
+        script.write "# frozen_string_literal: true\n"
+        script
+      end
+      result = double(status: double(exitstatus: 0), stdout: '{"files":[]}')
+
+      expect(described_class).to receive(:system_command).with(
+        anything,
+        hash_including(args: include("--config", HOMEBREW_LIBRARY/".rubocop.yml"), chdir: HOMEBREW_LIBRARY),
+      ).and_return(result)
+
+      described_class.run_rubocop(scripts, :json)
+    end
   end
 end

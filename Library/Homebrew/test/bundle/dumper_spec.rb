@@ -41,9 +41,9 @@ RSpec.describe Homebrew::Bundle::Dumper do
                                  config:    nil)
 
     allow(Cask::Caskroom).to receive(:casks).and_return([chrome, java, iterm2beta])
-    allow(Homebrew::Bundle::Go).to receive_messages(package_manager_executable: nil, "`": "")
-    allow(Homebrew::Bundle::Cargo).to receive_messages(package_manager_executable: nil, "`": "")
-    allow(Homebrew::Bundle::Uv).to receive_messages(package_manager_executable: nil, "`": "")
+    allow(Homebrew::Bundle::Go).to receive(:package_manager_executable).and_return(nil)
+    allow(Homebrew::Bundle::Cargo).to receive(:package_manager_executable).and_return(nil)
+    allow(Homebrew::Bundle::Uv).to receive(:package_manager_executable).and_return(nil)
     allow(Tap).to receive(:select).and_return([])
   end
 

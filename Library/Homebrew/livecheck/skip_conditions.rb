@@ -91,7 +91,7 @@ module Homebrew
         ).returns(T::Hash[Symbol, T.untyped])
       }
       private_class_method def self.formula_disabled(formula, livecheck_defined, full_name: false, verbose: false)
-        return {} if !formula.disabled? || livecheck_defined
+        return {} if livecheck_defined || !DeprecateDisable.disabled_on_all_platforms?(formula)
 
         Livecheck.status_hash(formula, "disabled", full_name:, verbose:)
       end
@@ -134,7 +134,7 @@ module Homebrew
         ).returns(T::Hash[Symbol, T.untyped])
       }
       private_class_method def self.cask_disabled(cask, livecheck_defined, full_name: false, verbose: false)
-        return {} if !cask.disabled? || livecheck_defined
+        return {} if livecheck_defined || !DeprecateDisable.disabled_on_all_platforms?(cask)
 
         Livecheck.status_hash(cask, "disabled", full_name:, verbose:)
       end

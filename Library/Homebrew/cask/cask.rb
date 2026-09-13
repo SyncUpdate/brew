@@ -9,6 +9,7 @@ require "cask/dsl"
 require "cask/metadata"
 require "cask/tab"
 require "utils/output"
+require "utils/path"
 require "api_hashable"
 require "trust"
 
@@ -51,14 +52,8 @@ module Cask
     sig { returns(T::Boolean) }
     attr_accessor :allow_reassignment
 
-    sig { params(eval_all: T::Boolean).returns(T::Array[Cask]) }
-    def self.all(eval_all: false)
-      if !eval_all && !Homebrew::EnvConfig.tap_trust_configured?
-        raise ArgumentError,
-              "Cask::Cask#all cannot be used without `HOMEBREW_REQUIRE_TAP_TRUST=1` or " \
-              "`HOMEBREW_NO_REQUIRE_TAP_TRUST=1`"
-      end
-
+    sig { returns(T::Array[Cask]) }
+    def self.all
       # Load core casks from tokens so they load from the API when the core cask is not tapped.
       tokens_and_files = CoreCaskTap.instance.cask_tokens
       tokens_and_files += Tap.reject(&:core_cask_tap?).flat_map(&:cask_files)
@@ -152,7 +147,7 @@ module Cask
     def old_tokens
       @old_tokens ||= T.let(
         if (t = tap)
-          Tap.tap_migration_oldnames(t, token) +
+          Tap.tap_migration_oldnames(t, token, cask: true) +
             t.cask_reverse_renames.fetch(token, [])
         else
           []
@@ -218,11 +213,10 @@ module Cask
     sig { params(caskroom_path: Pathname).returns(T::Array[[String, String]]) }
     def timestamped_versions(caskroom_path: self.caskroom_path)
       pattern = metadata_timestamped_path(version: "*", timestamp: "*", caskroom_path:).to_s
-      relative_paths = Pathname.glob(pattern)
-                               .map { |p| p.relative_path_from(p.parent.parent) }
-      # Sorbet is unaware that Pathname is sortable: https://github.com/sorbet/sorbet/issues/6844
-      T.unsafe(relative_paths).sort_by(&:basename) # sort by timestamp
-       .map { |p| p.split.map(&:to_s) }
+      Pathname.glob(pattern)
+              .map { |p| p.relative_path_from(p.parent.parent) }
+              .map { |p| [p.dirname.to_s, p.basename.to_s] }
+              .sort_by(&:last) # sort by timestamp
     end
 
     # The fully-qualified token of this {Cask}.
@@ -274,6 +268,16 @@ module Cask
       !depends_on.requires_linux?
     end
 
+    # True if this cask can be installed on this platform.
+    sig { returns(T::Boolean) }
+    def valid_platform?
+      if Homebrew::SimulateSystem.simulating_or_running_on_macos?
+        supports_macos?
+      else
+        supports_linux?
+      end
+    end
+
     sig { returns(T::Boolean) }
     def uninstall_flight_blocks?
       artifacts.any? do |artifact|
@@ -321,7 +325,7 @@ module Cask
     sig { void }
     def unpin
       pin_path.unlink if pin_path.symlink?
-      HOMEBREW_PINNED_CASKS.rmdir_if_possible
+      ::Utils::Path.rmdir_if_possible(HOMEBREW_PINNED_CASKS)
     end
 
     sig { returns(T::Boolean) }
@@ -338,7 +342,7 @@ module Cask
 
     sig { returns(T.nilable(String)) }
     def pinned_version
-      pin_path.resolved_path.basename.to_s if pinned?
+      ::Utils::Path.resolved_path(pin_path).basename.to_s if pinned?
     end
 
     sig { returns(Pathname) }
@@ -728,14 +732,15 @@ module Cask
       end
     end
 
-    private
-
-    sig { params(bottle_tag: ::Utils::Bottles::Tag).returns(T::Boolean) }
-    def platform_supported?(bottle_tag)
-      return false if bottle_tag.linux? && !supports_linux?
-      return false if bottle_tag.macos? && !supports_macos?
+    sig { params(bottle_tag: ::Utils::Bottles::Tag, installable: T::Boolean).returns(T::Boolean) }
+    def platform_supported?(bottle_tag, installable: true)
+      if bottle_tag.linux?
+        return false unless supports_linux?
+      else
+        return false unless supports_macos?
+      end
       return false if version.blank? || sha256.blank? || url.blank?
-      return false unless installable_artifact?
+      return false if installable && !installable_artifact?
 
       arch_supported = depends_on.arch&.any? do |arch|
         required_arch = ::Utils::Bottles::Tag.new(system: bottle_tag.system, arch: arch[:type]).standardized_arch
@@ -749,6 +754,8 @@ module Cask
         requirement.allows?(bottle_tag.to_macos_version)
       end
     end
+
+    private
 
     # Returns caveats text for API serialization, excluding conditional
     # built-in caveats that depend on the current machine's state.

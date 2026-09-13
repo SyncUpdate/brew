@@ -13,7 +13,7 @@ RSpec.describe Homebrew::Bundle::VscodeExtension do
     context "when vscode is not installed" do
       before do
         described_class.reset!
-        allow(described_class).to receive_messages(package_manager_executable: nil, "`": "")
+        allow(described_class).to receive(:package_manager_executable).and_return(nil)
       end
 
       specify do
@@ -36,8 +36,8 @@ RSpec.describe Homebrew::Bundle::VscodeExtension do
           tamasfe.even-better-toml
         EOF
 
-        allow(described_class).to receive(:`)
-          .with('"code" --list-extensions 2>/dev/null')
+        allow(Utils).to receive(:popen_read_text)
+          .with(Pathname("code"), "--list-extensions", err: File::NULL)
           .and_return(output)
         expect(dumper.extensions).to eql([
           "catppuccin.catppuccin-vsc",
@@ -55,8 +55,8 @@ RSpec.describe Homebrew::Bundle::VscodeExtension do
           GitHub.codespaces
         EOF
 
-        allow(described_class).to receive(:`)
-          .with('"code" --list-extensions 2>/dev/null')
+        allow(Utils).to receive(:popen_read_text)
+          .with(Pathname("code"), "--list-extensions", err: File::NULL)
           .and_return(output)
 
         expect(dumper.extensions).to eql(["github.codespaces"])
@@ -125,32 +125,6 @@ RSpec.describe Homebrew::Bundle::VscodeExtension do
             .and_return(true)
 
           expect(described_class.install_batch!(entries, verbose: false)).to be(true)
-        end
-
-        it "installs extension when euid != uid and Process::UID.re_exchangeable? returns true" do
-          allow(Process).to receive(:uid).and_return(0)
-          allow(Etc).to receive(:getpwuid).with(0).and_return(double(dir: "/root"))
-          expect(Process).to receive(:euid).and_return(1).once
-          expect(Process::UID).to receive(:re_exchangeable?).and_return(true).once
-          expect(Process::UID).to receive(:re_exchange).twice
-
-          expect(Homebrew::Bundle).to \
-            receive(:system).with(Pathname("code"), "--install-extension", "foo", verbose: false).and_return(true)
-          expect(described_class.preinstall!("foo")).to be(true)
-          expect(described_class.install!("foo")).to be(true)
-        end
-
-        it "installs extension when euid != uid and Process::UID.re_exchangeable? returns false" do
-          allow(Process).to receive(:uid).and_return(0)
-          allow(Etc).to receive(:getpwuid).with(0).and_return(double(dir: "/root"))
-          expect(Process).to receive(:euid).and_return(1).once
-          expect(Process::UID).to receive(:re_exchangeable?).and_return(false).once
-          expect(Process::Sys).to receive(:seteuid).twice
-
-          expect(Homebrew::Bundle).to \
-            receive(:system).with(Pathname("code"), "--install-extension", "foo", verbose: false).and_return(true)
-          expect(described_class.preinstall!("foo")).to be(true)
-          expect(described_class.install!("foo")).to be(true)
         end
       end
     end

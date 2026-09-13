@@ -413,6 +413,14 @@ RSpec.describe Cask::DSL, :cask, :no_api do
     it "prevents defining multiple urls" do
       expect { cask }.to raise_error(Cask::CaskInvalidError, /'url' stanza may only appear once/)
     end
+
+    it "deprecates the verified parameter for tap casks" do
+      expect do
+        Cask::Cask.new("legacy-verified") do
+          url "https://cdn.example.com/app.dmg", verified: "cdn.example.com/"
+        end
+      end.to raise_error(MethodDeprecatedError, /verified/)
+    end
   end
 
   describe "homepage stanza" do
@@ -693,9 +701,7 @@ RSpec.describe Cask::DSL, :cask, :no_api do
       end
       Homebrew::Trust.trust!(:cask, "#{tap}/requested-cask")
 
-      with_env(HOMEBREW_REQUIRE_TAP_TRUST: "1") do
-        expect { Cask::Installer.new(cask).check_conflicts }.not_to raise_error
-      end
+      expect { Cask::Installer.new(cask).check_conflicts }.not_to raise_error
     ensure
       FileUtils.rm_rf HOMEBREW_TAP_DIRECTORY/"thirdparty"
     end
@@ -720,10 +726,8 @@ RSpec.describe Cask::DSL, :cask, :no_api do
       end
       Homebrew::Trust.trust!(:cask, "#{tap}/requested-cask")
 
-      with_env(HOMEBREW_REQUIRE_TAP_TRUST: "1") do
-        expect { Cask::Installer.new(cask).check_conflicts }
-          .to raise_error(Cask::CaskConflictError, "Cask 'requested-cask' conflicts with 'conflicting-cask'.")
-      end
+      expect { Cask::Installer.new(cask).check_conflicts }
+        .to raise_error(Cask::CaskConflictError, "Cask 'requested-cask' conflicts with 'conflicting-cask'.")
     ensure
       FileUtils.rm_rf HOMEBREW_TAP_DIRECTORY/"thirdparty"
     end
@@ -831,11 +835,11 @@ RSpec.describe Cask::DSL, :cask, :no_api do
   describe "#artifacts" do
     it "sorts artifacts according to the preferable installation order" do
       cask = Cask::Cask.new("appdir-trailing-slash") do
-        postflight do
+        postflight_steps do
           next
         end
 
-        preflight do
+        preflight_steps do
           next
         end
 
@@ -845,10 +849,10 @@ RSpec.describe Cask::DSL, :cask, :no_api do
       end
 
       expect(cask.artifacts.map { |artifact| artifact.class.dsl_key }).to eq [
-        :preflight,
+        :preflight_steps,
         :app,
         :binary,
-        :postflight,
+        :postflight_steps,
       ]
     end
   end

@@ -39,6 +39,10 @@ RSpec.describe BottleSpecification do
         expect(checksum[:cellar]).to eq(tag_spec.cellar)
       end
     end
+
+    it "rejects legacy syntax" do
+      expect { bottle_spec.sha256(("deadbeef" * 8) => :big_sur) }.to raise_error(LegacyDSLError)
+    end
   end
 
   describe "#compatible_locations?" do

@@ -419,8 +419,8 @@ module Formulary
         resolved_spec = spec || tab.spec
         f.active_spec = resolved_spec if f.public_send(resolved_spec)
         f.build = tab
-        if f.head? && tab.tabfile
-          k = Keg.new(T.must(tab.tabfile).parent)
+        if f.head? && (tabfile = tab.tabfile)
+          k = Keg.new(tabfile.parent)
           f.version.update_commit(k.version.version.commit) if k.version.head?
         end
       end
@@ -451,7 +451,7 @@ module Formulary
   sig { params(name: String).returns(String) }
   def self.class_s(name)
     class_name = name.capitalize
-    class_name.gsub!(/[-_.\s]([a-zA-Z0-9])/) { T.must(Regexp.last_match(1)).upcase }
+    class_name.gsub!(/[-_.\s][a-zA-Z0-9]/) { |matched| matched.chars.fetch(-1).upcase }
     class_name.tr!("+", "x")
     class_name.sub!(/(.)@(\d)/, "\\1AT\\2")
     class_name
@@ -614,7 +614,7 @@ module Formulary
         # Only treat symlinks in taps as aliases.
         if path.symlink?
           alias_path = path
-          path = alias_path.resolved_path
+          path = Utils::Path.resolved_path(alias_path)
         end
       else
         # Don't treat cache symlinks as aliases.
@@ -692,7 +692,7 @@ module Formulary
       Utils::Curl.curl_download url.to_s, to: path
       super
     rescue MethodDeprecatedError => e
-      if (match_data = url.to_s.match(%r{github.com/(?<user>[\w-]+)/(?<repo>[\w-]+)/}).presence)
+      if (match_data = url.to_s.match(%r{github\.com/(?<user>[\w-]+)/(?<repo>[\w-]+)/}).presence)
         e.issues_url = "https://github.com/#{match_data[:user]}/#{match_data[:repo]}/issues/new"
       end
       raise
@@ -1144,11 +1144,11 @@ module Formulary
 
     # Check whether the rack with the given name exists.
     if (rack = HOMEBREW_CELLAR/File.basename(ref, ".rb")).directory?
-      return rack.resolved_path
+      return Utils::Path.resolved_path(rack)
     end
 
     # Use canonical name to locate rack.
-    (HOMEBREW_CELLAR/canonical_name(ref)).resolved_path
+    Utils::Path.resolved_path(HOMEBREW_CELLAR/canonical_name(ref))
   end
 
   sig { params(ref: String).returns(String) }
@@ -1235,7 +1235,6 @@ module Formulary
       FromPathLoader,
       FromNameLoader,
       FromKegLoader,
-      FromCacheLoader,
     ].each do |loader_class|
       if (loader = loader_class.try_new(ref, from:, warn:))
         $stderr.puts "#{$PROGRAM_NAME} (#{loader_class}): loading #{ref}" if verbose? && debug?

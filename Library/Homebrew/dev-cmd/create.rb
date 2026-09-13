@@ -2,6 +2,8 @@
 # frozen_string_literal: true
 
 require "api/env"
+require "utils/editor"
+
 require "formula"
 require "formula_creator"
 require "missing_formula"
@@ -81,7 +83,7 @@ module Homebrew
           create_formula
         end
 
-        exec_editor path
+        Utils::Editor.open path
       end
 
       private
@@ -111,7 +113,7 @@ module Homebrew
         version = if set_version
           Version.new(set_version)
         else
-          Version.detect(url.gsub(token, "").gsub(/x86(_64)?/, ""))
+          Version.detect(url.gsub(token, "").gsub(/x86(?:_64)?/, ""))
         end
 
         interpolated_url, sha256 = if version.null?

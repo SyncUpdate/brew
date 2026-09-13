@@ -40,7 +40,7 @@ RSpec.describe Homebrew::Cmd::VersionInstall do
     let(:installed_formula_names) { [versioned_name] }
 
     it "skips installation" do
-      expect(version_install).not_to receive(:safe_system)
+      expect(SystemCommand).not_to receive(:safe_system)
 
       version_install.run
     end
@@ -57,13 +57,40 @@ RSpec.describe Homebrew::Cmd::VersionInstall do
     end
     let(:installed_taps) { [existing_tap] }
     let(:install_target) { "#{existing_tap_name}/#{versioned_name}" }
+    let(:formulary_factory) do
+      lambda do |ref, **_opts|
+        return instance_double(Formula, full_name: install_target) if ref == versioned_name
+
+        raise FormulaUnavailableError, ref
+      end
+    end
 
     before do
       allow(existing_tap).to receive(:to_s).and_return(existing_tap_name)
     end
 
+    context "when a different provider was requested" do
+      let(:args) { ["homebrew/core/foo", version] }
+      let(:install_target) { "homebrew/core/#{versioned_name}" }
+      let(:versioned_formula) { instance_double(Formula, full_name: install_target) }
+      let(:formulary_factory) do
+        lambda do |ref, **_opts|
+          return versioned_formula if ref == install_target
+
+          raise FormulaUnavailableError, ref
+        end
+      end
+
+      it "keeps the requested provider" do
+        expect(SystemCommand).to receive(:safe_system)
+          .with(HOMEBREW_BREW_FILE, "install", install_target).once
+
+        version_install.run
+      end
+    end
+
     it "installs from the existing tap extraction" do
-      expect(version_install).to receive(:safe_system)
+      expect(SystemCommand).to receive(:safe_system)
         .with(HOMEBREW_BREW_FILE, "install", install_target).once
 
       version_install.run
@@ -83,7 +110,7 @@ RSpec.describe Homebrew::Cmd::VersionInstall do
     end
 
     it "installs a versioned formula that already exists" do
-      expect(version_install).to receive(:safe_system)
+      expect(SystemCommand).to receive(:safe_system)
         .with(HOMEBREW_BREW_FILE, "install", install_target).once
 
       version_install.run
@@ -103,7 +130,7 @@ RSpec.describe Homebrew::Cmd::VersionInstall do
     end
 
     it "installs the current formula" do
-      expect(version_install).to receive(:safe_system)
+      expect(SystemCommand).to receive(:safe_system)
         .with(HOMEBREW_BREW_FILE, "install", install_target).once
 
       version_install.run
@@ -113,7 +140,7 @@ RSpec.describe Homebrew::Cmd::VersionInstall do
       let(:installed_formula_names) { [formula] }
 
       it "skips installation" do
-        expect(version_install).not_to receive(:safe_system)
+        expect(SystemCommand).not_to receive(:safe_system)
 
         version_install.run
       end
@@ -131,11 +158,11 @@ RSpec.describe Homebrew::Cmd::VersionInstall do
     end
 
     it "extracts into a new tap when needed" do
-      expect(version_install).to receive(:safe_system)
+      expect(SystemCommand).to receive(:safe_system)
         .with(HOMEBREW_BREW_FILE, "tap-new", "--no-git", tap_name).ordered
-      expect(version_install).to receive(:safe_system)
+      expect(SystemCommand).to receive(:safe_system)
         .with(HOMEBREW_BREW_FILE, "extract", formula, tap_name, "--version=#{version}").ordered
-      expect(version_install).to receive(:safe_system)
+      expect(SystemCommand).to receive(:safe_system)
         .with(HOMEBREW_BREW_FILE, "install", "#{tap_name}/#{versioned_name}").ordered
 
       version_install.run
@@ -145,9 +172,9 @@ RSpec.describe Homebrew::Cmd::VersionInstall do
       let(:tap_installed) { true }
 
       it "skips tap creation" do
-        expect(version_install).to receive(:safe_system)
+        expect(SystemCommand).to receive(:safe_system)
           .with(HOMEBREW_BREW_FILE, "extract", formula, tap_name, "--version=#{version}").ordered
-        expect(version_install).to receive(:safe_system)
+        expect(SystemCommand).to receive(:safe_system)
           .with(HOMEBREW_BREW_FILE, "install", "#{tap_name}/#{versioned_name}").ordered
 
         version_install.run

@@ -29,13 +29,15 @@ RSpec.describe Homebrew::Bundle::Krew do
       end
 
       it "returns plugin list" do
-        allow(described_class).to receive(:`).and_return("ctx\nneat\nns\n")
+        allow(Utils).to receive(:popen_read_text).with(Pathname("kubectl-krew"), "list", err: File::NULL)
+                                                 .and_return("ctx\nneat\nns\n")
 
         expect(dumper.packages).to eql(%w[ctx neat ns])
       end
 
       it "handles empty output" do
-        allow(described_class).to receive(:`).and_return("")
+        allow(Utils).to receive(:popen_read_text).with(Pathname("kubectl-krew"), "list",
+                                                       err: File::NULL).and_return("")
 
         expect(dumper.packages).to be_empty
       end

@@ -88,7 +88,7 @@ module Homebrew
     def self.unlink!
       Settings.write :linkcompletions, false
       Tap.installed.each do |tap|
-        next if tap.official?
+        next if tap.official_git_checkout?
 
         Utils::Link.unlink_completions tap.path
       end
@@ -102,7 +102,7 @@ module Homebrew
     sig { returns(T::Boolean) }
     def self.completions_to_link?
       Tap.installed.each do |tap|
-        next if tap.official?
+        next if tap.official_git_checkout?
 
         SHELLS.each do |shell|
           return true if (tap.path/"completions/#{shell}").exist?
@@ -372,7 +372,7 @@ module Homebrew
           next unless ZSH_NAMED_ARGS_COMPLETION_FUNCTION_MAPPING.key? type
 
           args_options << "- #{type}"
-          opt = "--#{type.to_s.gsub(/(installed|outdated)_/, "")}"
+          opt = "--#{type.to_s.gsub(/(?:installed|outdated)_/, "")}"
           if options.key?(opt)
             desc = options[opt]
 

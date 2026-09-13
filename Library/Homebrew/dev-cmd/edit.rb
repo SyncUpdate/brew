@@ -1,6 +1,8 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "utils/editor"
+
 require "abstract_command"
 require "formula"
 
@@ -31,7 +33,7 @@ module Homebrew
         ENV["TMPDIR"] = ENV.fetch("HOMEBREW_TMPDIR", nil)
 
         # VS Code remote development relies on this env var to work
-        if which_editor(silent: true) == "code" && ENV.include?("HOMEBREW_VSCODE_IPC_HOOK_CLI")
+        if Utils::Editor.command(silent: true) == "code" && ENV.include?("HOMEBREW_VSCODE_IPC_HOOK_CLI")
           ENV["VSCODE_IPC_HOOK_CLI"] = ENV.fetch("HOMEBREW_VSCODE_IPC_HOOK_CLI", nil)
         end
 
@@ -46,7 +48,7 @@ module Homebrew
         paths = if args.named.empty?
           # Sublime requires opting into the project editing path,
           # as opposed to VS Code which will infer from the .vscode path
-          if which_editor(silent: true) == "subl"
+          if Utils::Editor.command(silent: true) == "subl"
             ["--project", HOMEBREW_REPOSITORY/".sublime/homebrew.sublime-project"]
           else
             # If no formulae are listed, open the project root in an editor.
@@ -75,7 +77,7 @@ module Homebrew
           return
         end
 
-        exec_editor(*paths)
+        Utils::Editor.open(*paths)
 
         is_formula = T.let(false, T::Boolean)
         if !Homebrew::EnvConfig.no_env_hints? && paths.any? do |path|
@@ -119,11 +121,8 @@ module Homebrew
       def raise_with_message!(path, cask)
         name = path.basename(".rb").to_s
 
-        if (tap_match = Regexp.new("#{HOMEBREW_TAP_DIR_REGEX.source}$").match(path.to_s))
-          raise TapUnavailableError, CoreTap.instance.name if core_formula_tap?(path)
-          raise TapUnavailableError, CoreCaskTap.instance.name if core_cask_tap?(path)
-
-          raise TapUnavailableError, "#{tap_match[:user]}/#{tap_match[:repo]}"
+        if Regexp.new("#{HOMEBREW_TAP_DIR_REGEX.source}$").match?(path.to_s)
+          raise TapUnavailableError, Tap.from_path(path)&.name || path.to_s
         elsif cask || core_cask_path?(path)
           if !CoreCaskTap.instance.installed? && Homebrew::API.cask_token?(name)
             command = "brew tap --force #{CoreCaskTap.instance.name}"

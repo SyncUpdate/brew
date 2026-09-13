@@ -353,9 +353,7 @@ to one or more of the following environment variables:
 
 `--force-cleanup`
 
-: Perform cleanup after installing dependencies without asking. Enabled by
-  default if `$HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP` is set and `--global` is
-  passed.
+: Perform cleanup after installing dependencies without asking.
 
 `--zap`
 
@@ -1525,11 +1523,11 @@ or cask.
 
 : Only list leaves that were installed as dependencies.
 
-### `link`, `ln` \[*`options`*\] *`installed_formula`* \[...\]
+### `link`, `ln` \[*`options`*\] *`installed_formula`*\|*`installed_cask`* \[...\]
 
-Symlink all of *`formula`*'s installed files into Homebrew's prefix. This is
-done automatically when you install formulae but can be useful for manual
-installations.
+Symlink all of *`formula`*'s installed files or *`cask`*'s binaries, manpages
+and shell completions into Homebrew's prefix. This is done automatically when
+you install formulae and casks but can be useful for manual installations.
 
 `--overwrite`
 
@@ -1542,11 +1540,20 @@ installations.
 
 `-f`, `--force`
 
-: Allow keg-only formulae to be linked.
+: Allow keg-only formulae to be linked. When linking casks, overwrite existing
+  symlinks originally from the same cask.
 
 `--HEAD`
 
 : Link the HEAD version of the formula if it is installed.
+
+`--formula`
+
+: Treat all named arguments as formulae.
+
+`--cask`
+
+: Treat all named arguments as casks.
 
 ### `list`, `ls` \[*`options`*\] \[*`installed_formula`*\|*`installed_cask`* ...\]
 
@@ -2283,16 +2290,24 @@ Uninstall a *`formula`* or *`cask`*.
 
 : Treat all named arguments as casks.
 
-### `unlink` \[`--dry-run`\] *`installed_formula`* \[...\]
+### `unlink` \[*`options`*\] *`installed_formula`*\|*`installed_cask`* \[...\]
 
-Remove symlinks for *`formula`* from Homebrew's prefix. This can be useful for
-temporarily disabling a formula: `brew unlink` *`formula`* `&&` *`commands`* `&&
-brew link` *`formula`*
+Remove symlinks for *`formula`* or *`cask`* from Homebrew's prefix. This can be
+useful for temporarily disabling a formula: `brew unlink` *`formula`* `&&`
+*`commands`* `&& brew link` *`formula`*
 
 `-n`, `--dry-run`
 
 : List files which would be unlinked without actually unlinking or deleting any
   files.
+
+`--formula`
+
+: Treat all named arguments as formulae.
+
+`--cask`
+
+: Treat all named arguments as casks.
 
 ### `unpin` \[`--formula`\] \[`--cask`\] *`installed_formula`*\|*`installed_cask`* \[...\]
 
@@ -3752,7 +3767,9 @@ and Linux workers.
 
 `--build-dependents-from-source`
 
-: Build dependents from source rather than testing bottles.
+: Build a limited set of dependents from source in addition to testing bottles.
+  Up to 10 per formula per shard, prioritising popular dependents in a sharded
+  group.
 
 `--junit`
 
@@ -4157,7 +4174,8 @@ Install and commit Homebrew's vendored gems.
 ### `verify` \[*`options`*\] *`formula`* \[...\]
 
 Verify the build provenance of bottles using GitHub's attestation tools. This is
-done by first fetching the given bottles and then verifying their provenance.
+done by first fetching the given bottles and then verifying their provenance for
+`homebrew/core` and third-party taps that provide attestations.
 
 Note that this command depends on the GitHub CLI. Run `brew install gh`.
 
@@ -4359,14 +4377,6 @@ prefix-specific files take precedence over system-wide files (unless
 Note that these files do not support shell variable expansion (e.g. `$HOME`) or
 command execution (e.g. `$(cat file)`).
 
-`HOMEBREW_ALLOWED_TAPS`
-
-: A space-separated list of taps. Homebrew will refuse to install a formula
-  unless it and all of its dependencies are in an official tap or in a tap on
-  this list. Each entry is a `user/repository` name (which matches only taps
-  using the default GitHub remote) or a remote URL (required to match taps with
-  a custom remote).
-
 `HOMEBREW_API_AUTO_UPDATE_SECS`
 
 : Check Homebrew's API for new formulae or cask data every
@@ -4382,13 +4392,6 @@ command execution (e.g. `$(cat file)`).
   as a fallback mirror.
   
   *Default:* `https://formulae.brew.sh/api`.
-
-`HOMEBREW_ARCH`
-
-: Linux only: Pass this value to a type name representing the compiler's
-  `-march` option.
-  
-  *Default:* `native`.
 
 `HOMEBREW_ARTIFACT_DOMAIN`
 
@@ -4436,19 +4439,8 @@ command execution (e.g. `$(cat file)`).
 
 `HOMEBREW_BAT`
 
-: If set, use `bat` for the `brew cat` command.
-
-`HOMEBREW_BAT_CONFIG_PATH`
-
-: Use this as the `bat` configuration file.
-  
-  *Default:* `$BAT_CONFIG_PATH`.
-
-`HOMEBREW_BAT_THEME`
-
-: Use this as the `bat` theme for syntax highlighting.
-  
-  *Default:* `$BAT_THEME`.
+: If set, use `bat` for the `brew cat` command. Set `$BAT_CONFIG_PATH` to use a
+  custom configuration file and `$BAT_THEME` to select a theme.
 
 `HOMEBREW_BOTTLE_DOMAIN`
 
@@ -4570,10 +4562,6 @@ command execution (e.g. `$(cat file)`).
 `HOMEBREW_BUNDLE_DUMP_NO_WINGET`
 
 : If set, `brew bundle dump` will not dump WinGet packages.
-
-`HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP`
-
-: If set, run `brew bundle cleanup --force` after `brew bundle install`.
 
 `HOMEBREW_BUNDLE_NO_DESCRIBE`
 
@@ -4732,16 +4720,6 @@ command execution (e.g. `$(cat file)`).
 : A space-separated list of casks. Homebrew will refuse to install a cask if it
   or any of its dependencies is on this list.
 
-`HOMEBREW_FORBIDDEN_CASK_ARTIFACTS`
-
-: A space-separated list of cask artifact types (e.g. `pkg installer`) that
-  should be forbidden during cask installation. Valid values: `pkg`,
-  `installer`, `binary`, `uninstall`, `zap`, `app`, `suite`, `artifact`,
-  `prefpane`, `qlplugin`, `dictionary`, `font`, `service`, `colorpicker`,
-  `inputmethod`, `internetplugin`, `audiounitplugin`, `vstplugin`, `vst3plugin`,
-  `screensaver`, `keyboardlayout`, `mdimporter`, `preflight`, `postflight`,
-  `manpage`, `bashcompletion`, `fishcompletion`, `zshcompletion`, `stageonly`.
-
 `HOMEBREW_FORBIDDEN_FORMULAE`
 
 : A space-separated list of formulae. Homebrew will refuse to install a formula
@@ -4769,10 +4747,6 @@ command execution (e.g. `$(cat file)`).
   `user/repository` name (which matches only taps using the default GitHub
   remote) or a remote URL (required to match taps with a custom remote).
 
-`HOMEBREW_FORBID_CASKS`
-
-: If set, Homebrew will refuse to install any casks.
-
 `HOMEBREW_FORBID_PACKAGES_FROM_PATHS`
 
 : If set, Homebrew will refuse to read formulae or casks provided from file
@@ -4788,7 +4762,7 @@ command execution (e.g. `$(cat file)`).
 `HOMEBREW_FORCE_BREWED_CA_CERTIFICATES`
 
 : If set, always use a Homebrew-installed `ca-certificates` rather than the
-  system version. Automatically set if the system version is too old.
+  system version.
 
 `HOMEBREW_FORCE_BREWED_CURL`
 
@@ -4799,16 +4773,6 @@ command execution (e.g. `$(cat file)`).
 
 : If set, always use a Homebrew-installed `git`(1) rather than the system
   version. Automatically set if the system version of `git` is too old.
-
-`HOMEBREW_FORCE_BREW_WRAPPER`
-
-: If set, require `brew` to be invoked by the value of
-  `$HOMEBREW_FORCE_BREW_WRAPPER` for non-trivial `brew` commands.
-
-`HOMEBREW_FORCE_BREW_WRAPPER_HELP_MESSAGE`
-
-: If set, appended to the `$HOMEBREW_FORCE_BREW_WRAPPER` error message to
-  provide additional help or context to the user.
 
 `HOMEBREW_FORCE_VENDOR_RUBY`
 
@@ -4967,11 +4931,6 @@ command execution (e.g. `$(cat file)`).
 : If set, do not print any hints about changing Homebrew's behaviour with
   environment variables.
 
-`HOMEBREW_NO_FORCE_BREW_WRAPPER`
-
-: `Deprecated:` If set, disables `$HOMEBREW_FORCE_BREW_WRAPPER` behaviour, even
-  if set.
-
 `HOMEBREW_NO_GITHUB_API`
 
 : If set, do not use the GitHub API, e.g. for searches or fetching relevant
@@ -5022,16 +4981,6 @@ command execution (e.g. `$(cat file)`).
 : If set, do not relocate bottles built for a different prefix at install time.
   Homebrew will build from source instead.
 
-`HOMEBREW_NO_REQUIRE_TAP_TRUST`
-
-: If set, do not require non-official tap formulae, casks or commands to be
-  trusted. This is not recommended and will be removed in a later release. Also
-  enables commands that evaluate all formulae and casks.
-
-`HOMEBREW_NO_SANDBOX_LINUX`
-
-: If set, disable the Linux sandbox.
-
 `HOMEBREW_NO_UPDATE_REPORT_NEW`
 
 : If set, `brew update` will not show the list of newly added formulae/casks.
@@ -5049,7 +4998,7 @@ command execution (e.g. `$(cat file)`).
 `HOMEBREW_NO_VERIFY_ATTESTATIONS`
 
 : If set, Homebrew will not verify cryptographic attestations of build
-  provenance for bottles from homebrew-core.
+  provenance for bottles from `homebrew/core` or supported third-party taps.
 
 `HOMEBREW_PIP_INDEX_URL`
 
@@ -5057,15 +5006,6 @@ command execution (e.g. `$(cat file)`).
   resources.
   
   *Default:* `https://pypi.org/simple`.
-
-`HOMEBREW_REQUIRE_TAP_TRUST`
-
-: If set, require non-official tap formulae, casks and commands to be trusted
-  with `brew trust` before Homebrew loads them. This is the default unless
-  `$HOMEBREW_NO_REQUIRE_TAP_TRUST` is set. Also enables commands that evaluate
-  all formulae and casks.
-  
-  *Default:* `true`.
 
 `HOMEBREW_SIMULATE_MACOS_ON_LINUX`
 
@@ -5149,7 +5089,8 @@ command execution (e.g. `$(cat file)`).
 `HOMEBREW_VERIFY_ATTESTATIONS`
 
 : If set, Homebrew will use the `gh` tool to verify cryptographic attestations
-  of build provenance for bottles from homebrew-core.
+  of build provenance for bottles from `homebrew/core` or supported third-party
+  taps.
 
 `SUDO_ASKPASS`
 

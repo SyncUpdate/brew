@@ -78,7 +78,8 @@ module Homebrew
         switch "--eval-all",
                description: "Evaluate all available formulae and casks.",
                env:         :eval_all,
-               odeprecated: true
+               replacement: "the default trusted-tap behaviour",
+               odisabled:   true
         switch "--repology",
                description: "Use Repology to check for outdated packages."
         flag   "--tap=",
@@ -109,11 +110,8 @@ module Homebrew
         Utils::GemSetup.install_bundler_gems!(groups: ["livecheck"])
 
         Homebrew::API.with_no_api_env do
-          eval_all = args.eval_all?
-          eval_all ||= args.no_named? && Homebrew::EnvConfig.tap_trust_configured?
-
           excluded_autobump = []
-          if args.no_autobump? && eval_all
+          if args.no_autobump? && args.no_named?
             excluded_autobump.concat(autobumped_formulae_or_casks(CoreTap.instance)) if args.formula?
             excluded_autobump.concat(autobumped_formulae_or_casks(CoreCaskTap.instance, casks: true)) if args.cask?
           end
@@ -154,14 +152,10 @@ module Homebrew
             formulae + casks
           elsif args.named.present?
             T.cast(args.named.to_formulae_and_casks_with_taps, T::Array[T.any(Formula, Cask::Cask)])
-          elsif eval_all
-            formulae = args.cask? ? [] : Formula.all(eval_all:)
-            casks = args.formula? ? [] : Cask::Cask.all(eval_all:)
-            formulae + casks
           else
-            raise UsageError,
-                  "`brew bump` without named arguments needs `--installed`, `HOMEBREW_REQUIRE_TAP_TRUST=1` or " \
-                  "`HOMEBREW_NO_REQUIRE_TAP_TRUST=1` set!"
+            formulae = args.cask? ? [] : Formula.all
+            casks = args.formula? ? [] : Cask::Cask.all
+            formulae + casks
           end
 
           if (start_with = args.start_with)
@@ -192,14 +186,15 @@ module Homebrew
         params(formula_or_cask: T.any(Formula, Cask::Cask)).returns(T::Boolean)
       }
       def skip_ineligible_package!(formula_or_cask)
+        disabled = DeprecateDisable.disabled_on_all_platforms?(formula_or_cask)
         if formula_or_cask.is_a?(Formula)
-          skip = formula_or_cask.disabled? || formula_or_cask.head_only?
+          skip = disabled || formula_or_cask.head_only?
           name = formula_or_cask.name
-          text = "Formula is #{formula_or_cask.disabled? ? "disabled" : "HEAD-only"} so not accepting updates.\n"
+          text = "Formula is #{disabled ? "disabled" : "HEAD-only"} so not accepting updates.\n"
         else
-          skip = formula_or_cask.disabled? || formula_or_cask.version.latest?
+          skip = disabled || formula_or_cask.version.latest?
           name = formula_or_cask.token
-          text = if formula_or_cask.disabled?
+          text = if disabled
             "Cask is disabled so not accepting updates.\n"
           else
             "Cask uses `version :latest` so `brew bump` cannot check it.\n"
@@ -219,7 +214,7 @@ module Homebrew
       sig {
         params(
           formula_or_cask: T.any(Formula, Cask::Cask),
-          repositories:    T::Array[String],
+          repositories:    T::Array[T::Hash[String, T.untyped]],
           name:            String,
         ).returns(VersionBumpInfo)
       }
@@ -407,7 +402,7 @@ module Homebrew
         params(
           formula_or_cask: T.any(Formula, Cask::Cask),
           name:            String,
-          repositories:    T::Array[String],
+          repositories:    T::Array[T::Hash[String, T.untyped]],
           ambiguous_cask:  T::Boolean,
         ).void
       }

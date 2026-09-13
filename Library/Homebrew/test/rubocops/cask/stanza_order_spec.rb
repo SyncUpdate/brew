@@ -303,6 +303,150 @@ RSpec.describe RuboCop::Cop::Cask::StanzaOrder, :config do
     CASK
   end
 
+  it "alphabetizes `depends_on` stanzas" do
+    expect_offense <<~CASK
+      cask "foo" do
+        depends_on macos: :ventura
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^ `depends_on` stanza out of order
+        depends_on arch: :arm64
+        ^^^^^^^^^^^^^^^^^^^^^^^ `depends_on` stanza out of order
+      end
+    CASK
+
+    expect_correction <<~CASK
+      cask "foo" do
+        depends_on arch: :arm64
+        depends_on macos: :ventura
+      end
+    CASK
+  end
+
+  it "alphabetizes `depends_on` stanzas with the same key by value" do
+    expect_offense <<~CASK
+      cask "foo" do
+        depends_on formula: "zlib"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^ `depends_on` stanza out of order
+        depends_on formula: "foo"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^ `depends_on` stanza out of order
+      end
+    CASK
+
+    expect_correction <<~CASK
+      cask "foo" do
+        depends_on formula: "foo"
+        depends_on formula: "zlib"
+      end
+    CASK
+  end
+
+  it "alphabetizes scalar and array-valued `depends_on` stanzas by value" do
+    expect_offense <<~CASK
+      cask "foo" do
+        depends_on formula: "zebra"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `depends_on` stanza out of order
+        depends_on formula: ["alpha"]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `depends_on` stanza out of order
+      end
+    CASK
+
+    expect_correction <<~CASK
+      cask "foo" do
+        depends_on formula: ["alpha"]
+        depends_on formula: "zebra"
+      end
+    CASK
+  end
+
+  it "does not sort `depends_on` stanzas that reference local variables" do
+    expect_no_offenses <<~CASK
+      cask "foo" do
+        depends_on macos: :ventura
+        formula_name = "foo"
+        depends_on formula: formula_name
+      end
+    CASK
+  end
+
+  it "alphabetizes `depends_on` stanzas inside an OS block" do
+    expect_offense <<~CASK
+      cask "foo" do
+        on_macos do
+          depends_on macos: :ventura
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^ `depends_on` stanza out of order
+          depends_on arch: :arm64
+          ^^^^^^^^^^^^^^^^^^^^^^^ `depends_on` stanza out of order
+        end
+      end
+    CASK
+
+    expect_correction <<~CASK
+      cask "foo" do
+        on_macos do
+          depends_on arch: :arm64
+          depends_on macos: :ventura
+        end
+      end
+    CASK
+  end
+
+  it "keeps comments with alphabetized `depends_on` stanzas" do
+    expect_offense <<~CASK
+      cask "foo" do
+        # macOS requirement
+        depends_on macos: :ventura
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^ `depends_on` stanza out of order
+        # architecture requirement
+        depends_on arch: :arm64
+        ^^^^^^^^^^^^^^^^^^^^^^^ `depends_on` stanza out of order
+      end
+    CASK
+
+    expect_correction <<~CASK
+      cask "foo" do
+        # architecture requirement
+        depends_on arch: :arm64
+        # macOS requirement
+        depends_on macos: :ventura
+      end
+    CASK
+  end
+
+  it "alphabetizes parenthesized `depends_on` stanzas" do
+    expect_offense <<~CASK
+      cask "foo" do
+        depends_on(macos: :ventura)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `depends_on` stanza out of order
+        depends_on(arch: :arm64)
+        ^^^^^^^^^^^^^^^^^^^^^^^^ `depends_on` stanza out of order
+      end
+    CASK
+
+    expect_correction <<~CASK
+      cask "foo" do
+        depends_on(arch: :arm64)
+        depends_on(macos: :ventura)
+      end
+    CASK
+  end
+
+  it "alphabetizes mixed parenthesized and bare `depends_on` stanzas" do
+    expect_offense <<~CASK
+      cask "foo" do
+        depends_on(macos: :ventura)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `depends_on` stanza out of order
+        depends_on formula: "foo"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^ `depends_on` stanza out of order
+      end
+    CASK
+
+    expect_correction <<~CASK
+      cask "foo" do
+        depends_on formula: "foo"
+        depends_on(macos: :ventura)
+      end
+    CASK
+  end
+
   it "keeps associated comments when auto-correcting" do
     expect_offense <<~CASK
       cask 'foo' do
@@ -517,13 +661,12 @@ RSpec.describe RuboCop::Cop::Cask::StanzaOrder, :config do
           ^^^^^^^^^^^^^^^ `version` stanza out of order
           url "https://foo.brew.sh/foo-ventura.zip"
         end
-        on_catalina do
-        ^^^^^^^^^^^^^^ `on_catalina` stanza out of order
+        on_monterey do
           sha256 "def456"
           ^^^^^^^^^^^^^^^ `sha256` stanza out of order
           version "0.7"
           ^^^^^^^^^^^^^ `version` stanza out of order
-          url "https://foo.brew.sh/foo-catalina.zip"
+          url "https://foo.brew.sh/foo-monterey.zip"
         end
         on_sequoia do
         ^^^^^^^^^^^^^ `on_sequoia` stanza out of order
@@ -545,16 +688,16 @@ RSpec.describe RuboCop::Cop::Cask::StanzaOrder, :config do
 
     expect_correction <<~CASK
       cask "foo" do
-        on_catalina do
-          version "0.7"
-          sha256 "def456"
-          url "https://foo.brew.sh/foo-catalina.zip"
-        end
         on_big_sur do
           version :latest
           sha256 "jkl012"
 
           url "https://foo.brew.sh/foo-big-sur.zip"
+        end
+        on_monterey do
+          version "0.7"
+          sha256 "def456"
+          url "https://foo.brew.sh/foo-monterey.zip"
         end
         on_ventura do
           version :latest

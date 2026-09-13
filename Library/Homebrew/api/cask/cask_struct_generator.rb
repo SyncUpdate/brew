@@ -1,6 +1,7 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "cask/url"
 require "utils/output"
 
 module Homebrew
@@ -176,7 +177,7 @@ module Homebrew
 
         sig { params(url_specs: T::Hash[Symbol, T.untyped]).returns(T::Hash[Symbol, T.anything]) }
         def process_url_specs(url_specs)
-          url_specs.to_h do |key, value|
+          url_specs.except(*::Cask::URL::DEPRECATED_URL_SPECS).to_h do |key, value|
             value = case key
             when :user_agent
               Utils.convert_to_string_or_symbol(value)

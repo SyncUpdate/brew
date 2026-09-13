@@ -24,6 +24,16 @@ RSpec.describe Homebrew::DevCmd::Edit do
       .and be_a_success
   end
 
+  it "names the canonical tap when the tap is not installed" do
+    (HOMEBREW_REPOSITORY/".git").mkpath
+
+    allow(CoreTap.instance).to receive(:installed?).and_return(true)
+    allow(CoreCaskTap.instance).to receive(:installed?).and_return(true)
+
+    expect { described_class.new(["someuser/sometap"]).run }
+      .to raise_error(TapUnavailableError, %r{No available tap someuser/sometap\.})
+  end
+
   it "auto-taps core when editing an API-known formula without the tap installed" do
     (HOMEBREW_REPOSITORY/".git").mkpath
 
@@ -46,7 +56,7 @@ RSpec.describe Homebrew::DevCmd::Edit do
       RUBY
     end
 
-    allow_any_instance_of(described_class).to receive(:exec_editor)
+    allow(Utils::Editor).to receive(:open)
 
     described_class.new(["testball"]).run
   end

@@ -8,7 +8,25 @@ RSpec.describe MacOSRequirement do
 
   let(:macos_oldest_allowed) { MacOSVersion.new(HOMEBREW_MACOS_OLDEST_ALLOWED) }
   let(:macos_newest_allowed) { MacOSVersion.new(HOMEBREW_MACOS_NEWEST_UNSUPPORTED) }
+  let(:macos_newest_supported) { MacOSVersion.new(HOMEBREW_MACOS_NEWEST_SUPPORTED) }
   let(:tahoe_major) { MacOSVersion.new("26.0") }
+
+  it "disables Catalina requirements" do
+    expect { described_class.new([:catalina]) }
+      .to raise_error(MethodDeprecatedError, /`depends_on macos: :catalina`.*disabled/)
+  end
+
+  it "disables Catalina requirements when parsed from the DSL" do
+    expect { described_class.parse([:catalina], comparator: ">=") }
+      .to raise_error(MethodDeprecatedError, /`depends_on macos: :catalina`.*disabled/)
+  end
+
+  it "tracks every retired macOS release" do
+    expect(MacOSVersion::RELEASES.keys - MacOSVersion::SYMBOLS.keys).to contain_exactly(
+      *MacOSRequirement::DISABLED_MACOS_VERSIONS,
+      *MacOSRequirement::DEPRECATED_MACOS_VERSIONS,
+    )
+  end
 
   describe "#satisfied?" do
     context "when running on macOS", :needs_macos do
@@ -22,17 +40,17 @@ RSpec.describe MacOSRequirement do
       end
 
       it "supports maximum versions" do
-        requirement = described_class.new([:catalina], comparator: "<=")
-        expect(requirement.satisfied?).to eq MacOS.version <= :catalina
+        requirement = described_class.new([:big_sur], comparator: "<=")
+        expect(requirement.satisfied?).to eq MacOS.version <= :big_sur
       end
     end
 
     context "when running on Linux", :needs_linux do
       it "returns false" do
         expect(requirement.satisfied?).to be false
-        requirement = described_class.new([macos_newest_allowed.to_sym])
+        requirement = described_class.new([macos_newest_supported.to_sym])
         expect(requirement.satisfied?).to be false
-        requirement = described_class.new([macos_newest_allowed.to_sym], comparator: "<=")
+        requirement = described_class.new([macos_newest_supported.to_sym], comparator: "<=")
         expect(requirement.satisfied?).to be false
       end
     end

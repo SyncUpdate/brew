@@ -11,7 +11,7 @@ module Cask
         "_" => :underscores,
       }.freeze, T::Hash[String, Symbol])
 
-      DIVIDER_REGEX = /(#{DIVIDERS.keys.map { |v| Regexp.quote(v) }.join("|")})/
+      DIVIDER_REGEX = /(?:#{DIVIDERS.keys.map { |v| Regexp.quote(v) }.join("|")})/
 
       MAJOR_MINOR_PATCH_REGEX = /^([^.,:]+)(?:.([^.,:]+)(?:.([^.,:]+))?)?/
 
@@ -187,9 +187,9 @@ module Cask
       #
       # @see String#chomp
       # @api public
-      sig { params(separator: String).returns(T.self_type) }
-      def chomp(separator = T.unsafe(nil))
-        version { to_s.chomp(separator) }
+      sig { params(separator: T.nilable(String)).returns(T.self_type) }
+      def chomp(separator = nil)
+        version { separator ? to_s.chomp(separator) : to_s.chomp }
       end
 
       private

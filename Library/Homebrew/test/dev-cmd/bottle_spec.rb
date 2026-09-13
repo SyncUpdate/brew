@@ -35,6 +35,41 @@ RSpec.describe Homebrew::DevCmd::Bottle do
 
   it_behaves_like "parseable arguments"
 
+  describe "#binary_relocation_diagnostic_string" do
+    let(:bottle) { described_class.new(["--no-rebuild", "testball"]) }
+    let(:relative_path) { Pathname("bin/dbus-daemon") }
+
+    it "returns the match unchanged when it is valid UTF-8" do
+      # Matches are always tagged `ASCII-8BIT`, as `Utils.popen_read` reads in binary mode.
+      match = "/opt/homebrew/Cellar".b
+
+      result = bottle.binary_relocation_diagnostic_string(match, relative_path, "1000")
+
+      expect(result).to eq("/opt/homebrew/Cellar").and have_attributes(encoding: Encoding::UTF_8)
+    end
+
+    it "warns when scrubbing a match that is not valid UTF-8" do
+      # Mimics `strings -` gluing invalid UTF-8 bytes onto an adjacent real string.
+      match = "\xFF\xFF\xFF\xFF/opt/homebrew/Cellar".b
+
+      expect(bottle).to receive(:opoo)
+        .with("Scrubbing string with invalid encoding in #{relative_path} at offset 0x203cc")
+
+      bottle.binary_relocation_diagnostic_string(match, relative_path, "203cc")
+    end
+
+    it "scrubs a match that is not valid UTF-8, keeping the rest of the string" do
+      # Mimics `strings -` gluing invalid UTF-8 bytes onto an adjacent real string.
+      match = "\xFF\xFF\xFF\xFF/opt/homebrew/Cellar".b
+      allow(bottle).to receive(:opoo)
+
+      result = bottle.binary_relocation_diagnostic_string(match, relative_path, "203cc")
+
+      expect(result).to have_attributes(encoding: Encoding::UTF_8, valid_encoding?: true)
+        .and end_with("/opt/homebrew/Cellar")
+    end
+  end
+
   it "does not restore locations when placeholdering fails" do
     formula = formula("testball") do
       T.bind(self, T.class_of(Formula))
@@ -148,21 +183,21 @@ RSpec.describe Homebrew::DevCmd::Bottle do
         sha256:         "a0af7dcbb5c83f6f3f7ecd507c2d352c1a018f894d51ad241ce8492fa598010f",
       )
 
-      Pathname("#{TEST_TMPDIR}/testball-1.0.catalina.bottle.json").write stub_hash(
+      Pathname("#{TEST_TMPDIR}/testball-1.0.monterey.bottle.json").write stub_hash(
         name:           "testball",
         version:        "1.0",
         path:           "#{core_tap.path}/Formula/testball.rb",
         cellar:         "any_skip_relocation",
-        os:             "catalina",
-        filename:       "testball-1.0.catalina.bottle.tar.gz",
-        local_filename: "testball--1.0.catalina.bottle.tar.gz",
+        os:             "monterey",
+        filename:       "testball-1.0.monterey.bottle.tar.gz",
+        local_filename: "testball--1.0.monterey.bottle.tar.gz",
         sha256:         "5334dd344986e46b2aa4f0471cac7b0914bd7de7cb890a34415771788d03f2ac",
       )
     end
 
     after do
       FileUtils.rm_f "#{TEST_TMPDIR}/testball-1.0.arm64_big_sur.bottle.json"
-      FileUtils.rm_f "#{TEST_TMPDIR}/testball-1.0.catalina.bottle.json"
+      FileUtils.rm_f "#{TEST_TMPDIR}/testball-1.0.monterey.bottle.json"
       FileUtils.rm_f "#{TEST_TMPDIR}/testball-1.0.big_sur.bottle.json"
       FileUtils.rm_f "#{TEST_TMPDIR}/testball-1.0.arm64_monterey.bottle.json"
     end
@@ -183,13 +218,13 @@ RSpec.describe Homebrew::DevCmd::Bottle do
              "--write",
              "#{TEST_TMPDIR}/testball-1.0.arm64_big_sur.bottle.json",
              "#{TEST_TMPDIR}/testball-1.0.big_sur.bottle.json",
-             "#{TEST_TMPDIR}/testball-1.0.catalina.bottle.json"
+             "#{TEST_TMPDIR}/testball-1.0.monterey.bottle.json"
       end.to output(Regexp.new(<<~'EOS')).to_stdout
         ==> testball
           bottle do
             sha256 cellar: :any_skip_relocation, arm64_big_sur: "8f9aecd233463da6a4ea55f5f88fc5841718c013f3e2a7941350d6130f1dc149"
+            sha256 cellar: :any_skip_relocation, monterey:      "5334dd344986e46b2aa4f0471cac7b0914bd7de7cb890a34415771788d03f2ac"
             sha256 cellar: :any_skip_relocation, big_sur:       "a0af7dcbb5c83f6f3f7ecd507c2d352c1a018f894d51ad241ce8492fa598010f"
-            sha256 cellar: :any_skip_relocation, catalina:      "5334dd344986e46b2aa4f0471cac7b0914bd7de7cb890a34415771788d03f2ac"
           end
         \[master [0-9a-f]{4,40}\] testball: add 1\.0 bottle\.
          1 file changed, 6 insertions\(\+\)
@@ -207,8 +242,8 @@ RSpec.describe Homebrew::DevCmd::Bottle do
 
           bottle do
             sha256 cellar: :any_skip_relocation, arm64_big_sur: "8f9aecd233463da6a4ea55f5f88fc5841718c013f3e2a7941350d6130f1dc149"
+            sha256 cellar: :any_skip_relocation, monterey:      "5334dd344986e46b2aa4f0471cac7b0914bd7de7cb890a34415771788d03f2ac"
             sha256 cellar: :any_skip_relocation, big_sur:       "a0af7dcbb5c83f6f3f7ecd507c2d352c1a018f894d51ad241ce8492fa598010f"
-            sha256 cellar: :any_skip_relocation, catalina:      "5334dd344986e46b2aa4f0471cac7b0914bd7de7cb890a34415771788d03f2ac"
           end
 
           option "with-foo", "Build with foo"
@@ -238,7 +273,7 @@ RSpec.describe Homebrew::DevCmd::Bottle do
           bottle do
             sha256 cellar: :any_skip_relocation, arm64_big_sur: "c3c650d75f5188f5d6edd351dd3215e141b73b8ec1cf9144f30e39cbc45de72e"
             sha256 cellar: :any_skip_relocation, big_sur:       "6b276491297d4052538bd2fd22d5129389f27d90a98f831987236a5b90511b98"
-            sha256 cellar: :any_skip_relocation, catalina:      "16cf230afdfcb6306c208d169549cf8773c831c8653d2c852315a048960d7e72"
+            sha256 cellar: :any_skip_relocation, monterey:      "16cf230afdfcb6306c208d169549cf8773c831c8653d2c852315a048960d7e72"
           end
         RUBY
         system "git", "add", "--all"
@@ -253,13 +288,13 @@ RSpec.describe Homebrew::DevCmd::Bottle do
              "--write",
              "#{TEST_TMPDIR}/testball-1.0.arm64_big_sur.bottle.json",
              "#{TEST_TMPDIR}/testball-1.0.big_sur.bottle.json",
-             "#{TEST_TMPDIR}/testball-1.0.catalina.bottle.json"
+             "#{TEST_TMPDIR}/testball-1.0.monterey.bottle.json"
       end.to output(Regexp.new(<<~'EOS')).to_stdout
         ==> testball
           bottle do
             sha256 cellar: :any_skip_relocation, arm64_big_sur: "8f9aecd233463da6a4ea55f5f88fc5841718c013f3e2a7941350d6130f1dc149"
+            sha256 cellar: :any_skip_relocation, monterey:      "5334dd344986e46b2aa4f0471cac7b0914bd7de7cb890a34415771788d03f2ac"
             sha256 cellar: :any_skip_relocation, big_sur:       "a0af7dcbb5c83f6f3f7ecd507c2d352c1a018f894d51ad241ce8492fa598010f"
-            sha256 cellar: :any_skip_relocation, catalina:      "5334dd344986e46b2aa4f0471cac7b0914bd7de7cb890a34415771788d03f2ac"
           end
         \[master [0-9a-f]{4,40}\] testball: update 1\.0 bottle\.
          1 file changed, 3 insertions\(\+\), 3 deletions\(\-\)
@@ -279,8 +314,8 @@ RSpec.describe Homebrew::DevCmd::Bottle do
 
           bottle do
             sha256 cellar: :any_skip_relocation, arm64_big_sur: "8f9aecd233463da6a4ea55f5f88fc5841718c013f3e2a7941350d6130f1dc149"
+            sha256 cellar: :any_skip_relocation, monterey:      "5334dd344986e46b2aa4f0471cac7b0914bd7de7cb890a34415771788d03f2ac"
             sha256 cellar: :any_skip_relocation, big_sur:       "a0af7dcbb5c83f6f3f7ecd507c2d352c1a018f894d51ad241ce8492fa598010f"
-            sha256 cellar: :any_skip_relocation, catalina:      "5334dd344986e46b2aa4f0471cac7b0914bd7de7cb890a34415771788d03f2ac"
           end
 
           def install
@@ -322,14 +357,14 @@ RSpec.describe Homebrew::DevCmd::Bottle do
              "--keep-old",
              "#{TEST_TMPDIR}/testball-1.0.arm64_big_sur.bottle.json",
              "#{TEST_TMPDIR}/testball-1.0.big_sur.bottle.json",
-             "#{TEST_TMPDIR}/testball-1.0.catalina.bottle.json"
+             "#{TEST_TMPDIR}/testball-1.0.monterey.bottle.json"
       end.to output(Regexp.new(<<~'EOS')).to_stdout
         ==> testball
           bottle do
             sha256 cellar: :any_skip_relocation, arm64_big_sur: "8f9aecd233463da6a4ea55f5f88fc5841718c013f3e2a7941350d6130f1dc149"
             sha256 cellar: :any,                 sonoma:        "6971b6eebf4c00eaaed72a1104a49be63861eabc95d679a0c84040398e320059"
+            sha256 cellar: :any_skip_relocation, monterey:      "5334dd344986e46b2aa4f0471cac7b0914bd7de7cb890a34415771788d03f2ac"
             sha256 cellar: :any_skip_relocation, big_sur:       "a0af7dcbb5c83f6f3f7ecd507c2d352c1a018f894d51ad241ce8492fa598010f"
-            sha256 cellar: :any_skip_relocation, catalina:      "5334dd344986e46b2aa4f0471cac7b0914bd7de7cb890a34415771788d03f2ac"
           end
         \[master [0-9a-f]{4,40}\] testball: update 1\.0 bottle\.
          1 file changed, 4 insertions\(\+\), 1 deletion\(\-\)
@@ -350,8 +385,8 @@ RSpec.describe Homebrew::DevCmd::Bottle do
           bottle do
             sha256 cellar: :any_skip_relocation, arm64_big_sur: "8f9aecd233463da6a4ea55f5f88fc5841718c013f3e2a7941350d6130f1dc149"
             sha256 cellar: :any,                 sonoma:        "6971b6eebf4c00eaaed72a1104a49be63861eabc95d679a0c84040398e320059"
+            sha256 cellar: :any_skip_relocation, monterey:      "5334dd344986e46b2aa4f0471cac7b0914bd7de7cb890a34415771788d03f2ac"
             sha256 cellar: :any_skip_relocation, big_sur:       "a0af7dcbb5c83f6f3f7ecd507c2d352c1a018f894d51ad241ce8492fa598010f"
-            sha256 cellar: :any_skip_relocation, catalina:      "5334dd344986e46b2aa4f0471cac7b0914bd7de7cb890a34415771788d03f2ac"
           end
 
           def install
@@ -503,15 +538,15 @@ RSpec.describe Homebrew::DevCmd::Bottle do
         sha256:         "a0af7dcbb5c83f6f3f7ecd507c2d352c1a018f894d51ad241ce8492fa598010f",
       )
     end
-    let(:hello_hash_catalina) do
+    let(:hello_hash_monterey) do
       JSON.parse stub_hash(
         name:           "hello",
         version:        "1.0",
         path:           "/home/hello.rb",
         cellar:         "any_skip_relocation",
-        os:             "catalina",
-        filename:       "hello-1.0.catalina.bottle.tar.gz",
-        local_filename: "hello--1.0.catalina.bottle.tar.gz",
+        os:             "monterey",
+        filename:       "hello-1.0.monterey.bottle.tar.gz",
+        local_filename: "hello--1.0.monterey.bottle.tar.gz",
         sha256:         "5334dd344986e46b2aa4f0471cac7b0914bd7de7cb890a34415771788d03f2ac",
       )
     end
@@ -527,15 +562,15 @@ RSpec.describe Homebrew::DevCmd::Bottle do
         sha256:         "16cf230afdfcb6306c208d169549cf8773c831c8653d2c852315a048960d7e72",
       )
     end
-    let(:unzip_hash_catalina) do
+    let(:unzip_hash_monterey) do
       JSON.parse stub_hash(
         name:           "unzip",
         version:        "2.0",
         path:           "/home/unzip.rb",
         cellar:         "any",
-        os:             "catalina",
-        filename:       "unzip-2.0.catalina.bottle.tar.gz",
-        local_filename: "unzip--2.0.catalina.bottle.tar.gz",
+        os:             "monterey",
+        filename:       "unzip-2.0.monterey.bottle.tar.gz",
+        local_filename: "unzip--2.0.monterey.bottle.tar.gz",
         sha256:         "d9cc50eec8ac243148a121049c236cba06af4a0b1156ab397d0a2850aa79c137",
       )
     end
@@ -562,7 +597,7 @@ RSpec.describe Homebrew::DevCmd::Bottle do
     describe "::merge_json_files" do
       it "merges JSON files" do
         bottles_hash = homebrew.merge_json_files(
-          [hello_hash_big_sur, hello_hash_catalina, unzip_hash_big_sur, unzip_hash_catalina],
+          [hello_hash_big_sur, hello_hash_monterey, unzip_hash_big_sur, unzip_hash_monterey],
         )
 
         hello_hash = bottles_hash["hello"]
@@ -572,10 +607,10 @@ RSpec.describe Homebrew::DevCmd::Bottle do
         expect(hello_hash["bottle"]["tags"]["big_sur"]["sha256"]).to eq(
           "a0af7dcbb5c83f6f3f7ecd507c2d352c1a018f894d51ad241ce8492fa598010f",
         )
-        expect(hello_hash["bottle"]["tags"]["catalina"]["cellar"]).to eq("any_skip_relocation")
-        expect(hello_hash["bottle"]["tags"]["catalina"]["filename"]).to eq("hello-1.0.catalina.bottle.tar.gz")
-        expect(hello_hash["bottle"]["tags"]["catalina"]["local_filename"]).to eq("hello--1.0.catalina.bottle.tar.gz")
-        expect(hello_hash["bottle"]["tags"]["catalina"]["sha256"]).to eq(
+        expect(hello_hash["bottle"]["tags"]["monterey"]["cellar"]).to eq("any_skip_relocation")
+        expect(hello_hash["bottle"]["tags"]["monterey"]["filename"]).to eq("hello-1.0.monterey.bottle.tar.gz")
+        expect(hello_hash["bottle"]["tags"]["monterey"]["local_filename"]).to eq("hello--1.0.monterey.bottle.tar.gz")
+        expect(hello_hash["bottle"]["tags"]["monterey"]["sha256"]).to eq(
           "5334dd344986e46b2aa4f0471cac7b0914bd7de7cb890a34415771788d03f2ac",
         )
         unzip_hash = bottles_hash["unzip"]
@@ -585,10 +620,10 @@ RSpec.describe Homebrew::DevCmd::Bottle do
         expect(unzip_hash["bottle"]["tags"]["big_sur"]["sha256"]).to eq(
           "16cf230afdfcb6306c208d169549cf8773c831c8653d2c852315a048960d7e72",
         )
-        expect(unzip_hash["bottle"]["tags"]["catalina"]["cellar"]).to eq("any")
-        expect(unzip_hash["bottle"]["tags"]["catalina"]["filename"]).to eq("unzip-2.0.catalina.bottle.tar.gz")
-        expect(unzip_hash["bottle"]["tags"]["catalina"]["local_filename"]).to eq("unzip--2.0.catalina.bottle.tar.gz")
-        expect(unzip_hash["bottle"]["tags"]["catalina"]["sha256"]).to eq(
+        expect(unzip_hash["bottle"]["tags"]["monterey"]["cellar"]).to eq("any")
+        expect(unzip_hash["bottle"]["tags"]["monterey"]["filename"]).to eq("unzip-2.0.monterey.bottle.tar.gz")
+        expect(unzip_hash["bottle"]["tags"]["monterey"]["local_filename"]).to eq("unzip--2.0.monterey.bottle.tar.gz")
+        expect(unzip_hash["bottle"]["tags"]["monterey"]["sha256"]).to eq(
           "d9cc50eec8ac243148a121049c236cba06af4a0b1156ab397d0a2850aa79c137",
         )
       end
@@ -722,13 +757,13 @@ RSpec.describe Homebrew::DevCmd::Bottle do
       it "includes a custom root_url" do
         bottle = BottleSpecification.new
         bottle.root_url("https://example.com")
-        bottle.sha256(catalina: "109c0cb581a7b5d84da36d84b221fb9dd0f8a927b3044d82611791c9907e202e")
+        bottle.sha256(monterey: "109c0cb581a7b5d84da36d84b221fb9dd0f8a927b3044d82611791c9907e202e")
 
         expect(homebrew.bottle_output(bottle, nil)).to eq(
           <<-RUBY,
   bottle do
     root_url "https://example.com"
-    sha256 catalina: "109c0cb581a7b5d84da36d84b221fb9dd0f8a927b3044d82611791c9907e202e"
+    sha256 monterey: "109c0cb581a7b5d84da36d84b221fb9dd0f8a927b3044d82611791c9907e202e"
   end
           RUBY
         )
@@ -737,14 +772,14 @@ RSpec.describe Homebrew::DevCmd::Bottle do
       it "includes download strategy for custom root_url" do
         bottle = BottleSpecification.new
         bottle.root_url("https://example.com")
-        bottle.sha256(catalina: "109c0cb581a7b5d84da36d84b221fb9dd0f8a927b3044d82611791c9907e202e")
+        bottle.sha256(monterey: "109c0cb581a7b5d84da36d84b221fb9dd0f8a927b3044d82611791c9907e202e")
 
         expect(homebrew.bottle_output(bottle, "ExampleStrategy")).to eq(
           <<-RUBY,
   bottle do
     root_url "https://example.com",
       using: ExampleStrategy
-    sha256 catalina: "109c0cb581a7b5d84da36d84b221fb9dd0f8a927b3044d82611791c9907e202e"
+    sha256 monterey: "109c0cb581a7b5d84da36d84b221fb9dd0f8a927b3044d82611791c9907e202e"
   end
           RUBY
         )

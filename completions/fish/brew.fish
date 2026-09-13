@@ -339,8 +339,8 @@ __fish_brew_complete_arg 'advisory-match' -l debug -d 'Display any debugging inf
 __fish_brew_complete_arg 'advisory-match' -l help -d 'Show this message'
 __fish_brew_complete_arg 'advisory-match' -l index -d 'Emit the formula-identity index as JSON and exit'
 __fish_brew_complete_arg 'advisory-match' -l json -d 'Output candidate records as a JSON array'
-__fish_brew_complete_arg 'advisory-match' -l new-history -d 'Walk `FormulaVersions` only for records whose reviewed ranges are not already in directory'
-__fish_brew_complete_arg 'advisory-match' -l no-history -d 'Skip the `FormulaVersions` walk for the `fixed` boundary; use the current `pkg_version` instead'
+__fish_brew_complete_arg 'advisory-match' -l new-history -d 'Skip `FormulaVersions` for existing terminal ranges unless their matching provenance changes'
+__fish_brew_complete_arg 'advisory-match' -l no-history -d 'Skip `FormulaVersions` walks for new ranges; use zero/current `pkg_version` as unverified boundaries'
 __fish_brew_complete_arg 'advisory-match' -l output -d 'Write each record to directory as `BREW-formula-id.json`, preserving existing `published`/`ranges` fields'
 __fish_brew_complete_arg 'advisory-match' -l overrides -d 'Load reviewed formula and advisory matching overrides from file'
 __fish_brew_complete_arg 'advisory-match' -l quiet -d 'Make some output more quiet'
@@ -359,7 +359,6 @@ __fish_brew_complete_arg 'alias' -l verbose -d 'Make some output more verbose'
 
 __fish_brew_complete_cmd 'analytics' 'Control Homebrew\'s anonymous aggregate user behaviour analytics'
 __fish_brew_complete_sub_cmd 'analytics' 'state' 'Display the current state of Homebrew\'s analytics'
-__fish_brew_complete_sub_cmd 'analytics' 'regenerate-uuid' 'Delete Homebrew\'s legacy analytics UUID'
 __fish_brew_complete_sub_cmd 'analytics' 'on' 'Turn Homebrew\'s analytics on'
 __fish_brew_complete_sub_cmd 'analytics' 'off' 'Turn Homebrew\'s analytics off'
 __fish_brew_complete_arg 'analytics; and [ (count (__fish_brew_args)) = 1 ]' -l debug -d 'Display any debugging information'
@@ -370,10 +369,6 @@ __fish_brew_complete_sub_arg 'analytics' 'state' -l debug -d 'Display any debugg
 __fish_brew_complete_sub_arg 'analytics' 'state' -l help -d 'Show this message'
 __fish_brew_complete_sub_arg 'analytics' 'state' -l quiet -d 'Make some output more quiet'
 __fish_brew_complete_sub_arg 'analytics' 'state' -l verbose -d 'Make some output more verbose'
-__fish_brew_complete_sub_arg 'analytics' 'regenerate-uuid' -l debug -d 'Display any debugging information'
-__fish_brew_complete_sub_arg 'analytics' 'regenerate-uuid' -l help -d 'Show this message'
-__fish_brew_complete_sub_arg 'analytics' 'regenerate-uuid' -l quiet -d 'Make some output more quiet'
-__fish_brew_complete_sub_arg 'analytics' 'regenerate-uuid' -l verbose -d 'Make some output more verbose'
 __fish_brew_complete_sub_arg 'analytics' 'on' -l debug -d 'Display any debugging information'
 __fish_brew_complete_sub_arg 'analytics' 'on' -l help -d 'Show this message'
 __fish_brew_complete_sub_arg 'analytics' 'on' -l quiet -d 'Make some output more quiet'
@@ -540,6 +535,21 @@ __fish_brew_complete_arg 'bump-formula-pr' -l write-only -d 'Make the expected f
 __fish_brew_complete_arg 'bump-formula-pr' -a '(__fish_brew_suggest_formulae_all)'
 
 
+complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'bump-python-resources-pr' -d 'Update vulnerable PyPI resources in formula, bump its revision, and create a pull request'
+__fish_brew_complete_arg 'bump-python-resources-pr' -l branch -d 'Branch name to use for the pull request'
+__fish_brew_complete_arg 'bump-python-resources-pr' -l debug -d 'Display any debugging information'
+__fish_brew_complete_arg 'bump-python-resources-pr' -l dry-run -d 'Print what would be done rather than creating a pull request'
+__fish_brew_complete_arg 'bump-python-resources-pr' -l help -d 'Show this message'
+__fish_brew_complete_arg 'bump-python-resources-pr' -l install-dependencies -d 'Install missing dependencies required to update resources'
+__fish_brew_complete_arg 'bump-python-resources-pr' -l message -d 'Message to prepend to the pull request body'
+__fish_brew_complete_arg 'bump-python-resources-pr' -l no-fork -d 'Don\'t try to fork the repository'
+__fish_brew_complete_arg 'bump-python-resources-pr' -l output -d 'Write the JSON result to this file instead of standard output. Use this when parsing the result, as progress is also printed to standard output'
+__fish_brew_complete_arg 'bump-python-resources-pr' -l packages -d 'Names of vulnerable Python packages that must be updated'
+__fish_brew_complete_arg 'bump-python-resources-pr' -l quiet -d 'Make some output more quiet'
+__fish_brew_complete_arg 'bump-python-resources-pr' -l verbose -d 'Make some output more verbose'
+__fish_brew_complete_arg 'bump-python-resources-pr' -a '(__fish_brew_suggest_formulae_all)'
+
+
 __fish_brew_complete_cmd 'bump-revision' 'Create a commit to increment the revision of formula'
 __fish_brew_complete_arg 'bump-revision' -l debug -d 'Display any debugging information'
 __fish_brew_complete_arg 'bump-revision' -l dry-run -d 'Print what would be done rather than doing it'
@@ -635,7 +645,7 @@ __fish_brew_complete_sub_arg 'bundle' 'list' -l winget -d 'List WinGet packages.
 __fish_brew_complete_sub_arg 'bundle' 'install upgrade' -l debug -d 'Display any debugging information'
 __fish_brew_complete_sub_arg 'bundle' 'install upgrade' -l file -d 'Read from or write to the `Brewfile` from this location. Use `--file=-` to pipe to stdin/stdout'
 __fish_brew_complete_sub_arg 'bundle' 'install upgrade' -l force -d 'Run with `--force`/`--overwrite`'
-__fish_brew_complete_sub_arg 'bundle' 'install upgrade' -l force-cleanup -d 'Perform cleanup after installing dependencies without asking. Enabled by default if `$HOMEBREW_BUNDLE_FORCE_INSTALL_CLEANUP` is set and `--global` is passed'
+__fish_brew_complete_sub_arg 'bundle' 'install upgrade' -l force-cleanup -d 'Perform cleanup after installing dependencies without asking'
 __fish_brew_complete_sub_arg 'bundle' 'install upgrade' -l global -d 'Read from or write to the `Brewfile` from `$HOMEBREW_BUNDLE_FILE_GLOBAL` (if set), `${XDG_CONFIG_HOME}/homebrew/Brewfile` (if `$XDG_CONFIG_HOME` is set), `~/.homebrew/Brewfile` or `~/.Brewfile` otherwise'
 __fish_brew_complete_sub_arg 'bundle' 'install upgrade' -l help -d 'Show this message'
 __fish_brew_complete_sub_arg 'bundle' 'install upgrade' -l no-upgrade -d 'Do not run `brew upgrade` on outdated dependencies. Note they may still be upgraded by `brew install` if needed. Enabled by default if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set'
@@ -791,6 +801,13 @@ __fish_brew_complete_sub_arg 'bundle' 'add' -l tap -d 'Add Homebrew tap entries'
 __fish_brew_complete_sub_arg 'bundle' 'add' -l uv -d 'Add entries for uv tools'
 __fish_brew_complete_sub_arg 'bundle' 'add' -l verbose -d 'Make some output more verbose'
 __fish_brew_complete_sub_arg 'bundle' 'add' -l vscode -d 'Add entries for VSCode (and forks/variants) extensions'
+
+
+complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'cask-ci' -d 'Run Homebrew Cask\'s internal CI helpers'
+__fish_brew_complete_arg 'cask-ci' -l debug -d 'Display any debugging information'
+__fish_brew_complete_arg 'cask-ci' -l help -d 'Show this message'
+__fish_brew_complete_arg 'cask-ci' -l quiet -d 'Make some output more quiet'
+__fish_brew_complete_arg 'cask-ci' -l verbose -d 'Make some output more verbose'
 
 
 __fish_brew_complete_cmd 'casks' 'List all locally installable casks including short names'
@@ -1136,6 +1153,16 @@ __fish_brew_complete_arg 'formula-analytics' -l setup -d 'Install the necessary 
 __fish_brew_complete_arg 'formula-analytics' -l verbose -d 'Make some output more verbose'
 
 
+complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'formula-python-resources' -d 'Print JSON describing the PyPI resources used by formula'
+__fish_brew_complete_arg 'formula-python-resources' -l all -d 'Include all available formulae'
+__fish_brew_complete_arg 'formula-python-resources' -l debug -d 'Display any debugging information'
+__fish_brew_complete_arg 'formula-python-resources' -l help -d 'Show this message'
+__fish_brew_complete_arg 'formula-python-resources' -l quiet -d 'Make some output more quiet'
+__fish_brew_complete_arg 'formula-python-resources' -l tap -d 'Only include formulae from the named tap. Requires `--all`'
+__fish_brew_complete_arg 'formula-python-resources' -l verbose -d 'Make some output more verbose'
+__fish_brew_complete_arg 'formula-python-resources' -a '(__fish_brew_suggest_formulae_all)'
+
+
 __fish_brew_complete_cmd 'formulae' 'List all locally installable formulae including short names'
 __fish_brew_complete_arg 'formulae' -l debug -d 'Display any debugging information'
 __fish_brew_complete_arg 'formulae' -l help -d 'Show this message'
@@ -1155,6 +1182,15 @@ __fish_brew_complete_arg 'generate-analytics-api' -l debug -d 'Display any debug
 __fish_brew_complete_arg 'generate-analytics-api' -l help -d 'Show this message'
 __fish_brew_complete_arg 'generate-analytics-api' -l quiet -d 'Make some output more quiet'
 __fish_brew_complete_arg 'generate-analytics-api' -l verbose -d 'Make some output more verbose'
+
+
+complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'generate-bottle-ci-matrix' -d 'Generate a GitHub Actions runner matrix for a dispatched bottle build'
+__fish_brew_complete_arg 'generate-bottle-ci-matrix' -l debug -d 'Display any debugging information'
+__fish_brew_complete_arg 'generate-bottle-ci-matrix' -l help -d 'Show this message'
+__fish_brew_complete_arg 'generate-bottle-ci-matrix' -l quiet -d 'Make some output more quiet'
+__fish_brew_complete_arg 'generate-bottle-ci-matrix' -l runners -d 'Build runner names as a comma-separated list'
+__fish_brew_complete_arg 'generate-bottle-ci-matrix' -l verbose -d 'Make some output more verbose'
+__fish_brew_complete_arg 'generate-bottle-ci-matrix' -a '(__fish_brew_suggest_formulae_all)'
 
 
 complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'generate-cask-api' -d 'Generate `homebrew/cask` API data files for https://formulae.brew.sh'
@@ -1355,16 +1391,19 @@ __fish_brew_complete_arg 'lgtm' -l quiet -d 'Make some output more quiet'
 __fish_brew_complete_arg 'lgtm' -l verbose -d 'Make some output more verbose'
 
 
-__fish_brew_complete_cmd 'link' 'Symlink all of formula\'s installed files into Homebrew\'s prefix'
+__fish_brew_complete_cmd 'link' 'Symlink all of formula\'s installed files or cask\'s binaries, manpages and shell completions into Homebrew\'s prefix'
 __fish_brew_complete_arg 'link' -l HEAD -d 'Link the HEAD version of the formula if it is installed'
+__fish_brew_complete_arg 'link' -l cask -d 'Treat all named arguments as casks'
 __fish_brew_complete_arg 'link' -l debug -d 'Display any debugging information'
 __fish_brew_complete_arg 'link' -l dry-run -d 'List files which would be linked or deleted by `brew link --overwrite` without actually linking or deleting any files'
-__fish_brew_complete_arg 'link' -l force -d 'Allow keg-only formulae to be linked'
+__fish_brew_complete_arg 'link' -l force -d 'Allow keg-only formulae to be linked. When linking casks, overwrite existing symlinks originally from the same cask'
+__fish_brew_complete_arg 'link' -l formula -d 'Treat all named arguments as formulae'
 __fish_brew_complete_arg 'link' -l help -d 'Show this message'
 __fish_brew_complete_arg 'link' -l overwrite -d 'Delete files that already exist in the prefix while linking'
 __fish_brew_complete_arg 'link' -l quiet -d 'Make some output more quiet'
 __fish_brew_complete_arg 'link' -l verbose -d 'Make some output more verbose'
-__fish_brew_complete_arg 'link' -a '(__fish_brew_suggest_formulae_installed)'
+__fish_brew_complete_arg 'link; and not __fish_seen_argument -l cask -l casks' -a '(__fish_brew_suggest_formulae_installed)'
+__fish_brew_complete_arg 'link; and not __fish_seen_argument -l formula -l formulae' -a '(__fish_brew_suggest_casks_installed)'
 
 
 __fish_brew_complete_cmd 'linkage' 'Check the library links from the given formula kegs'
@@ -1939,7 +1978,7 @@ __fish_brew_complete_arg 'test' -a '(__fish_brew_suggest_formulae_installed)'
 
 __fish_brew_complete_cmd 'test-bot' 'Tests the full lifecycle of a Homebrew change to a tap (Git repository)'
 __fish_brew_complete_arg 'test-bot' -l added-formulae -d 'Use these added formulae rather than running the formulae detection steps'
-__fish_brew_complete_arg 'test-bot' -l build-dependents-from-source -d 'Build dependents from source rather than testing bottles'
+__fish_brew_complete_arg 'test-bot' -l build-dependents-from-source -d 'Build a limited set of dependents from source in addition to testing bottles. Up to 10 per formula per shard, prioritising popular dependents in a sharded group'
 __fish_brew_complete_arg 'test-bot' -l build-from-source -d 'Build from source rather than building bottles'
 __fish_brew_complete_arg 'test-bot' -l cleanup -d 'Clean all state from the Homebrew directory. Use with care!'
 __fish_brew_complete_arg 'test-bot' -l debug -d 'Display any debugging information'
@@ -2065,13 +2104,16 @@ __fish_brew_complete_arg 'uninstall; and not __fish_seen_argument -l cask -l cas
 __fish_brew_complete_arg 'uninstall; and not __fish_seen_argument -l formula -l formulae' -a '(__fish_brew_suggest_casks_installed)'
 
 
-__fish_brew_complete_cmd 'unlink' 'Remove symlinks for formula from Homebrew\'s prefix'
+__fish_brew_complete_cmd 'unlink' 'Remove symlinks for formula or cask from Homebrew\'s prefix'
+__fish_brew_complete_arg 'unlink' -l cask -d 'Treat all named arguments as casks'
 __fish_brew_complete_arg 'unlink' -l debug -d 'Display any debugging information'
 __fish_brew_complete_arg 'unlink' -l dry-run -d 'List files which would be unlinked without actually unlinking or deleting any files'
+__fish_brew_complete_arg 'unlink' -l formula -d 'Treat all named arguments as formulae'
 __fish_brew_complete_arg 'unlink' -l help -d 'Show this message'
 __fish_brew_complete_arg 'unlink' -l quiet -d 'Make some output more quiet'
 __fish_brew_complete_arg 'unlink' -l verbose -d 'Make some output more verbose'
-__fish_brew_complete_arg 'unlink' -a '(__fish_brew_suggest_formulae_installed)'
+__fish_brew_complete_arg 'unlink; and not __fish_seen_argument -l cask -l casks' -a '(__fish_brew_suggest_formulae_installed)'
+__fish_brew_complete_arg 'unlink; and not __fish_seen_argument -l formula -l formulae' -a '(__fish_brew_suggest_casks_installed)'
 
 
 __fish_brew_complete_cmd 'unpack' 'Unpack the files for the formula or cask into subdirectories of the current working directory'
@@ -2163,6 +2205,7 @@ __fish_brew_complete_arg 'update-perl-resources' -a '(__fish_brew_suggest_formul
 complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'update-portable-ruby' -d 'Update the vendored `portable-ruby` from the current `portable-ruby` formula: write the version files and bottle checksums, run `brew vendor-install ruby`, then sync `utils/ruby.sh`, vendored gems and RBI files to the bundler shipped by the new ruby'
 __fish_brew_complete_arg 'update-portable-ruby' -l debug -d 'Display any debugging information'
 __fish_brew_complete_arg 'update-portable-ruby' -l help -d 'Show this message'
+__fish_brew_complete_arg 'update-portable-ruby' -l print-target-version -d 'Print the target portable Ruby package version without updating it'
 __fish_brew_complete_arg 'update-portable-ruby' -l quiet -d 'Make some output more quiet'
 __fish_brew_complete_arg 'update-portable-ruby' -l verbose -d 'Make some output more verbose'
 

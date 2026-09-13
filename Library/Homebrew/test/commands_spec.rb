@@ -1,4 +1,4 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require "commands"
@@ -23,23 +23,39 @@ RSpec.shared_context "custom internal commands" do # rubocop:disable RSpec/Conte
   before do
     stub_const("Commands::HOMEBREW_CMD_PATH", cmd_path)
     stub_const("Commands::HOMEBREW_DEV_CMD_PATH", dev_cmd_path)
-  end
 
-  around do |example|
     cmd_path.mkpath
     dev_cmd_path.mkpath
     cmds.each do |f|
       FileUtils.touch f
     end
+  end
 
-    example.run
-  ensure
+  after do
     FileUtils.rm_f cmds
   end
 end
 
 RSpec.describe Commands do
   include_context "custom internal commands"
+
+  test_each(["../other", ".", ".."]) do |cmd|
+    it "rejects #{cmd.inspect} before attempting to load an internal command" do
+      allow(Utils::Ruby).to receive(:require?).and_raise("Loading is not permitted")
+
+      expect(described_class.valid_internal_cmd?(cmd)).to be(false)
+    end
+
+    it "rejects #{cmd.inspect} before attempting to load an internal developer command" do
+      allow(Utils::Ruby).to receive(:require?).and_raise("Loading is not permitted")
+
+      expect(described_class.valid_internal_dev_cmd?(cmd)).to be(false)
+    end
+  end
+
+  it "does not resolve a path component as an internal command path" do
+    expect(described_class.path("../brew")).to be_nil
+  end
 
   specify "::internal_commands" do
     cmds = described_class.internal_commands

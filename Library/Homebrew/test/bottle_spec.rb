@@ -65,7 +65,8 @@ RSpec.describe Bottle do
                                    name: "foo", pkg_version: PkgVersion.new(Version.new("1.2.3"), 0))
       bottle.cached_download.dirname.mkpath
       bottle.cached_download.write("corrupt")
-      allow(bottle.downloader).to receive(:stage)
+      allow(UnpackStrategy).to receive(:detect)
+        .and_return(instance_double(UnpackStrategy::Tar, extract_nestedly: nil))
       expect(bottle).to receive(:fetch) { bottle.cached_download.write(valid_content) }
       # The mismatched verification has already hashed the corrupt file, so
       # discarding it must not hash it a second time: once for the corrupt
@@ -107,7 +108,10 @@ RSpec.describe Bottle do
       bottle.cached_download.dirname.mkpath
       bottle.cached_download.write("mismatched")
       staged_content = []
-      allow(bottle.downloader).to receive(:stage) { staged_content << bottle.cached_download.read }
+      allow(UnpackStrategy).to receive(:detect) do |path, **|
+        staged_content << path.read
+        instance_double(UnpackStrategy::Tar, extract_nestedly: nil)
+      end
       expect(bottle).to receive(:fetch) do
         bottle.cached_download.write(valid_content)
         bottle.verify_download_integrity(bottle.cached_download)
@@ -117,6 +121,65 @@ RSpec.describe Bottle do
 
       expect(staged_content).to eq([valid_content])
     ensure
+      bottle&.clear_cache
+    end
+
+    it "extracts a verified private copy from the temporary Cellar" do
+      valid_content = "valid"
+      bottle_spec = BottleSpecification.new
+      bottle_spec.root_url(HOMEBREW_BOTTLE_DEFAULT_DOMAIN)
+      bottle_spec.sha256(cellar: :any_skip_relocation, arm64_big_sur: Digest::SHA256.hexdigest(valid_content))
+      bottle = described_class.new(nil, bottle_spec, Utils::Bottles::Tag.from_symbol(:arm64_big_sur),
+                                   name: "foo", pkg_version: PkgVersion.new(Version.new("1.2.3"), 0))
+      bottle.cached_download.dirname.mkpath
+      bottle.cached_download.write(valid_content)
+      extracted = []
+      allow(UnpackStrategy).to receive(:detect) do |path, **|
+        extracted << [path.ascend.include?(HOMEBREW_TEMP_CELLAR), path == bottle.cached_download, path.read]
+        instance_double(UnpackStrategy::Tar, extract_nestedly: nil)
+      end
+
+      bottle.stage
+
+      expect(extracted).to eq([[true, false, valid_content]])
+    ensure
+      bottle&.clear_cache
+    end
+  end
+
+  test_each([false, true]) do |queue|
+    it "keeps bottle extraction intermediates in the temporary Cellar with queue=#{queue}" do
+      archive = TEST_FIXTURE_DIR/"bottles/testball_bottle-0.1.yosemite.bottle.tar.gz"
+      bottle_spec = BottleSpecification.new
+      bottle_spec.sha256(cellar: :any_skip_relocation, arm64_big_sur: Digest::SHA256.file(archive).hexdigest)
+      bottle = described_class.new(TestballBottle.new, bottle_spec, Utils::Bottles::Tag.from_symbol(:arm64_big_sur))
+      bottle.cached_download.dirname.mkpath
+      FileUtils.cp(archive, bottle.cached_download)
+      destination = mktmpdir
+      temporary_parents = []
+      allow(Dir).to receive(:mktmpdir).and_wrap_original do |original, *args, &block|
+        if args.first.to_s.start_with?("homebrew-unpack", "homebrew-tar")
+          temporary_parents << Pathname(args.fetch(1))
+        end
+        original.call(*args, &block)
+      end
+
+      if queue
+        bottle.stage_from_download_queue(bottle.cached_download, pour: true)
+        keg = bottle.staged_path_from_download_queue
+      else
+        destination.cd { bottle.stage }
+        keg = destination/"testball_bottle/0.1"
+      end
+
+      expect(
+        protected_parents: temporary_parents.map { |parent| parent.ascend.include?(HOMEBREW_TEMP_CELLAR) },
+        extracted:         (keg/"libexec/NOOP").file?,
+        queued:            bottle.staged_from_download_queue?,
+        snapshots:         HOMEBREW_TEMP_CELLAR.glob("verify-*"),
+      ).to eq(protected_parents: [true, true], extracted: true, queued: queue, snapshots: [])
+    ensure
+      bottle&.purge_staged_from_download_queue
       bottle&.clear_cache
     end
   end
@@ -134,21 +197,52 @@ RSpec.describe Bottle do
       bottle
     end
 
-    it "does not verify a bottle that was already queue-staged" do
+    it "replaces an existing marker and keg instead of trusting them" do
       staged_path = T.let(nil, T.nilable(Pathname))
       marker = T.let(nil, T.nilable(Pathname))
-      bottle = cached_bottle("0" * 64, "mismatched")
+      valid_content = "valid"
+      bottle = cached_bottle(Digest::SHA256.hexdigest(valid_content), valid_content)
       staged_path = bottle.staged_path_from_download_queue
       marker = bottle.staged_path_from_download_queue_marker
       staged_path.mkpath
+      (staged_path/"planted").write("planted")
       FileUtils.ln_s(staged_path, marker)
-      expect(bottle).not_to receive(:verify_download_integrity)
-      expect(UnpackStrategy).not_to receive(:detect)
+      unpack_strategy = instance_double(UnpackStrategy::Tar)
+      allow(unpack_strategy).to receive(:extract_nestedly) { staged_path.mkpath }
+      allow(UnpackStrategy).to receive(:detect).and_return(unpack_strategy)
 
       bottle.stage_from_download_queue(bottle.cached_download, pour: true)
+
+      expect([(staged_path/"planted").exist?, marker.symlink? && marker.readlink == staged_path]).to eq([false, true])
     ensure
       FileUtils.rm_f(marker) if marker
       FileUtils.rm_r(staged_path) if staged_path&.directory?
+      bottle&.clear_cache
+    end
+
+    it "accepts only a marker pointing at a real keg directory" do
+      keg = T.let(nil, T.nilable(Pathname))
+      marker = T.let(nil, T.nilable(Pathname))
+      bottle = cached_bottle("0" * 64, "cached")
+      keg = bottle.staged_path_from_download_queue
+      marker = bottle.staged_path_from_download_queue_marker
+      results = []
+      keg.mkpath
+      FileUtils.ln_s(keg, marker)
+      results << bottle.staged_from_download_queue?
+      FileUtils.rm(marker)
+      FileUtils.ln_s(mktmpdir, marker)
+      results << bottle.staged_from_download_queue?
+      FileUtils.rm(marker)
+      FileUtils.rm_r(keg)
+      FileUtils.ln_s(mktmpdir, keg)
+      FileUtils.ln_s(keg, marker)
+      results << bottle.staged_from_download_queue?
+
+      expect(results).to eq([true, false, false])
+    ensure
+      FileUtils.rm_f(marker) if marker
+      FileUtils.rm_rf(keg) if keg
       bottle&.clear_cache
     end
 
@@ -157,8 +251,8 @@ RSpec.describe Bottle do
       bottle = cached_bottle(Digest::SHA256.hexdigest(valid_content), "mismatched")
       unpack_strategy = instance_double(UnpackStrategy::Tar)
       staged_content = []
-      allow(UnpackStrategy).to receive(:detect) do
-        staged_content << bottle.cached_download.read
+      allow(UnpackStrategy).to receive(:detect) do |path, **|
+        staged_content << path.read
         unpack_strategy
       end
       allow(unpack_strategy).to receive(:extract_nestedly) { bottle.staged_path_from_download_queue.mkpath }

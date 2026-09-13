@@ -18,65 +18,56 @@ __brewcomp_words_include() {
   return 1
 }
 
-__brewcomp() {
-  # break $1 on space, tab, and newline characters,
-  # and turn it into a newline separated list of words
-  local list s sep=$'\n' IFS=$' \t\n'
-  local cur=${COMP_WORDS[COMP_CWORD]}
-
-  for s in $1
+__brewcomp_words() {
+  local line
+  local -a words
+  while IFS= read -r line
   do
-    __brewcomp_words_include "${s}" || list+="${s}${sep}"
-  done
+    IFS=$' \t' read -r -a words <<< "${line}"
+    [[ ${#words[@]} -gt 0 ]] && printf '%s\n' "${words[@]}"
+  done <<< "$1"
+}
 
-  list=${list%"${sep}"}
+__brewcomp_lines() {
+  local line
+  while IFS= read -r line
+  do
+    [[ -n ${line} && ${line} == "${COMP_WORDS[COMP_CWORD]}"* ]] && COMPREPLY+=("${line}")
+  done <<< "$1"
+}
 
-  IFS="${sep}"
-  while read -r line; do COMPREPLY+=("${line}"); done < <(compgen -W "${list}" -- "${cur}")
+__brewcomp() {
+  local line
+  while IFS= read -r line
+  do
+    __brewcomp_words_include "${line}" || __brewcomp_lines "${line}"
+  done < <(__brewcomp_words "$1")
 }
 
 # Don't use __brewcomp() in any of the __brew_complete_foo functions, as
 # it is too slow and is not worth it just for duplicate elimination.
 __brew_complete_formulae() {
-  local cur="${COMP_WORDS[COMP_CWORD]}"
-  local formulae
-  formulae="$(HOMEBREW_COMPLETION=1 brew formulae)"
-  while read -r line; do COMPREPLY+=("${line}"); done < <(compgen -W "${formulae}" -- "${cur}")
+  __brewcomp_lines "$(HOMEBREW_COMPLETION=1 brew formulae)"
 }
 
 __brew_complete_casks() {
-  local cur="${COMP_WORDS[COMP_CWORD]}"
-  local casks
-  casks="$(HOMEBREW_COMPLETION=1 brew casks)"
-  while read -r line; do COMPREPLY+=("${line}"); done < <(compgen -W "${casks}" -- "${cur}")
+  __brewcomp_lines "$(HOMEBREW_COMPLETION=1 brew casks)"
 }
 
 __brew_complete_installed_formulae() {
-  local cur="${COMP_WORDS[COMP_CWORD]}"
-  local installed_formulae
-  installed_formulae="$(command ls "${HOMEBREW_CELLAR:-$(brew --cellar)}" 2>/dev/null)"
-  while read -r line; do COMPREPLY+=("${line}"); done < <(compgen -W "${installed_formulae}" -- "${cur}")
+  __brewcomp_lines "$(command ls "${HOMEBREW_CELLAR:-$(brew --cellar)}" 2>/dev/null)"
 }
 
 __brew_complete_installed_casks() {
-  local cur="${COMP_WORDS[COMP_CWORD]}"
-  local installed_casks
-  installed_casks="$(command ls "$(brew --caskroom)" 2>/dev/null)"
-  while read -r line; do COMPREPLY+=("${line}"); done < <(compgen -W "${installed_casks}" -- "${cur}")
+  __brewcomp_lines "$(command ls "$(brew --caskroom)" 2>/dev/null)"
 }
 
 __brew_complete_outdated_formulae() {
-  local cur="${COMP_WORDS[COMP_CWORD]}"
-  local outdated_formulae
-  outdated_formulae="$(HOMEBREW_NO_AUTO_UPDATE=1 brew outdated --formula --quiet)"
-  while read -r line; do COMPREPLY+=("${line}"); done < <(compgen -W "${outdated_formulae}" -- "${cur}")
+  __brewcomp_lines "$(HOMEBREW_NO_AUTO_UPDATE=1 brew outdated --formula --quiet)"
 }
 
 __brew_complete_outdated_casks() {
-  local cur="${COMP_WORDS[COMP_CWORD]}"
-  local outdated_casks
-  outdated_casks="$(HOMEBREW_NO_AUTO_UPDATE=1 brew outdated --cask --quiet 2>/dev/null)"
-  while read -r line; do COMPREPLY+=("${line}"); done < <(compgen -W "${outdated_casks}" -- "${cur}")
+  __brewcomp_lines "$(HOMEBREW_NO_AUTO_UPDATE=1 brew outdated --cask --quiet 2>/dev/null)"
 }
 
 __brew_complete_tapped() {
@@ -96,7 +87,7 @@ __brew_complete_tapped() {
 __brew_complete_commands() {
   # Auto-complete Homebrew commands
 
-  local cur="${COMP_WORDS[COMP_CWORD]}"
+  local line
   local cmds
   local maintainer_cmds
   local user_aliases
@@ -113,24 +104,21 @@ __brew_complete_commands() {
   fi
   if [[ -n ${HOMEBREW_DEVELOPER:-} ]]
   then
-    maintainer_cmds="advisory-match determine-test-runners dispatch-build-bottle formula-analytics generate-advisories-api generate-analytics-api generate-cask-api generate-cask-ci-matrix generate-formula-api generate-internal-api generate-vulns-advisories pr-automerge pr-publish pr-pull pr-upload release update-license-data update-maintainers update-portable-ruby update-report update-sponsors vendor-install"
+    maintainer_cmds="advisory-match bump-python-resources-pr cask-ci determine-test-runners dispatch-build-bottle formula-analytics formula-python-resources generate-advisories-api generate-analytics-api generate-bottle-ci-matrix generate-cask-api generate-cask-ci-matrix generate-formula-api generate-internal-api generate-vulns-advisories pr-automerge pr-publish pr-pull pr-upload release update-license-data update-maintainers update-portable-ruby update-report update-sponsors vendor-install"
   fi
   user_aliases="$(__brew_list_aliases)"
-  while read -r line
+  while IFS= read -r line
   do
     [[ $(__brew_internal_command_alias "${line}") == "${line}" ]] || continue
-    COMPREPLY+=("${line}")
-  done < <(compgen -W "${cmds} ${maintainer_cmds} ${user_aliases}" -- "${cur}")
+    __brewcomp_lines "${line}"
+  done < <(__brewcomp_words "${cmds} ${maintainer_cmds} ${user_aliases}")
   export __HOMEBREW_COMMANDS=${cmds}
 }
 
 __brew_complete_services() {
-  local cur="${COMP_WORDS[COMP_CWORD]}"
-  local services
-  services="$(command find "$(brew --cellar)" -mindepth 3 -maxdepth 3 -name '*.service' \
+  __brewcomp_lines "$(command find "$(brew --cellar)" -mindepth 3 -maxdepth 3 -name '*.service' \
     | awk -F'homebrew.|.service' '{print $3}' \
     | sort -d)"
-  while read -r line; do COMPREPLY+=("${line}"); done < <(compgen -W "${services}" -- "${cur}")
 }
 
 # compopt is only available in newer versions of bash
@@ -384,7 +372,6 @@ _brew_analytics() {
   do
     case "${COMP_WORDS[i]}" in
       state) subcommand="state"; break ;;
-      regenerate-uuid) subcommand="regenerate-uuid"; break ;;
       on) subcommand="on"; break ;;
       off) subcommand="off"; break ;;
       *) ;;
@@ -403,15 +390,6 @@ _brew_analytics() {
           return
           ;;
 state)
-        __brewcomp "
-        --debug
-        --help
-        --quiet
-        --verbose
-        "
-        return
-        ;;
-regenerate-uuid)
         __brewcomp "
         --debug
         --help
@@ -445,7 +423,7 @@ off)
   esac
   case "${subcommand}" in
     "")
-      __brewcomp "state regenerate-uuid on off"
+      __brewcomp "state on off"
       ;;
 
     *) ;;
@@ -682,6 +660,30 @@ _brew_bump_formula_pr() {
       --verbose
       --version
       --write-only
+      "
+      return
+      ;;
+    *) ;;
+  esac
+  __brew_complete_formulae
+}
+
+_brew_bump_python_resources_pr() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  case "${cur}" in
+    -*)
+      __brewcomp "
+      --branch
+      --debug
+      --dry-run
+      --help
+      --install-dependencies
+      --message
+      --no-fork
+      --output
+      --packages
+      --quiet
+      --verbose
       "
       return
       ;;
@@ -1041,6 +1043,22 @@ add)
 exec)
   __brew_complete_commands
         ;;
+    *) ;;
+  esac
+}
+
+_brew_cask_ci() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  case "${cur}" in
+    -*)
+      __brewcomp "
+      --debug
+      --help
+      --quiet
+      --verbose
+      "
+      return
+      ;;
     *) ;;
   esac
 }
@@ -1683,6 +1701,25 @@ _brew_formula_analytics() {
   esac
 }
 
+_brew_formula_python_resources() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  case "${cur}" in
+    -*)
+      __brewcomp "
+      --all
+      --debug
+      --help
+      --quiet
+      --tap
+      --verbose
+      "
+      return
+      ;;
+    *) ;;
+  esac
+  __brew_complete_formulae
+}
+
 _brew_formulae() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
   case "${cur}" in
@@ -1729,6 +1766,24 @@ _brew_generate_analytics_api() {
       ;;
     *) ;;
   esac
+}
+
+_brew_generate_bottle_ci_matrix() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  case "${cur}" in
+    -*)
+      __brewcomp "
+      --debug
+      --help
+      --quiet
+      --runners
+      --verbose
+      "
+      return
+      ;;
+    *) ;;
+  esac
+  __brew_complete_formulae
 }
 
 _brew_generate_cask_api() {
@@ -2079,9 +2134,11 @@ _brew_link() {
     -*)
       __brewcomp "
       --HEAD
+      --cask
       --debug
       --dry-run
       --force
+      --formula
       --help
       --overwrite
       --quiet
@@ -2092,6 +2149,7 @@ _brew_link() {
     *) ;;
   esac
   __brew_complete_installed_formulae
+  __brew_complete_installed_casks
 }
 
 _brew_linkage() {
@@ -3258,8 +3316,10 @@ _brew_unlink() {
   case "${cur}" in
     -*)
       __brewcomp "
+      --cask
       --debug
       --dry-run
+      --formula
       --help
       --quiet
       --verbose
@@ -3269,6 +3329,7 @@ _brew_unlink() {
     *) ;;
   esac
   __brew_complete_installed_formulae
+  __brew_complete_installed_casks
 }
 
 _brew_unpack() {
@@ -3445,6 +3506,7 @@ _brew_update_portable_ruby() {
       __brewcomp "
       --debug
       --help
+      --print-target-version
       --quiet
       --verbose
       "
@@ -3826,9 +3888,11 @@ _brew() {
     bump-cask-pr) _brew_bump_cask_pr ;;
     bump-compatibility-version) _brew_bump_compatibility_version ;;
     bump-formula-pr) _brew_bump_formula_pr ;;
+    bump-python-resources-pr) _brew_bump_python_resources_pr ;;
     bump-revision) _brew_bump_revision ;;
     bump-unversioned-casks) _brew_bump_unversioned_casks ;;
     bundle) _brew_bundle ;;
+    cask-ci) _brew_cask_ci ;;
     casks) _brew_casks ;;
     cat) _brew_cat ;;
     cleanup) _brew_cleanup ;;
@@ -3854,9 +3918,11 @@ _brew() {
     find-appcast) _brew_find_appcast ;;
     formula) _brew_formula ;;
     formula-analytics) _brew_formula_analytics ;;
+    formula-python-resources) _brew_formula_python_resources ;;
     formulae) _brew_formulae ;;
     generate-advisories-api) _brew_generate_advisories_api ;;
     generate-analytics-api) _brew_generate_analytics_api ;;
+    generate-bottle-ci-matrix) _brew_generate_bottle_ci_matrix ;;
     generate-cask-api) _brew_generate_cask_api ;;
     generate-cask-ci-matrix) _brew_generate_cask_ci_matrix ;;
     generate-cask-token) _brew_generate_cask_token ;;

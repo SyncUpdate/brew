@@ -75,7 +75,8 @@ module Homebrew
           return packages if packages
 
           @packages = if (uv = package_manager_executable)
-            output = `#{uv} tool list --show-with --show-extras --show-version-specifiers 2>/dev/null`
+            output = Utils.popen_read_text(uv, "tool", "list", "--show-with", "--show-extras",
+                                           "--show-version-specifiers", err: File::NULL)
             parse_tool_list(output)
           end
           return [] if @packages.nil?
@@ -131,7 +132,7 @@ module Homebrew
           entries = T.let([], T::Array[Tool])
 
           output.each_line do |line|
-            match = line.match(/\A(\S+)\s+v\S+/)
+            match = line.match(/\A([A-Za-z0-9]\S*)\s+v\S+/)
             next unless match
 
             name = match[1]

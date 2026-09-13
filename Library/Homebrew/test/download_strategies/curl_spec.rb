@@ -18,9 +18,11 @@ RSpec.describe CurlDownloadStrategy do
     }
   end
 
+  let(:responses) { [{ headers: }] }
+
   before do
     allow(strategy).to receive(:curl_headers).with(any_args)
-                                             .and_return({ responses: [{ headers: }] })
+                                             .and_return({ responses: })
   end
 
   it "parses the opts and sets the corresponding args" do
@@ -228,6 +230,103 @@ RSpec.describe CurlDownloadStrategy do
         end.at_least(:once)
 
         strategy.fetch
+      end
+    end
+
+    context "with an HTML redirect before the downloaded file" do
+      let(:final_headers) { headers }
+      let(:responses) do
+        [
+          { headers: { "content-type"   => "text/html; charset=UTF-8",
+                       "content-length" => "100",
+                       "location"       => "https://example.com/media/foo.tar.gz" } },
+          { headers: final_headers },
+        ]
+      end
+
+      before do
+        allow(strategy).to receive(:curl)
+
+        strategy.cached_location.dirname.mkpath
+        strategy.cached_location.write("cached")
+      end
+
+      it "ignores a cached download of a different size" do
+        expect { strategy.fetch }.to output(/differs from Content-Length header: 37182/).to_stdout
+      end
+
+      context "when the file is newer than the cached download" do
+        let(:final_headers) { { "last-modified" => (Time.now + 3600).httpdate } }
+
+        it "ignores the cached download" do
+          expect { strategy.fetch }.to output(/is before Last-Modified header/).to_stdout
+        end
+      end
+
+      context "when the redirect ends on a web page" do
+        let(:final_headers) { headers.merge("content-type" => "text/html; charset=UTF-8") }
+
+        it "keeps the cached download" do
+          expect { strategy.fetch }.to output(/Already downloaded/).to_stdout
+        end
+      end
+
+      context "when the file is sent without a size or a modification time" do
+        let(:final_headers) { { "transfer-encoding" => "chunked" } }
+
+        it "keeps the cached download" do
+          expect { strategy.fetch }.to output(/Already downloaded/).to_stdout
+        end
+      end
+    end
+
+    context "when a redirect target names a variable the download did not declare" do
+      let(:redirect_url) do
+        "https://example.com/elsewhere/foo.tar.gz?leak=" \
+          "#{EnvSensitive::DEFERRED_PLACEHOLDER_PREFIX}HOMEBREW_GITHUB_API_TOKEN" \
+          "#{EnvSensitive::DEFERRED_PLACEHOLDER_SUFFIX}"
+      end
+
+      before do
+        ENV["HOMEBREW_GITHUB_API_TOKEN"] = "ghp-victim-token"
+        strategy.allow_deferred_environment_expansion!
+        allow(strategy).to receive(:resolve_url_basename_time_file_size)
+          .and_return([redirect_url, "foo.tar.gz", nil, 0, nil, true])
+      end
+
+      it "refuses to send a secret the download never named" do
+        expect { strategy.fetch }.to raise_error(CurlDownloadStrategyError, /did not declare/)
+      end
+    end
+
+    context "when a redirect target carries a secret the download declared" do
+      let(:url) do
+        "https://example.com/foo.tar.gz?t=" \
+          "#{EnvSensitive::DEFERRED_PLACEHOLDER_PREFIX}HOMEBREW_PRIVATE_TOKEN" \
+          "#{EnvSensitive::DEFERRED_PLACEHOLDER_SUFFIX}"
+      end
+      let(:redirect_url) do
+        "https://cdn.example.org/foo.tar.gz?t=" \
+          "#{EnvSensitive::DEFERRED_PLACEHOLDER_PREFIX}HOMEBREW_PRIVATE_TOKEN" \
+          "#{EnvSensitive::DEFERRED_PLACEHOLDER_SUFFIX}"
+      end
+
+      before do
+        ENV["HOMEBREW_PRIVATE_TOKEN"] = "glpat-secret"
+        strategy.allow_deferred_environment_expansion!
+        allow(strategy).to receive(:resolve_url_basename_time_file_size)
+          .and_return([redirect_url, "foo.tar.gz", nil, 0, nil, true])
+      end
+
+      it "still expands it, as redirects carrying declared secrets are supported" do
+        seen = []
+        allow(strategy).to receive(:system_command) do |_command, options|
+          seen.concat(options[:args])
+          instance_double(SystemCommand::Result, success?: true, stdout: "", assert_success!: nil)
+        end
+        strategy.fetch
+
+        expect(seen).to include(a_string_including("t=glpat-secret"))
       end
     end
 
@@ -448,7 +547,7 @@ RSpec.describe CurlDownloadStrategy do
       end
 
       it "raises when size cannot be determined" do
-        expect { strategy.resolved_time_file_size }.to raise_error(TypeError)
+        expect { strategy.resolved_time_file_size }.to raise_error(RuntimeError, /Could not determine the file size/)
       end
     end
 
@@ -462,7 +561,9 @@ RSpec.describe CurlDownloadStrategy do
           end
 
           it "raises when size cannot be parsed" do
-            expect { strategy.resolved_time_file_size }.to raise_error(TypeError)
+            expect do
+              strategy.resolved_time_file_size
+            end.to raise_error(RuntimeError, /Could not determine the file size/)
           end
         end
       end

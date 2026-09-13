@@ -129,6 +129,9 @@ module Superenv
     self["BUNDLE_FORCE_RUBY_PLATFORM"] = "true"
     self["BUNDLE_VERSION"] = "system"
     self["BUNDLE_WITHOUT"] = "development:test"
+    # Set defaults for opam
+    self["OPAMNODEPEXTS"] = "1"
+    self["OPAMYES"] = "1"
 
     set_debug_symbols if debug_symbols
 
@@ -192,7 +195,9 @@ module Superenv
     path.append("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 
     begin
-      path.append(gcc_version_formula(T.must(homebrew_cc)).opt_bin) if homebrew_cc&.match?(GNU_GCC_REGEXP)
+      if (cc = homebrew_cc) && cc.match?(GNU_GCC_REGEXP)
+        path.append(gcc_version_formula(cc).opt_bin)
+      end
     rescue FormulaUnavailableError
       # Don't fail and don't add these formulae to the path if they don't exist.
       nil

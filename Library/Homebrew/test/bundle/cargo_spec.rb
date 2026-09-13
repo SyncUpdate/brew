@@ -132,13 +132,15 @@ RSpec.describe Homebrew::Bundle::Cargo do
     end
 
     context "when cargo is installed" do
+      let(:cargo_list_args) { [Pathname("cargo"), "install", "--list"] }
+
       before do
         described_class.reset!
         allow(described_class).to receive(:package_manager_executable).and_return(Pathname.new("cargo"))
       end
 
       it "returns package list" do
-        expect(described_class).to receive(:`).with("cargo install --list") do
+        expect(Utils).to receive(:popen_read_text).with(*cargo_list_args, err: :err) do
           expect(ENV.fetch("CARGO_HOME", nil)).to eq("~/.cargo")
           expect(ENV.fetch("CARGO_INSTALL_ROOT", nil)).to eq("~/.cargo/bin")
           expect(ENV.fetch("RUSTUP_HOME", nil)).to eq("~/.rustup")
@@ -156,7 +158,7 @@ RSpec.describe Homebrew::Bundle::Cargo do
       end
 
       it "parses a git source and strips the resolved revision" do
-        allow(described_class).to receive(:`).with("cargo install --list").and_return(<<~EOS)
+        allow(Utils).to receive(:popen_read_text).with(*cargo_list_args, err: :err).and_return(<<~EOS)
           tftio-kb v4.0.0 (ssh://git@example.com/tftio/kb.git#3492d620):
               kb
         EOS
@@ -168,7 +170,7 @@ RSpec.describe Homebrew::Bundle::Cargo do
       end
 
       it "parses an https git source" do
-        allow(described_class).to receive(:`).with("cargo install --list").and_return(<<~EOS)
+        allow(Utils).to receive(:popen_read_text).with(*cargo_list_args, err: :err).and_return(<<~EOS)
           ripgrep v13.0.0 (https://github.com/BurntSushi/ripgrep#9f0e88bc):
               rg
         EOS
@@ -177,7 +179,7 @@ RSpec.describe Homebrew::Bundle::Cargo do
       end
 
       it "keeps a tag selector while stripping the resolved revision" do
-        allow(described_class).to receive(:`).with("cargo install --list").and_return(<<~EOS)
+        allow(Utils).to receive(:popen_read_text).with(*cargo_list_args, err: :err).and_return(<<~EOS)
           tftio-kb v4.0.0 (ssh://git@example.com/tftio/kb.git?tag=v4.0.0#3492d620):
               kb
         EOS
@@ -186,7 +188,7 @@ RSpec.describe Homebrew::Bundle::Cargo do
       end
 
       it "dumps a crate installed from a local path without a source" do
-        allow(described_class).to receive(:`).with("cargo install --list").and_return(<<~EOS)
+        allow(Utils).to receive(:popen_read_text).with(*cargo_list_args, err: :err).and_return(<<~EOS)
           bat v0.24.0 (/Users/test/src/bat):
               bat
         EOS
@@ -195,7 +197,7 @@ RSpec.describe Homebrew::Bundle::Cargo do
       end
 
       it "dumps a crate installed from a file:// repository without a source" do
-        allow(described_class).to receive(:`).with("cargo install --list").and_return(<<~EOS)
+        allow(Utils).to receive(:popen_read_text).with(*cargo_list_args, err: :err).and_return(<<~EOS)
           bat v0.24.0 (file:///Users/test/src/bat#3492d620):
               bat
         EOS
@@ -204,13 +206,21 @@ RSpec.describe Homebrew::Bundle::Cargo do
       end
 
       it "ignores an origin it cannot classify as a source" do
-        allow(described_class).to receive(:`).with("cargo install --list").and_return(<<~EOS)
+        allow(Utils).to receive(:popen_read_text).with(*cargo_list_args, err: :err).and_return(<<~EOS)
           ripgrep v13.0.0 (registry+sparse):
               rg
         EOS
 
         expect(dumper.packages.first&.dig(:source)).to be_nil
         expect(dumper.dump).to eql('cargo "ripgrep"')
+      end
+
+      it "passes metacharacters in cargo's path literally" do
+        cargo = Pathname("cargo; touch /tmp/pwned")
+        allow(described_class).to receive(:package_manager_executable).and_return(cargo)
+        expect(Utils).to receive(:popen_read_text).with(cargo, "install", "--list", err: :err).and_return("")
+
+        dumper.packages
       end
 
       it "dumps package list" do

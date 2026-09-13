@@ -102,12 +102,23 @@ RSpec.describe Homebrew::Services::System do
   describe "#domain_target" do
     it "returns the current domain target" do
       allow(described_class).to receive(:root?).and_return(false)
-      expect(described_class.domain_target).to match(%r{gui/(\d+)})
+      expect(described_class.domain_target).to match(%r{gui/\d+})
     end
 
     it "returns the root domain target" do
       allow(described_class).to receive(:root?).and_return(true)
       expect(described_class.domain_target).to match("system")
+    end
+  end
+
+  describe "#candidate_domain_targets" do
+    it "tries the user domain first when running through sudo" do
+      ENV.delete("HOMEBREW_SSH_TTY")
+      ENV["HOMEBREW_SUDO_USER"] = "test"
+      ENV["HOMEBREW_SERVICES_NO_DOMAIN_WARNING"] = "1"
+      allow(described_class).to receive(:root?).and_return(false)
+
+      expect(described_class.candidate_domain_targets).to eq(["user/#{Process.uid}", "gui/#{Process.uid}"])
     end
   end
 

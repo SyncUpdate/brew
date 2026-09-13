@@ -80,6 +80,26 @@ RSpec.describe CcShim::Cmd do
     described_class.new("gcc", argv).args
   end
 
+  it "keeps an explicit dependency -L ahead of its own library paths" do
+    setup_env(real_prefix)
+    ENV["HOMEBREW_LIBRARY_PATHS"] = "#{real_prefix}/lib:#{real_prefix}/#{opt}/ocaml/lib"
+
+    argv = ["-o", "prog", "-L#{real_prefix}/#{opt}/ocaml/lib", "prog.o"]
+    args = described_class.new("gcc", argv).args
+
+    expect(args.index("-L#{real_prefix}/#{opt}/ocaml/lib")).to be < args.index("-L#{real_prefix}/lib")
+  end
+
+  it "drops an explicit -L for a library path it appends itself" do
+    setup_env(real_prefix)
+    ENV["HOMEBREW_LIBRARY_PATHS"] = "#{real_prefix}/#{cellar}/ocaml/5.5.0/lib:#{real_prefix}/lib"
+
+    argv = ["-o", "prog", "-L#{real_prefix}/lib", "prog.o"]
+    args = described_class.new("gcc", argv).args
+
+    expect(args.count("-L#{real_prefix}/lib")).to eq(1)
+  end
+
   it "targets x86_64 with Apple Clang under Rosetta 2" do
     setup_env(real_prefix)
     ENV["HOMEBREW_CC"] = "clang"
@@ -92,6 +112,24 @@ RSpec.describe CcShim::Cmd do
 
     expect(command.args)
       .to include("-arch", "x86_64", "-march=westmere")
+  end
+
+  it "raises deployment targets below the minimum macOS version" do
+    setup_env(real_prefix)
+    ENV["HOMEBREW_MACOS_OLDEST_ALLOWED"] = "11"
+
+    argv = [
+      "-mmacosx-version-min=10.15",
+      "-mmacosx-version-min=11",
+      "-mmacosx-version-min=15.2",
+    ]
+
+    deployment_targets = described_class.new("clang", argv).args.grep(/^-mmacosx-version-min=/)
+    expect(deployment_targets).to eq([
+      "-mmacosx-version-min=11",
+      "-mmacosx-version-min=11",
+      "-mmacosx-version-min=15.2",
+    ])
   end
 
   context "when no path component of the prefix is a symlink" do

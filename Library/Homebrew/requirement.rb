@@ -96,7 +96,9 @@ class Requirement
 
     @satisfied_result = T.let(
       satisfy.yielder(env:, cc:, build_bottle:, bottle_arch:) do |p|
-        instance_eval(&T.must(p))
+        raise ArgumentError, "#{self.class} `satisfy` requires a block when given options" if p.nil?
+
+        instance_eval(&p)
       end,
       Object,
     )
@@ -116,7 +118,7 @@ class Requirement
   def satisfied_result_parent
     return unless @satisfied_result.is_a?(Pathname)
 
-    parent = @satisfied_result.resolved_path.parent
+    parent = Utils::Path.resolved_path(@satisfied_result).parent
     if parent.to_s =~ %r{^#{Regexp.escape(HOMEBREW_CELLAR)}/([\w+-.@]+)/[^/]+/(s?bin)/?$}o
       parent = HOMEBREW_PREFIX/"opt/#{Regexp.last_match(1)}/#{Regexp.last_match(2)}"
     end
@@ -134,7 +136,8 @@ class Requirement
   }
   def modify_build_environment(env: nil, cc: nil, build_bottle: false, bottle_arch: nil)
     satisfied?(env:, cc:, build_bottle:, bottle_arch:)
-    instance_eval(&T.must(env_proc)) if env_proc
+    env_block = env_proc
+    instance_eval(&env_block) if env_block
 
     # XXX If the satisfy block returns a Pathname, then make sure that it
     # remains available on the PATH. This makes requirements like
@@ -194,8 +197,8 @@ class Requirement
   sig { returns(String) }
   def infer_name
     klass = self.class.name
-    klass = klass&.sub(/(Dependency|Requirement)$/, "")
-                 &.sub(/^(\w+::)*/, "")
+    klass = klass&.sub(/(?:Dependency|Requirement)$/, "")
+                 &.sub(/^(?:\w+::)*/, "")
     return klass.downcase if klass.present?
 
     return @cask if @cask.present?
@@ -231,18 +234,18 @@ class Requirement
     sig { returns(T.nilable(T::Boolean)) }
     attr_reader :build
 
-    sig { params(val: String).returns(T.nilable(String)) }
-    def cask(val = T.unsafe(nil))
+    sig { params(val: T.nilable(String)).returns(T.nilable(String)) }
+    def cask(val = nil)
       val.nil? ? @cask : @cask = val
     end
 
-    sig { params(val: String).returns(T.nilable(String)) }
-    def download(val = T.unsafe(nil))
+    sig { params(val: T.nilable(String)).returns(T.nilable(String)) }
+    def download(val = nil)
       val.nil? ? @download : @download = val
     end
 
-    sig { params(val: T::Boolean).returns(T.nilable(T::Boolean)) }
-    def fatal(val = T.unsafe(nil))
+    sig { params(val: T.nilable(T::Boolean)).returns(T.nilable(T::Boolean)) }
+    def fatal(val = nil)
       val.nil? ? @fatal : @fatal = val
     end
 
@@ -276,8 +279,7 @@ class Requirement
     def initialize(options, &block)
       case options
       when Hash
-        @options = T.let({ build_env: true }, T.nilable(T::Hash[Symbol, T.anything]))
-        T.must(@options).merge!(options)
+        @options = T.let({ build_env: true }.merge(options), T.nilable(T::Hash[Symbol, T.anything]))
       else
         @satisfied = T.let(options, T.anything)
       end

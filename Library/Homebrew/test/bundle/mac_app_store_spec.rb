@@ -24,8 +24,8 @@ RSpec.describe Homebrew::Bundle::MacAppStore do
     context "when there is no apps" do
       before do
         described_class.reset!
-        allow(described_class).to receive_messages(package_manager_executable: Pathname.new("mas"),
-                                                   "`":                        "")
+        allow(described_class).to receive(:package_manager_executable).and_return(Pathname.new("mas"))
+        allow(Utils).to receive(:popen_read_text).with(Pathname("mas"), "list", err: File::NULL).and_return("")
       end
 
       specify do
@@ -37,11 +37,11 @@ RSpec.describe Homebrew::Bundle::MacAppStore do
     context "when apps `foo`, `bar` and `baz` are installed" do
       before do
         described_class.reset!
-        allow(described_class).to receive_messages(
-          package_manager_executable: Pathname.new("mas"),
-          "`":                        "123 foo (1.0)\n" \
-                                      "456 bar (2.0)\n" \
-                                      "789 baz (3.0)",
+        allow(described_class).to receive(:package_manager_executable).and_return(Pathname.new("mas"))
+        allow(Utils).to receive(:popen_read_text).with(Pathname("mas"), "list", err: File::NULL).and_return(
+          "123 foo (1.0)\n" \
+          "456 bar (2.0)\n" \
+          "789 baz (3.0)",
         )
       end
 
@@ -54,8 +54,9 @@ RSpec.describe Homebrew::Bundle::MacAppStore do
       before do
         described_class.reset!
         allow(described_class).to receive(:package_manager_executable).and_return(Pathname.new("mas"))
-        allow(described_class).to receive(:`).and_return("123 foo (1.0)\n456 bar (2.0)\n789 baz (3.0)")
-        allow(described_class).to receive(:`).and_return("123 foo (1.0)\n456 bar (2.0)\n789 baz (3.0)\n 10 qux (4.0)")
+        allow(Utils).to receive(:popen_read_text).with(Pathname("mas"), "list", err: File::NULL)
+                                                 .and_return("123 foo (1.0)\n456 bar (2.0)\n" \
+                                                             "789 baz (3.0)\n 10 qux (4.0)")
       end
 
       it "returns list %w[foo bar baz qux]" do
@@ -138,8 +139,10 @@ RSpec.describe Homebrew::Bundle::MacAppStore do
 
       before do
         described_class.reset!
-        allow(described_class).to receive_messages(package_manager_executable: Pathname.new("mas"),
-                                                   "`":                        invalid_mas_output)
+        allow(described_class).to receive(:package_manager_executable).and_return(Pathname.new("mas"))
+        allow(Utils).to receive(:popen_read)
+          .with(Pathname("mas"), "list", err: File::NULL)
+          .and_return(invalid_mas_output.b)
       end
 
       specify do
@@ -167,8 +170,9 @@ RSpec.describe Homebrew::Bundle::MacAppStore do
 
       before do
         described_class.reset!
-        allow(described_class).to receive_messages(package_manager_executable: Pathname.new("mas"),
-                                                   "`":                        new_mas_output)
+        allow(described_class).to receive(:package_manager_executable).and_return(Pathname.new("mas"))
+        allow(Utils).to receive(:popen_read_text).with(Pathname("mas"), "list",
+                                                       err: File::NULL).and_return(new_mas_output)
       end
 
       it "parses the app names without trailing whitespace" do
@@ -195,8 +199,9 @@ RSpec.describe Homebrew::Bundle::MacAppStore do
 
       before do
         described_class.reset!
-        allow(described_class).to receive_messages(package_manager_executable: Pathname.new("mas"),
-                                                   "`":                        new_mas_output)
+        allow(described_class).to receive(:package_manager_executable).and_return(Pathname.new("mas"))
+        allow(Utils).to receive(:popen_read_text).with(Pathname("mas"), "list",
+                                                       err: File::NULL).and_return(new_mas_output)
       end
 
       it "parses the app versions without parentheses" do
@@ -241,7 +246,7 @@ RSpec.describe Homebrew::Bundle::MacAppStore do
 
       describe ".outdated_app_ids" do
         it "does not shell out" do
-          expect(described_class).not_to receive(:`)
+          expect(Utils).not_to receive(:popen_read_text)
           described_class.reset!
           described_class.outdated_app_ids
         end
@@ -255,7 +260,8 @@ RSpec.describe Homebrew::Bundle::MacAppStore do
 
       describe ".outdated_app_ids" do
         it "returns app ids" do
-          expect(described_class).to receive(:`).and_return("foo 123")
+          expect(Utils).to receive(:popen_read_text).with(Pathname("mas"), "outdated",
+                                                          err: File::NULL).and_return("foo 123")
           described_class.reset!
           described_class.outdated_app_ids
         end

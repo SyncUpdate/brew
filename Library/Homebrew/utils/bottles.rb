@@ -37,7 +37,7 @@ module Utils
 
       sig { params(formula: Formula, file: Pathname).returns(T::Boolean) }
       def file_outdated?(formula, file)
-        file = file.resolved_path
+        file = Utils::Path.resolved_path(file)
 
         filename = file.basename.to_s
         bottle = formula.bottle
@@ -74,7 +74,7 @@ module Utils
           tap = Tab.from_file_content(receipt_file, "#{bottle_file}/#{receipt_file_path}").tap
           "#{tap}/#{name}" if tap.present? && !tap.core_tap?
         else
-          bottle_json_path = Pathname(bottle_file.sub(/\.(\d+\.)?tar\.gz$/, ".json"))
+          bottle_json_path = Pathname(bottle_file.sub(/\.(?:\d+\.)?tar\.gz$/, ".json"))
           if bottle_json_path.exist? &&
              (bottle_json_path_contents = bottle_json_path.read.presence) &&
              (bottle_json = JSON.parse(bottle_json_path_contents).presence) &&
@@ -120,7 +120,7 @@ module Utils
       def load_tab(formula)
         keg = Keg.new(formula.prefix)
         tabfile = keg/AbstractTab::FILENAME
-        bottle_json_path = formula.local_bottle_path&.sub(/\.(\d+\.)?tar\.gz$/, ".json")
+        bottle_json_path = formula.local_bottle_path&.sub(/\.(?:\d+\.)?tar\.gz$/, ".json")
 
         if bottle_json_path.nil? && (tab_attributes = formula.bottle_tab_attributes.presence)
           tab = Tab.from_file_content(tab_attributes.to_json, tabfile)
@@ -178,16 +178,16 @@ module Utils
         @all_archs_regex ||= T.let(begin
           all_archs = Hardware::CPU::ALL_ARCHS.map(&:to_s)
           /
-            ^((?<arch>#{Regexp.union(all_archs)})_)?
+            ^(?:(?<arch>#{Regexp.union(all_archs)})_)?
             (?<system>[\w.]+)$
           /x
         end, T.nilable(Regexp))
         match = @all_archs_regex.match(value.to_s)
-        raise ArgumentError, "Invalid bottle tag symbol" unless match
+        system = match[:system] if match
+        raise ArgumentError, "Invalid bottle tag symbol" if match.nil? || system.nil?
 
-        system = T.must(match[:system]).to_sym
         arch = match[:arch]&.to_sym || :x86_64
-        new(system:, arch:)
+        new(system: system.to_sym, arch:)
       end
 
       sig { params(arg: T.nilable(Symbol), os: Symbol, arch: Symbol).returns(T.attached_class) }
@@ -272,24 +272,18 @@ module Utils
         MacOSVersion::SYMBOLS.key?(system)
       end
 
-      sig { returns(T::Boolean) }
-      def valid_combination?
-        return true unless [:arm64, :arm, :aarch64].include? arch
-        return true unless macos?
-
-        # Big Sur is the first version of macOS that runs on ARM
-        to_macos_version >= :big_sur
-      end
-
       sig { returns(String) }
       def default_prefix
-        if linux?
-          T.must(HOMEBREW_LINUX_DEFAULT_PREFIX)
+        prefix = if linux?
+          HOMEBREW_LINUX_DEFAULT_PREFIX
         elsif standardized_arch == :arm64
-          T.must(HOMEBREW_MACOS_ARM_DEFAULT_PREFIX)
+          HOMEBREW_MACOS_ARM_DEFAULT_PREFIX
         else
           HOMEBREW_DEFAULT_PREFIX
         end
+        raise "No default prefix is known for #{self}: HOMEBREW_*_DEFAULT_PREFIX is unset" if prefix.nil?
+
+        prefix
       end
 
       sig { returns(String) }

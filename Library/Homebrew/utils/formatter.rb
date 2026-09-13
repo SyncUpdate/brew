@@ -96,9 +96,9 @@ module Formatter
     indent = width - desc
     string.gsub(/(?<=\S) *\n(?=\S)/, " ")
           .gsub(/([`>)\]]:) /, "\\1\n    ")
-          .gsub(/^( +-.+  +(?=\S.{#{desc}}))(.{1,#{desc}})( +|$)(?!-)\n?/, "\\1\\2\n#{" " * indent}")
-          .gsub(/^( {#{indent}}(?=\S.{#{desc}}))(.{1,#{desc}})( +|$)(?!-)\n?/, "\\1\\2\n#{" " * indent}")
-          .gsub(/(.{1,#{width}})( +|$)(?!-)\n?/, "\\1\n")
+          .gsub(/^( +-.+  +(?=\S.{#{desc}}))(.{1,#{desc}})(?: +|$)(?!-)\n?/, "\\1\\2\n#{" " * indent}")
+          .gsub(/^( {#{indent}}(?=\S.{#{desc}}))(.{1,#{desc}})(?: +|$)(?!-)\n?/, "\\1\\2\n#{" " * indent}")
+          .gsub(/(.{1,#{width}})(?: +|$)(?!-)\n?/, "\\1\n")
   end
 
   T::Sig::WithoutRuntime.sig { params(string: T.nilable(T.any(String, URI::Generic))).returns(String) }
@@ -117,12 +117,10 @@ module Formatter
     params(prefix: T.nilable(String), string: T.any(String, Exception), color: T.nilable(Symbol)).returns(String)
   }
   def self.prefix(prefix, string, color)
-    if prefix.nil? && color.nil?
-      string.to_s
+    if color.nil?
+      prefix.nil? ? string.to_s : "#{prefix} #{string}"
     elsif prefix.nil?
-      "#{Tty.public_send(T.must(color))}#{string}#{Tty.reset}"
-    elsif color.nil?
-      "#{prefix} #{string}"
+      "#{Tty.public_send(color)}#{string}#{Tty.reset}"
     else
       "#{Tty.public_send(color)}#{prefix}#{Tty.reset} #{string}"
     end
@@ -141,7 +139,7 @@ module Formatter
     end
 
     fallback.call if objects.empty?
-    fallback.call if respond_to?(:tty?) ? !T.unsafe(self).tty? : !$stdout.tty?
+    fallback.call unless $stdout.tty?
 
     console_width = Tty.width
     object_lengths = objects.map { |obj| Tty.strip_ansi(obj).length }
@@ -161,7 +159,7 @@ module Formatter
     rows.times do |row_index|
       item_indices_for_row = T.cast(row_index.step(objects.size - 1, rows).to_a, T::Array[Integer])
 
-      first_n = T.must(item_indices_for_row[0...-1]).map do |index|
+      first_n = item_indices_for_row.first(item_indices_for_row.size - 1).map do |index|
         objects.fetch(index) + "".rjust(col_width - object_lengths.fetch(index))
       end
 
@@ -207,7 +205,7 @@ module Formatter
 
   sig { params(number: Integer).returns(String) }
   def self.number_readable(number)
-    number.to_i.to_s.gsub(/(\d)(?=(\d{3})+\z)/, "\\1,")
+    number.to_i.to_s.gsub(/(\d)(?=(?:\d{3})+\z)/, "\\1,")
   end
 
   sig { params(input: String, secrets: T::Array[String]).returns(String) }

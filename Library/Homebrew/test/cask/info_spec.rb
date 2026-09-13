@@ -12,11 +12,19 @@ RSpec.describe Cask::Info, :cask do
   include Utils::Output::Mixin
 
   def uninstalled(string)
-    "#{Tty.bold}#{string} #{Formatter.error("✘")}#{Tty.reset}"
+    "#{Tty.bold}#{string}#{Tty.reset}"
+  end
+
+  def cannot_install(string)
+    "#{Tty.bold}#{string} #{Formatter.error("⊘")}#{Tty.reset}"
   end
 
   def installed(string)
     "#{Tty.bold}#{string} #{Formatter.success("✔")}#{Tty.reset}"
+  end
+
+  def unsatisfied_requirement(string)
+    "#{string} #{Formatter.error("✘")}#{Tty.reset}"
   end
 
   def requirements_section(string)
@@ -53,7 +61,7 @@ RSpec.describe Cask::Info, :cask do
       https://transmissionbt.com/
       Not installed
       From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/l/local-transmission.rb
-      #{requirements_section(installed("macOS >= 10.15"))}
+      #{requirements_section(installed("macOS >= 11"))}
       ==> Artifacts
       Transmission.app (App)
     EOS
@@ -72,10 +80,30 @@ RSpec.describe Cask::Info, :cask do
       #{ohai_title "Dependencies"}
       Required (2): local-caffeine (cask), local-transmission-zip (cask)
       Recursive Runtime (2): 0 installed #{Formatter.success("✔")}, 2 missing #{Formatter.error("✘")}
-      #{requirements_section(installed("macOS >= 10.15"))}
+      #{requirements_section(installed("macOS >= 11"))}
       #{ohai_title "Artifacts"}
       Caffeine.app (App)
     EOS
+  end
+
+  it "marks a disabled Cask in the title" do
+    allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
+
+    expect do
+      described_class.info(Cask::CaskLoader.load(cask_path("livecheck/livecheck-disabled")), args:)
+    end.to output(
+      /#{Regexp.escape(cannot_install("livecheck-disabled"))} #{Regexp.escape(Formatter.error("(disabled)"))}/,
+    ).to_stdout
+  end
+
+  it "marks a deprecated Cask in the title" do
+    allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
+
+    expect do
+      described_class.info(Cask::CaskLoader.load(cask_path("livecheck/livecheck-deprecated")), args:)
+    end.to output(
+      /#{Regexp.escape(uninstalled("livecheck-deprecated"))} #{Regexp.escape(Formatter.warning("(deprecated)"))}/,
+    ).to_stdout
   end
 
   it "prints inline summary information for casks" do
@@ -84,7 +112,7 @@ RSpec.describe Cask::Info, :cask do
     allow(cask).to receive_messages(supports_linux?: false)
 
     expect { described_class.info(cask, args:) }
-      .to output(/Requirements\nRequired: .*macOS >= 10\.15.*✔/).to_stdout
+      .to output(/Requirements\nRequired: .*macOS >= 11.*✔/).to_stdout
     expect { described_class.info(cask, args:) }.to not_to_output(/==> Name/).to_stdout
     expect { described_class.info(cask, args:) }.to not_to_output(/==> Description/).to_stdout
     expect { described_class.info(cask, args:) }.to not_to_output(/Metadata/).to_stdout
@@ -116,7 +144,7 @@ RSpec.describe Cask::Info, :cask do
       #{ohai_title "Dependencies"}
       Required (2): local-caffeine (cask), #{installed("local-transmission-zip (cask)")}
       Recursive Runtime (2): 1 installed #{Formatter.success("✔")}, 1 missing #{Formatter.error("✘")}
-      #{requirements_section(installed("macOS >= 10.15"))}
+      #{requirements_section(installed("macOS >= 11"))}
       #{ohai_title "Artifacts"}
       Caffeine.app (App)
     EOS
@@ -134,9 +162,9 @@ RSpec.describe Cask::Info, :cask do
   it "prints cask and formulas dependencies if the Cask has both" do
     allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
     arch_requirements = if Hardware::CPU.arm?
-      "x86_64 architecture, #{installed("arm64 architecture")}"
+      "#{unsatisfied_requirement("x86_64 architecture")}, #{installed("arm64 architecture")}"
     else
-      "#{installed("x86_64 architecture")}, arm64 architecture"
+      "#{installed("x86_64 architecture")}, #{unsatisfied_requirement("arm64 architecture")}"
     end
 
     expect do
@@ -149,10 +177,18 @@ RSpec.describe Cask::Info, :cask do
       #{ohai_title "Dependencies"}
       Required (3): unar, local-caffeine (cask), with-depends-on-cask (cask)
       Recursive Runtime (4): 0 installed #{Formatter.success("✔")}, 4 missing #{Formatter.error("✘")}
-      #{requirements_section("#{arch_requirements}, #{installed("macOS >= 10.15")}")}
+      #{requirements_section("#{arch_requirements}, #{installed("macOS >= 11")}")}
       #{ohai_title "Artifacts"}
       Caffeine.app (App)
     EOS
+  end
+
+  it "marks an unsatisfied requirement on an uninstalled cask" do
+    allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
+    unsatisfied_arch = Hardware::CPU.arm? ? "x86_64" : "arm64"
+
+    expect { described_class.info(Cask::CaskLoader.load("with-depends-on-everything"), args:) }
+      .to output(/Required: .*#{unsatisfied_arch} architecture.*✘/).to_stdout
   end
 
   it "prints auto_updates if the Cask has `auto_updates true`" do
@@ -165,7 +201,7 @@ RSpec.describe Cask::Info, :cask do
       https://brew.sh/autoupdates
       Not installed
       From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/with-auto-updates.rb
-      #{requirements_section(installed("macOS >= 10.15"))}
+      #{requirements_section(installed("macOS >= 11"))}
       ==> Artifacts
       AutoUpdates.app (App)
     EOS
@@ -193,7 +229,7 @@ RSpec.describe Cask::Info, :cask do
       https://brew.sh/
       Not installed
       From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/with-caveats.rb
-      #{requirements_section(installed("macOS >= 10.15"))}
+      #{requirements_section(installed("macOS >= 11"))}
       ==> Artifacts
       Caffeine.app (App)
       ==> Caveats
@@ -219,7 +255,7 @@ RSpec.describe Cask::Info, :cask do
       https://brew.sh/
       Not installed
       From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/with-conditional-caveats.rb
-      #{requirements_section(installed("macOS >= 10.15"))}
+      #{requirements_section(installed("macOS >= 11"))}
       ==> Artifacts
       Caffeine.app (App)
     EOS
@@ -235,7 +271,7 @@ RSpec.describe Cask::Info, :cask do
       https://brew.sh/
       Not installed
       From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/with-languages.rb
-      #{requirements_section(installed("macOS >= 10.15"))}
+      #{requirements_section(installed("macOS >= 11"))}
       ==> Languages
       zh, en-US
       ==> Artifacts
@@ -253,7 +289,7 @@ RSpec.describe Cask::Info, :cask do
       https://brew.sh/
       Not installed
       From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/without-languages.rb
-      #{requirements_section(installed("macOS >= 10.15"))}
+      #{requirements_section(installed("macOS >= 11"))}
       ==> Artifacts
       Caffeine.app (App)
     EOS
@@ -286,7 +322,7 @@ RSpec.describe Cask::Info, :cask do
         #{caskroom}/2.61 (0B)
           Installed using the formulae.brew.sh API on #{Time.at(time).strftime("%Y-%m-%d at %H:%M:%S")}
         From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/l/local-transmission.rb
-        #{requirements_section(installed("macOS >= 10.15"))}
+        #{requirements_section(installed("macOS >= 11"))}
         ==> Artifacts
         Transmission.app (App)
       EOS
@@ -320,7 +356,7 @@ RSpec.describe Cask::Info, :cask do
         #{caskroom}/2.61 (0B)
           Installed using the internal formulae.brew.sh API on #{Time.at(time).strftime("%Y-%m-%d at %H:%M:%S")}
         From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/l/local-transmission.rb
-        #{requirements_section(installed("macOS >= 10.15"))}
+        #{requirements_section(installed("macOS >= 11"))}
         ==> Artifacts
         Transmission.app (App)
       EOS

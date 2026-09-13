@@ -11,15 +11,15 @@ class TestRunnerFormula
   attr_reader :formula
 
   sig { returns(T::Boolean) }
-  attr_reader :eval_all
+  attr_reader :include_uninstalled
 
-  sig { params(formula: Formula, eval_all: T::Boolean).void }
-  def initialize(formula, eval_all: false)
+  sig { params(formula: Formula, include_uninstalled: T::Boolean).void }
+  def initialize(formula, include_uninstalled: false)
     Formulary.enable_factory_cache!
     @formula = formula
     @name = T.let(formula.name, String)
     @dependent_hash = T.let({}, T::Hash[Symbol, T::Array[TestRunnerFormula]])
-    @eval_all = eval_all
+    @include_uninstalled = include_uninstalled
     freeze
   end
 
@@ -77,6 +77,14 @@ class TestRunnerFormula
     macos_version.public_send(requirement.comparator, requirement.version)
   end
 
+  sig { params(platform: Symbol, arch: Symbol, macos_version: T.nilable(MacOSVersion)).returns(T::Boolean) }
+  def compatible?(platform:, arch:, macos_version: nil)
+    return false if macos_version && !compatible_with?(macos_version)
+    return false unless public_send(:"#{platform}_compatible?")
+
+    !!public_send(:"#{arch}_compatible?")
+  end
+
   sig {
     params(
       platform:      Symbol,
@@ -92,9 +100,9 @@ class TestRunnerFormula
       arch = Homebrew::SimulateSystem.arch_symbols.fetch(arch)
 
       Homebrew::SimulateSystem.with(os:, arch:) do
-        (eval_all ? Formula.all(eval_all: true) : Formula.installed)
+        (include_uninstalled ? Formula.all : Formula.installed)
           .select { |candidate_f| candidate_f.deps.map(&:name).include?(name) }
-          .map { |f| TestRunnerFormula.new(f, eval_all:) }
+          .map { |formula| TestRunnerFormula.new(formula, include_uninstalled:) }
           .freeze
       end
     end

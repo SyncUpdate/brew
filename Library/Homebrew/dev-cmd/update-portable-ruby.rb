@@ -2,6 +2,8 @@
 # frozen_string_literal: true
 
 require "api/env"
+require "utils/brew_command"
+
 require "abstract_command"
 require "formula"
 require "utils/bottles"
@@ -17,6 +19,8 @@ module Homebrew
           then sync `utils/ruby.sh`, vendored gems and RBI files to the bundler shipped
           by the new ruby.
         EOS
+        switch "--print-target-version",
+               description: "Print the target portable Ruby package version without updating it."
         named_args :none
 
         hide_from_man_page!
@@ -25,12 +29,16 @@ module Homebrew
       sig { override.void }
       def run
         formula = Homebrew::API.with_no_api_env { Formulary.factory("portable-ruby") }
-        version = formula.version.to_s
         pkg_version = formula.pkg_version.to_s
+        if args.print_target_version?
+          puts pkg_version
+          return
+        end
+
         vendor_dir = HOMEBREW_LIBRARY_PATH/"vendor"
 
         (vendor_dir/"portable-ruby-version").atomic_write("#{pkg_version}\n")
-        (HOMEBREW_LIBRARY_PATH/".ruby-version").atomic_write("#{version}\n")
+        (HOMEBREW_LIBRARY_PATH/".ruby-version").atomic_write("#{formula.version}\n")
 
         formula.bottle_specification.checksums.each do |checksum|
           tag_symbol = checksum.fetch("tag")
@@ -40,12 +48,12 @@ module Homebrew
           path.atomic_write("ruby_TAG=#{tag_symbol}\nruby_SHA=#{checksum.fetch("digest")}\n")
         end
 
-        safe_system HOMEBREW_BREW_FILE, "vendor-install", "ruby"
+        Utils::BrewCommand.run! "vendor-install", "ruby"
 
         bundler_version = Utils::PortableRuby.sync_bundler_version!(pkg_version)
-        safe_system HOMEBREW_BREW_FILE, "vendor-gems", "--no-commit",
-                    "--update=--ruby,--bundler=#{bundler_version}"
-        safe_system HOMEBREW_BREW_FILE, "typecheck", "--update"
+        Utils::BrewCommand.run! "vendor-gems", "--no-commit",
+                                "--update=--ruby,--bundler=#{bundler_version}"
+        Utils::BrewCommand.run! "typecheck", "--update"
       end
     end
   end

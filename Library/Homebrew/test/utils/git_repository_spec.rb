@@ -6,8 +6,10 @@ require "utils/git_repository"
 RSpec.describe Utils do
   let(:commit_message) { "File added" }
   let(:branch_name) { "test-branch" }
-  let(:head_revision) { HOMEBREW_CACHE.cd { `git rev-parse HEAD`.chomp } }
-  let(:short_head_revision) { HOMEBREW_CACHE.cd { `git rev-parse --short HEAD`.chomp } }
+  let(:head_revision) { HOMEBREW_CACHE.cd { Utils.popen_read("git", "rev-parse", "HEAD", err: :err).chomp } }
+  let(:short_head_revision) do
+    HOMEBREW_CACHE.cd { Utils.popen_read("git", "rev-parse", "--short", "HEAD", err: :err).chomp }
+  end
 
   shared_examples "git_repository helper function" do |method_name|
     context "when directory is not a Git repository" do

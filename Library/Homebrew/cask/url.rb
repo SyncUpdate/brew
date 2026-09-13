@@ -37,6 +37,9 @@ module Cask
     sig { returns(T.nilable(String)) }
     attr_reader :tag, :branch, :revision, :only_path, :verified
 
+    # URL kwargs still accepted from existing cask metadata but otherwise ignored.
+    DEPRECATED_URL_SPECS = [:verified].freeze
+
     extend Forwardable
 
     def_delegators :uri, :path, :scheme, :to_s
@@ -73,7 +76,8 @@ module Cask
       header = Array(header) unless header.nil?
 
       specs = {}
-      specs[:verified]   = @verified   = T.let(verified, T.nilable(String))
+      # `verified` is accepted as a no-op for compatibility with existing casks.
+      @verified = verified
       specs[:using]      = @using      = T.let(using, T.nilable(T.any(T::Class[AbstractDownloadStrategy], Symbol)))
       specs[:tag]        = @tag        = T.let(tag, T.nilable(String))
       specs[:branch]     = @branch     = T.let(branch, T.nilable(String))
@@ -115,10 +119,10 @@ module Cask
     def raw_url_line
       return @raw_url_line if defined?(@raw_url_line)
 
-      @raw_url_line = T.let(Pathname(T.must(@caller_location.path))
-                      .each_line
-                      .drop(@caller_location.lineno - 1)
-                      .first, T.nilable(String))
+      @raw_url_line = T.let(nil, T.nilable(String))
+      return unless (caller_path = @caller_location.path)
+
+      @raw_url_line = Pathname(caller_path).each_line.drop(@caller_location.lineno - 1).first
     end
   end
 end

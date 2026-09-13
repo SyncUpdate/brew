@@ -85,6 +85,11 @@ Homebrew/NoBase64:
   Exclude:
     - "Homebrew/test/**/*.rb"
 
+Homebrew/NoCommandLiteral:
+  Description: "Use explicit process APIs instead of backticks or `%x`."
+  Include:
+    - "Homebrew/**/*.rb"
+
 Homebrew/NoFileutilsRmrf:
   Include:
     - "/**/{Formula,Casks}/**/*.rb"
@@ -201,6 +206,11 @@ Layout/SpaceBeforeBrackets:
     - "Taps/*/*/*.rb"
     - "/**/{Formula,Casks}/**/*.rb"
     - "**/{Formula,Casks}/**/*.rb"
+
+# Homebrew/NoCommandLiteral prohibits both command-literal styles in brew's own source.
+Style/CommandLiteral:
+  Exclude:
+    - "Homebrew/**/*.rb"
 
 # favour parens-less DSL-style arguments
 Lint/AmbiguousBlockAssociation:
@@ -361,6 +371,22 @@ Sorbet/FalseSigil:
 # We generally prefer to colo rbi files with the Ruby files they describe.
 Sorbet/ForbidRBIOutsideOfAllowedPaths:
   Enabled: false
+
+Sorbet/ForbidTMust:
+  Enabled: true
+  Exclude:
+    - "Taps/**/*"
+    - "/**/{Formula,Casks}/**/*.rb"
+    - "**/{Formula,Casks}/**/*.rb"
+    - "Homebrew/test/support/fixtures/**/*"
+
+Sorbet/ForbidTUnsafe:
+  Enabled: true
+  Exclude:
+    - "Taps/**/*"
+    - "/**/{Formula,Casks}/**/*.rb"
+    - "**/{Formula,Casks}/**/*.rb"
+    - "Homebrew/test/support/fixtures/**/*"
 
 # T::Sig is monkey-patched into Module
 Sorbet/RedundantExtendTSig:

@@ -216,6 +216,123 @@ RSpec.describe Patch do
           .to raise_error(/escapes the staged source tree/)
       end
     end
+
+    it "rejects an ed-format diff, whose targets `patch` never reports" do
+      mktmpdir do |base|
+        (base/"src").mkpath
+        (base/"src/foo.c").write("old\n")
+        patch = <<~EOS
+          Index: a/src/foo.c
+          1c
+          owned
+          .
+        EOS
+
+        expect { described_class.ensure_targets_within!(patch, strip: :p1, base:) }
+          .to raise_error(/no target paths to verify/)
+      end
+    end
+
+    it "allows a normal-format diff, whose hunk headers resemble ed commands" do
+      mktmpdir do |base|
+        (base/"foo.c").write("old\n")
+        patch = <<~EOS
+          Index: foo.c
+          1c1
+          < old
+          ---
+          > new
+        EOS
+
+        expect { described_class.ensure_targets_within!(patch, strip: :p0, base:) }.not_to raise_error
+      end
+    end
+
+    it "accepts empty patch text, which `patch` writes nothing for" do
+      mktmpdir do |base|
+        expect { described_class.ensure_targets_within!("", strip: :p1, base:) }.not_to raise_error
+      end
+    end
+
+    it "rejects a patch that `patch` reports no targets for" do
+      mktmpdir do |base|
+        allow(Utils).to receive(:popen_write).and_return("")
+
+        expect { described_class.ensure_targets_within!("--- a/src/foo.c\n", strip: :p1, base:) }
+          .to raise_error(/no target paths to verify/)
+      end
+    end
+
+    it "accepts a target whose name `patch` would otherwise quote" do
+      mktmpdir do |base|
+        (base/"li'nk").mkpath
+        (base/"li'nk/v.c").write("old\n")
+        patch = <<~EOS
+          --- a/li'nk/v.c
+          +++ b/li'nk/v.c
+          @@ -1 +1 @@
+          -old
+          +new
+        EOS
+
+        expect { described_class.ensure_targets_within!(patch, strip: :p1, base:) }.not_to raise_error
+      end
+    end
+
+    it "rejects an escaping symbolic link, which GNU patch names differently" do
+      mktmpdir do |base|
+        allow(Utils).to receive(:popen_write).and_return("checking symbolic link ../escape.txt\n")
+
+        expect { described_class.ensure_targets_within!("--- a/link\n", strip: :p1, base:) }
+          .to raise_error(/escapes the staged source tree/)
+      end
+    end
+
+    it "rejects an escaping source named in a GNU patch copy diagnostic" do
+      mktmpdir do |base|
+        allow(Utils).to receive(:popen_write)
+          .and_return("checking file src/bar.c (copied from ../escape.txt)\n")
+
+        expect { described_class.ensure_targets_within!("--- a/src/bar.c\n", strip: :p1, base:) }
+          .to raise_error(/escapes the staged source tree/)
+      end
+    end
+
+    it "rejects an escaping target that `patch` only names as a reject file", :needs_macos do
+      mktmpdir do |base|
+        patch = <<~EOS
+          --- a/../escape.txt
+          +++ b/../escape.txt
+          @@ -1 +1 @@
+          -old
+          +owned
+        EOS
+
+        expect { described_class.ensure_targets_within!(patch, strip: :p1, base:) }
+          .to raise_error(/escapes the staged source tree/)
+      end
+    end
+
+    it "rejects a target reaching outside through a symlinked directory", :needs_macos do
+      mktmpdir do |base|
+        (base/"src").mkpath
+        outside = base.parent/"outside"
+        outside.mkpath
+        (outside/"victim.txt").write("old\n")
+        FileUtils.ln_s(outside.to_s, (base/"src/lnk").to_s)
+
+        patch = <<~EOS
+          --- a/src/lnk/../victim.txt
+          +++ b/src/lnk/../victim.txt
+          @@ -1 +1 @@
+          -old
+          +owned
+        EOS
+
+        expect { described_class.ensure_targets_within!(patch, strip: :p1, base:) }
+          .to raise_error(/escapes the staged source tree/)
+      end
+    end
   end
 
   describe "#resolves" do

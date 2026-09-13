@@ -1,8 +1,10 @@
 # typed: strict
 # frozen_string_literal: true
 
-require "cask/artifact/abstract_artifact"
 require "utils/data"
+
+require "cask/artifact/abstract_artifact"
+require "extend/hash/keys"
 
 module Cask
   module Artifact
@@ -57,7 +59,8 @@ module Cask
       def source
         @source ||= begin
           base_path = cask.staged_path
-          base_path = base_path.join(T.must(cask.url).only_path) if cask.url&.only_path.present?
+          only_path = cask.url&.only_path.presence
+          base_path = base_path.join(only_path) if only_path
           base_path.join(@source_string)
         end
       end
@@ -114,7 +117,7 @@ module Cask
 
       sig { returns(String) }
       def printable_target
-        target.to_s.sub(/^#{Dir.home}(#{File::SEPARATOR}|$)/, "~/")
+        target.to_s.sub(/^#{Dir.home}(?:#{File::SEPARATOR}|$)/, "~/")
       end
     end
   end

@@ -1,6 +1,8 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "system_command"
+
 require "utils/fork"
 require "timeout"
 
@@ -13,9 +15,38 @@ RSpec.describe Utils do
         "cmd" => "make", "args" => ["install"], "env" => { "PATH" => "/bin" },
       )
     end
+
+    it "serialises the class, message and backtrace that the parent reads back" do
+      error = RuntimeError.new("child failed")
+      error.set_backtrace ["/some/file.rb:1:in 'block'"]
+
+      expect(described_class.child_error_hash(error)).to eq(
+        "json_class" => "RuntimeError",
+        "m"          => "child failed",
+        "b"          => ["/some/file.rb:1:in 'block'"],
+      )
+    end
   end
 
   describe "#safe_fork" do
+    it "preserves a parent failure while the child error pipe is open" do
+      IO.pipe do |ready_read, ready_write|
+        expect do
+          described_class.safe_fork(yield_parent: true) do |error_pipe|
+            if error_pipe
+              ready_read.close
+              ready_write.puts "ready"
+              ready_write.close
+            else
+              ready_write.close
+              ready_read.gets
+              raise "parent failed"
+            end
+          end
+        end.to raise_error(RuntimeError, "parent failed")
+      end
+    end
+
     it "responds to messages from the forked child" do
       messages = []
       handler = proc do |message|
@@ -85,7 +116,7 @@ RSpec.describe Utils do
     it "raises an ErrorDuringExecution on one in the child" do
       expect do
         described_class.safe_fork do
-          safe_system "/usr/bin/false"
+          SystemCommand.safe_system "/usr/bin/false"
         end
       end.to raise_error(ErrorDuringExecution)
     end

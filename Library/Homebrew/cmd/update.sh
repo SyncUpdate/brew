@@ -39,10 +39,6 @@ macos_version_name() {
   then
     # odisabled: remove support for Big Sur and macOS x86_64 September (or later) 2027
     echo "big_sur"
-  elif [[ "${HOMEBREW_MACOS_VERSION_NUMERIC}" -ge "101500" ]]
-  then
-    # odisabled: remove support for Catalina September (or later) 2026
-    echo "catalina"
   fi
 }
 
@@ -167,6 +163,11 @@ upstream_branch() {
 
 read_current_revision() {
   git rev-parse -q --verify HEAD
+}
+
+# Keep in sync with `GitRepository#shallow?` in `git_repository.rb`.
+shallow_repository() {
+  [[ -d "$1" && "$(git -C "$1" rev-parse --is-shallow-repository 2>/dev/null)" == "true" ]]
 }
 
 pop_stash() {
@@ -515,9 +516,9 @@ homebrew-update() {
     fi
 
     case "${option}" in
+      # Keep in sync with the `Cmd::Update` parser in `cmd/update.rb`.
       --merge)
-        shift
-        HOMEBREW_MERGE=1
+        odie "Calling the \`--merge\` switch is disabled! There is no replacement."
         ;;
       --force) HOMEBREW_UPDATE_FORCE=1 ;;
       --simulate-from-current-branch)
@@ -615,8 +616,8 @@ EOS
     setup_git
   fi
 
-  [[ -f "${HOMEBREW_CORE_REPOSITORY}/.git/shallow" ]] && HOMEBREW_CORE_SHALLOW=1
-  [[ -f "${HOMEBREW_CASK_REPOSITORY}/.git/shallow" ]] && HOMEBREW_CASK_SHALLOW=1
+  shallow_repository "${HOMEBREW_CORE_REPOSITORY}" && HOMEBREW_CORE_SHALLOW=1
+  shallow_repository "${HOMEBREW_CASK_REPOSITORY}" && HOMEBREW_CASK_SHALLOW=1
   if [[ -n "${HOMEBREW_CORE_SHALLOW}" && -n "${HOMEBREW_CASK_SHALLOW}" ]]
   then
     SHALLOW_COMMAND_PHRASE="These commands"

@@ -1,6 +1,8 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "system_command"
+
 require "abstract_command"
 require "utils/git"
 require "fileutils"
@@ -81,8 +83,8 @@ module Homebrew
                 Pathname.glob("#{gem}-*/").each { |path| FileUtils.rm_r(path) }
               end
               ohai "gem install #{gem}"
-              safe_system "gem", "install", gem, "--install-dir", "vendor",
-                          "--no-document", "--no-wrappers", "--ignore-dependencies", "--force"
+              SystemCommand.safe_system "gem", "install", gem, "--install-dir", "vendor",
+                                        "--no-document", "--no-wrappers", "--ignore-dependencies", "--force"
               (HOMEBREW_LIBRARY_PATH/"vendor/gems").cd do
                 source = Pathname.glob("#{gem}-*/").first
                 next unless source
@@ -110,13 +112,7 @@ module Homebrew
 
       sig { params(args: String).void }
       def run_bundle(*args)
-        Process.wait(fork do
-          # Native build scripts fail if EUID != UID
-          Process::UID.change_privilege(Process.euid) if Process.euid != Process.uid
-          exec "bundle", *args
-        end)
-
-        raise ErrorDuringExecution.new(["bundle", *args], status: $CHILD_STATUS) unless $CHILD_STATUS.success?
+        SystemCommand.safe_system "bundle", *args
       end
     end
   end

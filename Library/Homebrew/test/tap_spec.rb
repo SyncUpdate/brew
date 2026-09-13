@@ -1,6 +1,8 @@
 # typed: true
 # frozen_string_literal: true
 
+require "utils/output"
+
 RSpec.describe Tap do
   subject(:homebrew_foo_tap) { described_class.fetch("Homebrew", "foo") }
 
@@ -26,6 +28,21 @@ RSpec.describe Tap do
 
     # requiring utils/output in tap.rb should be enough but it's not for no apparent reason.
     $stderr.extend(Utils::Output::Mixin)
+  end
+
+  it "does not grant completion trust to a custom core checkout in API mode" do
+    tap = CoreTap.instance
+    allow(tap.git_repository).to receive(:origin_url).and_return("https://git.example.com/other/core")
+    allow(Homebrew::EnvConfig).to receive(:no_install_from_api?).and_return(false)
+
+    expect(tap.official_git_checkout?).to be(false)
+  end
+
+  it "does not read the origin of a third-party tap" do
+    tap = described_class.fetch("someone", "foo")
+    allow(tap.git_repository).to receive(:origin_url).and_raise("origin must not be read")
+
+    expect(tap.official_git_checkout?).to be(false)
   end
 
   def setup_tap_files
@@ -113,6 +130,10 @@ RSpec.describe Tap do
     expect do
       described_class.fetch("homebrew", "homebrew/baz")
     end.to raise_error(Tap::InvalidNameError, /Invalid tap name/)
+  end
+
+  specify "::fetch raises an error `brew.rb` prints without a backtrace" do
+    expect { described_class.fetch("foo") }.to raise_error(RuntimeError, /Invalid tap name/)
   end
 
   describe "::from_path" do
@@ -714,8 +735,8 @@ RSpec.describe Tap do
       tap = described_class.fetch("dashy", "foo")
       tap.path.mkpath
       allow(tap).to receive(:remote)
-      allow(tap).to receive(:safe_system)
-      expect(tap).to receive(:safe_system)
+      allow(SystemCommand).to receive(:safe_system)
+      expect(SystemCommand).to receive(:safe_system)
         .with("git", "remote", "set-url", "origin", "--end-of-options", "-u:evil")
 
       tap.fix_remote_configuration(requested_remote: "-u:evil")
@@ -886,7 +907,7 @@ RSpec.describe Tap do
 
         allow(tap).to receive_messages(command_files: [], formula_files: [], cask_files: [],
                                        formula_names: [], cask_tokens: [], link_completions_and_manpages: nil)
-        expect(tap).to receive(:safe_system)
+        expect(SystemCommand).to receive(:safe_system)
           .with("git", "-c", "core.hooksPath=#{File::NULL}", "-C", source_tap,
                 "worktree", "add", "--detach", tap.path, "HEAD")
           .and_wrap_original do
@@ -938,7 +959,7 @@ RSpec.describe Tap do
         .and_call_original
       allow(tap).to receive_messages(command_files: [], formula_files: [], cask_files: [],
                                      formula_names: [], cask_tokens: [], link_completions_and_manpages: nil)
-      expect(tap).to receive(:safe_system)
+      expect(SystemCommand).to receive(:safe_system)
         .with("git", "-c", "core.hooksPath=#{File::NULL}", "-C", source_tap,
               "worktree", "add", "--detach", tap.path, "HEAD")
         .and_wrap_original do
@@ -1036,7 +1057,7 @@ RSpec.describe Tap do
       (tap.path/".git").write "gitdir: #{source_tap}/.git/worktrees/#{tap.full_repository.downcase}\n"
 
       allow(tap).to receive_messages(contents: [], formula_names: [], cask_tokens: [])
-      expect(tap).to receive(:safe_system)
+      expect(SystemCommand).to receive(:safe_system)
         .with("git", "-C", source_tap, "worktree", "remove", "--force", tap.path)
 
       tap.uninstall
@@ -1122,6 +1143,8 @@ RSpec.describe Tap do
     setup_completion link: false
     tap = described_class.fetch("Homebrew", "baz")
     tap.install clone_target: homebrew_foo_tap.path/".git"
+    system "git", "-C", tap.path.to_s, "remote", "set-url", "origin", tap.default_remote
+    tap.link_completions_and_manpages
     (HOMEBREW_PREFIX/"share/man/man1/brew-tap-cmd.1").delete
     (HOMEBREW_PREFIX/"etc/bash_completion.d/brew-tap-cmd").delete
     (HOMEBREW_PREFIX/"share/zsh/site-functions/_brew-tap-cmd").delete
@@ -1242,6 +1265,16 @@ RSpec.describe Tap do
       describe ".tap_migration_oldnames" do
         let(:cask_tap) { CoreCaskTap.instance }
         let(:core_tap) { CoreTap.instance }
+
+        it "checks an installed formula's provider before accepting a migration" do
+          rack = HOMEBREW_CELLAR/"schismtracker/1.0"
+          rack.mkpath
+          tab = Tab.empty
+          tab.source["tap"] = "homebrew/unrelated"
+          allow(Tab).to receive(:for_keg).with(rack).and_return(tab)
+
+          expect(described_class.tap_migration_oldnames(cask_tap, "schism-tracker")).to be_empty
+        end
 
         it "returns expected renames", :no_api do
           [
@@ -1399,12 +1432,26 @@ RSpec.describe Tap do
       core_tap.remove_instance_variable(:@autobump) if core_tap.instance_variable_defined?(:@autobump)
       expect(Homebrew::API::Internal).not_to receive(:formula_hashes)
       allow(Homebrew::API::Formula).to receive(:all_formulae).and_return({
-        "autobumped" => { "autobump" => true, "skip_livecheck" => false },
-        "disabled"   => { "autobump" => true, "disabled" => true },
-        "skipped"    => { "autobump" => true, "skip_livecheck" => true },
+        "autobumped"         => { "autobump" => true, "skip_livecheck" => false },
+        "disabled"           => { "autobump" => true, "disabled" => true },
+        "partially-disabled" => {
+          "autobump"   => true, "disabled" => true,
+          "variations" => {
+            "arm64_tahoe"  => { "conflicts_with" => ["skipped"] },
+            "x86_64_linux" => { "disabled" => false },
+          }
+        },
+        "skipped"            => { "autobump" => true, "skip_livecheck" => true },
+        "variations"         => {
+          "autobump"   => true, "skip_livecheck" => false, "disabled" => false,
+          "variations" => {
+            "arm64_tahoe"  => { "dependencies" => ["autobumped"] },
+            "x86_64_linux" => { "dependencies" => ["skipped"] },
+          }
+        },
       })
 
-      expect(core_tap.autobump).to eq(["autobumped"])
+      expect(core_tap.autobump).to eq(["autobumped", "partially-disabled", "variations"])
     end
 
     specify "#autobump reads public cask API metadata" do
@@ -1413,12 +1460,27 @@ RSpec.describe Tap do
       expect(Homebrew::API::Formula).not_to receive(:all_formulae)
       expect(Homebrew::API::Internal).not_to receive(:cask_hashes)
       allow(Homebrew::API::Cask).to receive(:all_casks).and_return({
-        "autobumped" => { "autobump" => true, "skip_livecheck" => false },
-        "disabled"   => { "autobump" => true, "disabled" => true },
-        "skipped"    => { "autobump" => true, "skip_livecheck" => true },
+        "autobumped"         => { "autobump" => true, "skip_livecheck" => false },
+        "disabled"           => { "autobump" => true, "disabled" => true },
+        "partially-disabled" => {
+          "autobump"   => true, "disabled" => true,
+          "variations" => {
+            "tahoe"        => { "conflicts_with" => ["skipped"] },
+            "x86_64_linux" => { "disabled" => false },
+          }
+        },
+        "skipped"            => { "autobump" => true, "skip_livecheck" => true },
+        "variations"         => {
+          "autobump"   => true, "skip_livecheck" => false, "disabled" => false,
+          "url"        => "https://brew.sh/aarch64.dmg", "sha256" => "abc",
+          "variations" => {
+            "tahoe"        => { "url" => "https://brew.sh/x86_64.dmg", "sha256" => "def" },
+            "x86_64_linux" => { "sha256" => nil },
+          }
+        },
       })
 
-      expect(cask_tap.autobump).to eq(["autobumped"])
+      expect(cask_tap.autobump).to eq(["autobumped", "partially-disabled", "variations"])
     end
 
     specify "files", :no_api do

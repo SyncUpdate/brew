@@ -31,6 +31,17 @@ RSpec.describe PyPI do
     let(:package_from_non_pypi_url) { described_class.new(non_pypi_package_url, is_url: true) }
     let(:other_package) { described_class.new("virtualenv==20.2.0") }
 
+    it "uses the sandboxed resolver for direct distribution URLs" do
+      allow(Formula).to receive(:[]).with("python").and_return(instance_double(Formula, ensure_installed!: nil))
+      allow(Utils).to receive(:popen_read).and_raise("unsandboxed metadata")
+      allow(PyPI).to receive(:pip_output).with([
+        Utils::Path.formula_opt_libexec("python")/"bin/python", "-m", "pip", "install", "-q", "--no-deps",
+        "--dry-run", "--ignore-installed", "--report", "/dev/stdout", non_pypi_package_url
+      ]).and_return('{"install":[{"metadata":{"name":"example","version":"1.0"}}]}')
+
+      expect(package_from_non_pypi_url.name).to eq("example")
+    end
+
     describe "initialize" do
       specify do
         expect(described_class.new("foo").name).to eq "foo"
@@ -154,75 +165,187 @@ RSpec.describe PyPI do
   end
 
   describe ".pip_report" do
-    it "filters packages uploaded within the last day" do
-      `true`
+    context "with sandbox execution stubbed" do
+      before do
+        allow(Sandbox).to receive_messages(available?: true, avoid_nested_sandboxing?: false,
+                                           full_write_isolation?: true)
+        sandbox = instance_double(Sandbox, allow_write_path: nil, deny_write_homebrew_repository: nil,
+                                          deny_read_home: nil)
+        allow(Sandbox).to receive(:new).and_return(sandbox)
+        allow(sandbox).to receive(:run) do |*command, **_options|
+          system(*command)
+        end
+      end
 
-      expect(Utils).to receive(:popen_read).with(
-        { "PIP_REQUIRE_VIRTUALENV" => "false" },
+      it "runs the Git shim with the configured Git executable" do
+        git = mktmpdir/"custom-git"
+        git.write <<~SH
+          #!/bin/sh
+          printf 'git version 2.50.1'
+        SH
+        git.chmod 0755
+        ENV["HOMEBREW_GIT"] = git.to_s
+
+        expect(described_class.pip_output([HOMEBREW_SHIMS_PATH/"shared/git", "--version"]))
+          .to eq("git version 2.50.1")
+      end
+
+      it "fetches SSH resources with their download settings before inspecting local metadata" do
+        source = mktmpdir
+        source.cd do
+          system "git", "init", "--quiet"
+          (source/"pyproject.toml").write("[project]\nname = 'tool'\n")
+          system "git", "add", "pyproject.toml"
+          system "git", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Initial commit"
+          system "git", "tag", "v0.20.1"
+          (source/"pyproject.toml").write("[project]\nname = 'newer-tool'\n")
+          system "git", "-c", "commit.gpgsign=false", "commit", "--quiet", "-am", "Newer commit"
+        end
+        ssh = mktmpdir/"ssh"
+        ssh.write <<~SH
+          #!/bin/sh
+          exec git-upload-pack #{source.to_s.shellescape}
+        SH
+        ssh.chmod 0755
+        ENV["GIT_SSH_COMMAND"] = ssh.to_s.shellescape
+        ENV["GIT_SSH_VARIANT"] = "ssh"
+        resource = Resource.new("tool")
+        resource.url "ssh://user@gitlab.example/tool", using: :git, tag: "v0.20.1",
+                     revision: Utils.popen_read("git", "-C", source, "rev-parse", "v0.20.1").chomp
+
+        expect(described_class.pip_output(["/bin/sh", "-c", 'cat "$1/pyproject.toml"', "brew-pypi",
+                                           resource]))
+          .to eq("[project]\nname = 'tool'\n")
+      end
+    end
+
+    it "captures metadata with a minimal sandbox environment" do
+      skip Sandbox.failure_reason unless Sandbox.available?
+      skip "Homebrew is running inside another sandbox" if Sandbox.avoid_nested_sandboxing?
+
+      ENV["HOMEBREW_METADATA_TEST"] = "parent value"
+      expect(described_class.pip_output(["/bin/sh", "-c", 'printf %s "${HOMEBREW_METADATA_TEST:-clean}"']))
+        .to eq("clean")
+    end
+
+    it "passes proxy settings into the sandbox" do
+      skip Sandbox.failure_reason unless Sandbox.available?
+      skip "Homebrew is running inside another sandbox" if Sandbox.avoid_nested_sandboxing?
+
+      ENV["HTTPS_PROXY"] = "http://proxy.example:3128"
+      expect(described_class.pip_output(["/bin/sh", "-c", 'printf %s "${HTTPS_PROXY:-clean}"']))
+        .to eq("http://proxy.example:3128")
+    end
+
+    it "refuses metadata inspection when the sandbox is unavailable" do
+      allow(Sandbox).to receive(:available?).and_return(false)
+      expect { described_class.pip_output(["/bin/echo", "metadata"]) }.to raise_error(RuntimeError, /sandbox/)
+    end
+
+    it "refuses metadata inspection inside another sandbox" do
+      allow(Sandbox).to receive_messages(available?: true, avoid_nested_sandboxing?: true)
+      expect { described_class.pip_output(["/bin/echo", "metadata"]) }
+        .to raise_error(RuntimeError, /another sandbox/)
+    end
+
+    it "warns when the available sandbox cannot isolate metadata changes" do
+      skip Sandbox.failure_reason unless Sandbox.available?
+      skip "Homebrew is running inside another sandbox" if Sandbox.avoid_nested_sandboxing?
+
+      allow(Sandbox).to receive(:full_write_isolation?).and_return(false)
+      expect { described_class.pip_output(["/bin/echo", "metadata"]) }
+        .to output(/cannot restrict file permissions or ownership/).to_stderr
+    end
+
+    it "filters packages uploaded within the last day" do
+      system "true"
+
+      allow(Utils).to receive(:popen_read).and_raise("unsandboxed metadata")
+      expect(described_class).to receive(:pip_output).with([
         Utils::Path.formula_opt_libexec("python")/"bin/python", "-m", "pip", "install", "-q",
         "--disable-pip-version-check", "--dry-run", "--ignore-installed",
         "--uploaded-prior-to=P1D", "--report=/dev/stdout", "snakemake"
-      ).and_return('{"install":[]}')
+      ], print_stderr: false).and_return('{"install":[]}')
 
       expect(described_class.pip_report([PyPI::Package.new("snakemake")])).to eq([])
     end
 
     it "passes the ignored-cooldown package to pip by its direct URL" do
-      `true`
+      system "true"
 
       main = PyPI::Package.new("snakemake==5.29.0")
       dependency = PyPI::Package.new("pyyaml==6.0")
       sdist_url = "https://files.pythonhosted.org/packages/snakemake-5.29.0.tar.gz"
       allow(main).to receive(:pypi_info).and_return(["snakemake", sdist_url, "a" * 64, "5.29.0"])
 
-      expect(Utils).to receive(:popen_read).with(
-        { "PIP_REQUIRE_VIRTUALENV" => "false" },
+      allow(Utils).to receive(:popen_read).and_raise("unsandboxed metadata")
+      expect(described_class).to receive(:pip_output).with([
         Utils::Path.formula_opt_libexec("python")/"bin/python", "-m", "pip", "install", "-q",
         "--disable-pip-version-check", "--dry-run", "--ignore-installed",
         "--uploaded-prior-to=P1D", "--report=/dev/stdout",
         sdist_url, "pyyaml==6.0"
-      ).and_return('{"install":[]}')
+      ], print_stderr: false).and_return('{"install":[]}')
 
       expect(described_class.pip_report([main, dependency], ignore_cooldown_package: main)).to eq([])
     end
 
     it "preserves extras on the ignored-cooldown package's direct URL" do
-      `true`
+      system "true"
 
       main = PyPI::Package.new("snakemake[foo]==5.29.0")
       sdist_url = "https://files.pythonhosted.org/packages/snakemake-5.29.0.tar.gz"
       allow(main).to receive(:pypi_info).and_return(["snakemake", sdist_url, "a" * 64, "5.29.0"])
 
-      expect(Utils).to receive(:popen_read).with(
-        { "PIP_REQUIRE_VIRTUALENV" => "false" },
+      allow(Utils).to receive(:popen_read).and_raise("unsandboxed metadata")
+      expect(described_class).to receive(:pip_output).with([
         Utils::Path.formula_opt_libexec("python")/"bin/python", "-m", "pip", "install", "-q",
         "--disable-pip-version-check", "--dry-run", "--ignore-installed",
         "--uploaded-prior-to=P1D", "--report=/dev/stdout",
         "snakemake[foo] @ #{sdist_url}"
-      ).and_return('{"install":[]}')
+      ], print_stderr: false).and_return('{"install":[]}')
 
       expect(described_class.pip_report([main], ignore_cooldown_package: main)).to eq([])
     end
 
     it "keeps the ignored-cooldown package cooled when its sdist URL is unavailable" do
-      `true`
+      system "true"
 
       main = PyPI::Package.new("snakemake==5.29.0")
       allow(main).to receive(:pypi_info).and_return(nil)
 
-      expect(Utils).to receive(:popen_read).with(
-        { "PIP_REQUIRE_VIRTUALENV" => "false" },
+      allow(Utils).to receive(:popen_read).and_raise("unsandboxed metadata")
+      expect(described_class).to receive(:pip_output).with([
         Utils::Path.formula_opt_libexec("python")/"bin/python", "-m", "pip", "install", "-q",
         "--disable-pip-version-check", "--dry-run", "--ignore-installed",
         "--uploaded-prior-to=P1D", "--report=/dev/stdout",
         "snakemake==5.29.0"
-      ).and_return('{"install":[]}')
+      ], print_stderr: false).and_return('{"install":[]}')
 
       expect(described_class.pip_report([main], ignore_cooldown_package: main)).to eq([])
     end
   end
 
   describe ".update_python_resources!" do
+    it "uses the stable resource for dependency and package metadata resolution" do
+      path = mktmpdir/"foo.rb"
+      path.write <<~RUBY
+        class Foo < Formula
+          url "ssh://git@gitlab.example/foo.git", tag: "v1.0"
+
+          def install
+            bin.install "foo"
+          end
+        end
+      RUBY
+      formula = Formulary.from_contents("foo", path, path.read)
+      allow(Formula).to receive(:[]).with("python").and_return(instance_double(Formula, ensure_installed!: true))
+      allow(described_class).to receive(:pip_output)
+        .with(array_including(formula.resource), any_args)
+        .and_return('{"install":[{"metadata":{"name":"foo","version":"1.0"}}]}')
+
+      expect(described_class.update_python_resources!(formula, quiet: true)).to be true
+    end
+
     it "keeps resources with livecheck blocks" do
       path = mktmpdir/"foo.rb"
       livecheck_resource = <<~RUBY
@@ -322,6 +445,31 @@ RSpec.describe PyPI do
                                                ignore_main_package_cooldown: true)
 
       expect(exempted&.name).to eq "foo"
+    end
+  end
+
+  describe "resolver failures" do
+    let(:resource) do
+      Resource.new("foo") do
+        url "ssh://git@gitlab.example/foo.git", tag: "v1.0"
+      end
+    end
+    let(:package) { PyPI::Package.new(resource.url, is_url: true, resource:) }
+
+    before do
+      allow(Formula).to receive(:[]).with("python").and_return(instance_double(Formula, ensure_installed!: true))
+      allow(described_class).to receive(:pip_output).and_raise(ErrorDuringExecution.new(["pip"], status: 1))
+    end
+
+    it "renders resource URLs in failed metadata commands" do
+      expect { package.name }
+        .to raise_error(ArgumentError, %r{--report /dev/stdout ssh://git@gitlab\.example/foo\.git`})
+    end
+
+    it "renders resource URLs in failed dependency commands" do
+      expect { described_class.pip_report([package]) }
+        .to output(%r{--report=/dev/stdout ssh://git@gitlab\.example/foo\.git`}).to_stderr
+        .and raise_error(SystemExit)
     end
   end
 

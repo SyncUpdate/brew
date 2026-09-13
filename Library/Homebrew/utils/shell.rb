@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "utils/path"
+require "utils/popen"
 
 module Utils
   module Shell
@@ -58,7 +59,7 @@ module Utils
         ENV["HOMEBREW_DEBUG_INSTALL"] = formula.full_name
       end
 
-      if preferred == :zsh && (home = Dir.home).start_with?(HOMEBREW_TEMP.resolved_path.to_s)
+      if preferred == :zsh && (home = Dir.home).start_with?(Utils::Path.resolved_path(HOMEBREW_TEMP).to_s)
         FileUtils.mkdir_p home
         FileUtils.touch "#{home}/.zshrc"
       end
@@ -97,7 +98,7 @@ module Utils
 
     sig { returns(T.nilable(Symbol)) }
     def parent
-      from_path(`ps -p #{Process.ppid} -o ucomm=`.strip)
+      from_path(Utils.popen_read_text("ps", "-p", Process.ppid.to_s, "-o", "ucomm=", err: :err).strip)
     end
 
     # Quote values. Quoting keys is overkill.

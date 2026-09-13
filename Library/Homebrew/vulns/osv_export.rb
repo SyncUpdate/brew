@@ -46,12 +46,14 @@ module Homebrew
       #
       # `first_fixed`, when given, is called `(formula, vuln_id) -> String?` for
       # records with no existing file to derive an accurate `fixed` boundary
-      # (e.g. via {FormulaVersions} git history); existing records preserve
-      # their on-disk `ranges` regardless.
+      # (e.g. via {FormulaVersions} git history). It may return
+      # `:history_unavailable` to skip a new record when no boundary can be
+      # verified; existing records preserve their on-disk `ranges` regardless.
       sig {
         params(annotated:   T::Array[[Formula, T::Array[T::Hash[String, T.untyped]]]],
                dir:         T.any(String, Pathname),
-               first_fixed: T.nilable(T.proc.params(formula: Formula, vuln_id: String).returns(T.nilable(String))),
+               first_fixed: T.nilable(T.proc.params(formula: Formula, vuln_id: String)
+                                         .returns(T.nilable(T.any(String, Symbol)))),
                now:         Time)
           .returns(T::Array[String])
       }
@@ -69,7 +71,18 @@ module Homebrew
             # from an existing enriched record; leave it untouched instead.
             next if upstream == :failed && existing
 
-            fixed = (first_fixed&.call(formula, vuln_id) unless existing) || formula.pkg_version.to_s
+            fixed_result = T.let(nil, T.nilable(T.any(String, Symbol)))
+            fixed_result = first_fixed.call(formula, vuln_id) if first_fixed && !existing
+            fixed = case fixed_result
+            when String
+              fixed_result
+            when nil
+              formula.pkg_version.to_s
+            when :history_unavailable
+              next
+            else
+              raise TypeError, "unexpected first-fixed result: #{fixed_result.inspect}"
+            end
             record = record_for(formula, vuln_id, patches:, fixed:,
                                 upstream: upstream.is_a?(Hash) ? upstream : nil, now:)
             merged = merge_existing(path, record)
@@ -88,13 +101,15 @@ module Homebrew
       # drift to today's `pkg_version`), and skip the write entirely when
       # nothing else has changed. `close_open_ranges` lets the matcher merge a
       # newly discovered `fixed` or reintroduced event into an existing range
-      # while preserving its reviewed history. Records for annotations no
-      # longer in core are simply not visited, so they persist.
+      # while preserving its reviewed history. `initial_introduction` repairs
+      # unreviewed ranges without reopening valid terminal ranges. Records for
+      # annotations no longer in core are simply not visited, so they persist.
       sig {
-        params(path: String, record: T::Hash[Symbol, T.untyped], close_open_ranges: T::Boolean)
+        params(path: String, record: T::Hash[Symbol, T.untyped], close_open_ranges: T::Boolean,
+               initial_introduction: T::Boolean)
           .returns(T.nilable(T::Hash[Symbol, T.untyped]))
       }
-      def self.merge_existing(path, record, close_open_ranges: false)
+      def self.merge_existing(path, record, close_open_ranges: false, initial_introduction: false)
         return record unless File.file?(path)
 
         existing = JSON.parse(File.read(path))
@@ -111,7 +126,7 @@ module Homebrew
 
           close_open_ranges && (
             ((fixed = explicit_fixed(affected[:ranges])) && !fixed_follows?(existing_ranges, fixed)) ||
-            ((introduced = explicit_reintroduction(affected[:ranges])) &&
+            (!initial_introduction && (introduced = explicit_reintroduction(affected[:ranges])) &&
               !reintroduction_follows?(existing_ranges, introduced))
           )
         end
@@ -122,7 +137,7 @@ module Homebrew
           next unless existing_ranges
 
           affected[:ranges] = if close_open_ranges
-            merge_range_transitions(existing_ranges, affected[:ranges])
+            merge_range_transitions(existing_ranges, affected[:ranges], initial_introduction:)
           else
             existing_ranges
           end
@@ -222,8 +237,10 @@ module Homebrew
         false
       end
 
-      sig { params(existing_ranges: T.untyped, incoming_ranges: T.untyped).returns(T.untyped) }
-      def self.merge_range_transitions(existing_ranges, incoming_ranges)
+      sig {
+        params(existing_ranges: T.untyped, incoming_ranges: T.untyped, initial_introduction: T::Boolean).returns(T.untyped)
+      }
+      def self.merge_range_transitions(existing_ranges, incoming_ranges, initial_introduction:)
         return incoming_ranges if !existing_ranges.is_a?(Array) || existing_ranges.empty?
 
         incoming_ranges = Array(incoming_ranges)
@@ -276,6 +293,7 @@ module Homebrew
             end
             range.merge("events" => events)
           when :terminal
+            next range if initial_introduction
             next range unless introduced_version
             next range if (range["type"] || range[:type]) != "ECOSYSTEM"
 

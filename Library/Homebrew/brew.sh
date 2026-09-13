@@ -133,14 +133,6 @@ case "$@" in
     ;;
 esac
 
-# Check `HOMEBREW_FORCE_BREW_WRAPPER` for all non-trivial commands
-# (i.e. not defined above this line e.g. formulae or --cellar).
-if [[ -n "${HOMEBREW_FORCE_BREW_WRAPPER:-}" ]]
-then
-  source "${HOMEBREW_LIBRARY}/Homebrew/utils/wrapper.sh"
-  check-brew-wrapper "$1"
-fi
-
 # commands that take a single or no arguments and need to write to HOMEBREW_PREFIX.
 # HOMEBREW_LIBRARY set by bin/brew
 # shellcheck disable=SC2154
@@ -162,7 +154,7 @@ esac
 source "${HOMEBREW_LIBRARY}/Homebrew/utils.sh"
 
 check-run-command-as-root() {
-  [[ "${EUID}" == 0 || "${UID}" == 0 ]] || return
+  [[ "${EUID}" == 0 ]] || return
 
   # Allow Azure Pipelines/GitHub Actions/Docker/Podman/Concourse/Kubernetes to do everything as root (as it's normal there)
   [[ -f /.dockerenv ]] && return
@@ -328,18 +320,19 @@ HOMEBREW_BOTTLE_DEFAULT_DOMAIN="https://ghcr.io/v2/homebrew/core"
 # - https://github.com/Homebrew/install/blob/HEAD/install.sh
 # - Library/Homebrew/os/mac.rb (latest_sdk_version)
 # - Library/Homebrew/os/mac/xcode.rb (latest_version), (minimum_version)
+# - Library/Homebrew/os/mac/xcode.rb (detect_version_from_clang_version), (latest_clang_version)
 # and, if needed:
-# - MacOSVersion::SYMBOLS
-HOMEBREW_MACOS_NEWEST_UNSUPPORTED="27"
+# - MacOSVersion::RELEASES
+HOMEBREW_MACOS_NEWEST_UNSUPPORTED="28"
 # TODO: bump version when new macOS is released
-HOMEBREW_MACOS_NEWEST_SUPPORTED="26"
+HOMEBREW_MACOS_NEWEST_SUPPORTED="27"
 # TODO: bump version when new macOS is released and update references in:
 # - docs/Installation.md
 # - HOMEBREW_MACOS_OLDEST_SUPPORTED in .github/workflows/release.yml
 # - `os-version min` in package/Distribution.xml
 # - https://github.com/Homebrew/install/blob/HEAD/install.sh
-HOMEBREW_MACOS_OLDEST_SUPPORTED="14"
-HOMEBREW_MACOS_OLDEST_ALLOWED="10.15"
+HOMEBREW_MACOS_OLDEST_SUPPORTED="15"
+HOMEBREW_MACOS_OLDEST_ALLOWED="11"
 
 setup-os-details
 check-curl-version
@@ -383,7 +376,6 @@ export HOMEBREW_TEMP
 export HOMEBREW_CELLAR
 export HOMEBREW_CASKROOM
 export HOMEBREW_SYSTEM
-export HOMEBREW_SYSTEM_CA_CERTIFICATES_TOO_OLD
 export HOMEBREW_CURL
 export HOMEBREW_BREWED_CURL_PATH
 export HOMEBREW_CURL_WARNING
@@ -479,6 +471,12 @@ case "${HOMEBREW_COMMAND}" in
   tc) HOMEBREW_COMMAND="typecheck" ;;
   x) HOMEBREW_COMMAND="exec" ;;
 esac
+
+# Keep in sync with `Commands.internal_cmd_name?` in `commands.rb`.
+if [[ "${HOMEBREW_COMMAND}" == */* || "${HOMEBREW_COMMAND}" == "." || "${HOMEBREW_COMMAND}" == ".." ]]
+then
+  odie "Unknown command: brew ${HOMEBREW_COMMAND}"
+fi
 # `update.sh` assumes normal repositories, so fail before it mutates a worktree.
 if [[ "${HOMEBREW_COMMAND}" == "update" && -z "${HOMEBREW_HELP}" && -f "${HOMEBREW_REPOSITORY}/.git" ]]
 then

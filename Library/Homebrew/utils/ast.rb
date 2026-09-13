@@ -47,7 +47,7 @@ module Utils
     sig { params(node: Node).returns(T.untyped) }
     def literal_value(node)
       return node.str_content if node.str_type?
-      return T.unsafe(node).value if node.sym_type? || node.numeric_type?
+      return node.value if node.is_a?(RuboCop::AST::BasicLiteralNode) && (node.sym_type? || node.numeric_type?)
 
       nil
     end
@@ -182,6 +182,18 @@ module Utils
       }
       def replace_resource_stanza_value(resource_name, name, value, old_value: nil)
         replace_stanza_value(resource_stanza(resource_name, name, old_value:), value)
+      end
+
+      sig {
+        params(
+          resource_name: String,
+          name:          Symbol,
+          key:           Symbol,
+          value:         T.any(Numeric, String, Symbol),
+        ).void
+      }
+      def replace_resource_stanza_hash_value(resource_name, name, key, value)
+        replace_stanza_hash_value(resource_stanza(resource_name, name), key, value)
       end
 
       sig { params(resource_name: String, name: Symbol).returns(T::Boolean) }

@@ -52,7 +52,7 @@ RSpec.describe SubversionDownloadStrategy do
         external_url = "-example"
 
         allow(strategy).to receive(:silent_command)
-          .with("svn", args: ["propget", "svn:externals", url])
+          .with("svn", args: ["propget", "svn:externals", strategy.cached_location])
           .and_return(instance_double(SystemCommand::Result, stdout: "external #{external_url}\n"))
 
         expect(strategy).to receive(:system_command!)

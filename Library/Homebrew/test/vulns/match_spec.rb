@@ -36,7 +36,55 @@ RSpec.describe Homebrew::Vulns::Match do
     Homebrew::Vulns::Match::Hit.new(vulnerability:, evidence:)
   end
 
+  def pnpm_overrides
+    Homebrew::Vulns::AdvisoryOverrides.new({
+      "pnpm" => { "registry_package" => {
+        "ecosystem" => "npm",
+        "name"      => "pnpm",
+      } },
+    })
+  end
+
   describe "#identify" do
+    it "uses an explicit registry package when the source URL is not a registry archive" do
+      overridden = described_class.new(repology:, cpan_sec:, overrides: pnpm_overrides)
+      pnpm = formula("pnpm") do
+        T.bind(self, T.class_of(Formula))
+        url "https://github.com/pnpm/pnpm/archive/refs/tags/v12.3.4.tar.gz"
+      end
+
+      expect(overridden.identify(pnpm).primary_package.to_h).to eq(
+        ecosystem: "npm",
+        name:      "pnpm",
+        version:   "12.3.4",
+        purl:      "pkg:npm/pnpm@12.3.4",
+      )
+    end
+
+    it "rejects an explicit registry package that conflicts with the source URL" do
+      overridden = described_class.new(repology:, cpan_sec:, overrides: pnpm_overrides)
+      pnpm = formula("pnpm") do
+        T.bind(self, T.class_of(Formula))
+        url "https://registry.npmjs.org/not-pnpm/-/not-pnpm-12.3.4.tgz"
+      end
+
+      expect { overridden.identify(pnpm) }
+        .to raise_error(Homebrew::Vulns::AdvisoryOverrides::Error, /conflicts with its source URL/)
+    end
+
+    it "keeps the source-derived package when the formula has no stable version" do
+      overridden = described_class.new(repology:, cpan_sec:, overrides: pnpm_overrides)
+      pnpm = formula("pnpm") do
+        T.bind(self, T.class_of(Formula))
+        url "https://registry.npmjs.org/pnpm/-/pnpm-12.3.4.tgz"
+      end
+      stable = pnpm.stable
+      allow(stable).to receive(:version).and_return(nil)
+      allow(pnpm).to receive(:stable).and_return(stable)
+
+      expect(overridden.identify(pnpm).primary_package&.name).to eq "pnpm"
+    end
+
     it "derives git repo/tag, primary registry package, resources and distro packages" do
       f = formula("requests") do
         T.bind(self, T.class_of(Formula))
@@ -153,6 +201,44 @@ RSpec.describe Homebrew::Vulns::Match do
   end
 
   describe "#range_status" do
+    it "keeps an unknown resource range unresolved when the primary package is fixed" do
+      v = vuln("id" => "CVE-1", "affected" => [
+        { "package" => { "ecosystem" => "PyPI", "name" => "requests" },
+          "ranges"  => [{ "type" => "ECOSYSTEM", "events" => [{ "introduced" => "0" }, { "fixed" => "2.0" }] }] },
+      ])
+      hit = make_hit(v,
+                     ev(:registry, ecosystem: "PyPI", name: "requests", subject_version: "3.0"),
+                     ev(:registry, ecosystem: "PyPI", name: "certifi", subject_version: nil, resource: "certifi"))
+
+      expect(matcher.range_status(hit)).to be_nil
+    end
+
+    it "uses resolved resource evidence for a fixed override of an unknown aggregate" do
+      overrides = Homebrew::Vulns::AdvisoryOverrides.new({
+        "requests" => { "advisories" => {
+          "CVE-1" => { "range_state" => "fixed" },
+        } },
+      })
+      overridden = described_class.new(repology:, cpan_sec:, overrides:)
+      v = vuln("id" => "CVE-1", "affected" => [
+        { "package" => { "ecosystem" => "GIT", "name" => "https://github.com/psf/requests" },
+          "ranges"  => [{ "type" => "GIT", "events" => [{ "fixed" => "e47e56d" }] }] },
+        { "package" => { "ecosystem" => "PyPI", "name" => "certifi" },
+          "ranges"  => [{ "type"   => "ECOSYSTEM",
+                          "events" => [{ "introduced" => "0" }, { "fixed" => "2024.1.0" }] }] },
+      ])
+      hit = make_hit(v,
+                     ev(:git, ecosystem: "GIT", name: "https://github.com/psf/requests",
+                              subject_version: "2.31.0", key: "https://github.com/psf/requests"),
+                     ev(:registry, ecosystem: "PyPI", name: "certifi", subject_version: "2024.2.2",
+                                   key: "pkg:pypi/certifi@2024.2.2", resource: "certifi"))
+
+      status, evidence = overridden.range_status(hit, formula_name: "requests") ||
+                         raise("expected the reviewed override to resolve the range")
+      expect([status.state, status.fixed_in, evidence.resource, evidence.key])
+        .to eq [:fixed, "2024.1.0", "certifi", "pkg:pypi/certifi@2024.2.2"]
+    end
+
     it "returns the registry-entry status when GIT ranges are uncomparable" do
       v = vuln("id" => "CVE-1", "affected" => [
         { "package" => { "ecosystem" => "GIT", "name" => "https://github.com/jqlang/jq" },
@@ -224,7 +310,7 @@ RSpec.describe Homebrew::Vulns::Match do
           "ranges"  => [{ "type"   => "ECOSYSTEM",
                           "events" => [{ "introduced" => "0" }, { "fixed" => "2.32.4" }] }] },
       ])
-      merged = matcher.dedup_by_cve([
+      merged = matcher.dedup_by_aliases([
         make_hit(cve, ev(:git, ecosystem: "GIT", name: "https://github.com/psf/requests",
                                subject_version: "2.31.0")),
         make_hit(ghsa, ev(:registry, ecosystem: "PyPI", name: "requests", subject_version: "2.31.0")),
@@ -339,6 +425,79 @@ RSpec.describe Homebrew::Vulns::Match do
       expect(hits.first.vulnerability.references).to eq [{ "type" => "WEB", "url" => "https://x" }]
       expect(matcher.range_status(hits.first)&.first)
         .to have_attributes(state: :affected, fixed_in: "1.0")
+    end
+  end
+
+  describe "#dedup_by_aliases" do
+    it "coalesces mutually aliased records without a CVE deterministically" do
+      ghsa = make_hit(vuln("id" => "GHSA-9ppg-jx86-fqw7", "aliases" => ["MAL-2026-1380"]),
+                      ev(:registry, key: "ghsa"))
+      malware = make_hit(vuln("id" => "MAL-2026-1380", "aliases" => ["GHSA-9ppg-jx86-fqw7"]),
+                         ev(:registry, key: "malware"))
+
+      results = [[ghsa, malware], [malware, ghsa]].map do |hits|
+        merged = matcher.dedup_by_aliases(hits)
+        hit = merged.fetch(0)
+        [merged.length, hit.canonical_id, hit.identifiers.sort, hit.evidence.map(&:key).sort]
+      end
+
+      expect(results).to eq Array.new(2, [
+        1,
+        "GHSA-9ppg-jx86-fqw7",
+        ["GHSA-9ppg-jx86-fqw7", "MAL-2026-1380"],
+        %w[ghsa malware],
+      ])
+    end
+
+    it "merges a one-sided alias chain through its intermediate record" do
+      hits = [
+        make_hit(vuln("id" => "GHSA-a", "aliases" => ["GHSA-b"]), ev(:registry, key: "a")),
+        make_hit(vuln("id" => "GHSA-b", "aliases" => ["GHSA-c"]), ev(:registry, key: "b")),
+        make_hit(vuln("id" => "GHSA-c"), ev(:registry, key: "c")),
+      ]
+
+      merged = matcher.dedup_by_aliases(hits)
+
+      expect(merged.map { |hit| [hit.canonical_id, hit.identifiers, hit.evidence.map(&:key)] })
+        .to eq [["GHSA-a", %w[GHSA-a GHSA-b GHSA-c], %w[a b c]]]
+    end
+
+    it "picks the same record in either order when a group ties on strategy and canonical id" do
+      ghsa = make_hit(vuln("id"       => "GHSA-5v8v-66v8-mwm7",
+                           "aliases"  => ["CVE-2020-36846", "CVE-2020-8927"],
+                           "summary"  => "brotli buffer overflow",
+                           "severity" => [{ "type" => "CVSS_V3", "score" => "..." }]),
+                      ev(:registry, key: "ghsa"))
+      pysec = make_hit(vuln("id"      => "PYSEC-2020-29",
+                            "aliases" => ["CVE-2020-36846", "CVE-2020-8927"],
+                            "summary" => "brotli integer overflow"),
+                       ev(:registry, key: "pysec"))
+
+      selected = [[ghsa, pysec], [pysec, ghsa]].map do |hits|
+        hit = matcher.dedup_by_aliases(hits).fetch(0)
+        [hit.canonical_id, hit.vulnerability.id, hit.vulnerability.summary,
+         hit.vulnerability.severity_entries, hit.evidence.map(&:key)]
+      end
+
+      expect(selected).to eq Array.new(2, [
+        "CVE-2020-36846",
+        "GHSA-5v8v-66v8-mwm7",
+        "brotli buffer overflow",
+        [{ "type" => "CVSS_V3", "score" => "..." }],
+        %w[ghsa pysec],
+      ])
+    end
+
+    it "keeps distinct vulnerabilities reached through the same upstream record" do
+      upstream = vuln("id" => "DSA-1")
+      evidence = Homebrew::Vulns::Match::Evidence.new(strategy: :distro, key: "Debian/pkg",
+                                                      source_record: upstream)
+      hits = [
+        make_hit(vuln("id" => "CVE-2026-1"), evidence),
+        make_hit(vuln("id" => "CVE-2026-2"), evidence),
+      ]
+
+      expect(matcher.dedup_by_aliases(hits).map(&:canonical_id)).to eq %w[CVE-2026-1 CVE-2026-2]
     end
   end
 
@@ -520,11 +679,11 @@ RSpec.describe Homebrew::Vulns::Match do
       hits = matcher.advisories_for(exiftool)
 
       expect(hits.map(&:canonical_id).sort).to eq ["CVE-2021-22204", "CVE-2021-99999"]
-      merged = hits.find { |h| h.canonical_id == "CVE-2021-22204" }
-      expect(T.must(merged).strategy).to eq :git
-      expect(T.must(merged).identifiers).to include("CVE-2021-22204", "GHSA-xxxx")
-      expect(T.must(merged).evidence.map(&:strategy).uniq.sort).to eq [:cpansa, :distro, :git]
-      expect(T.must(merged).evidence.find { |e| e.strategy == :cpansa }&.advisory).not_to be_nil
+      merged = hits.to_h { |h| [h.canonical_id, h] }.fetch("CVE-2021-22204")
+      expect(merged.strategy).to eq :git
+      expect(merged.identifiers).to include("CVE-2021-22204", "GHSA-xxxx")
+      expect(merged.evidence.map(&:strategy).uniq.sort).to eq [:cpansa, :distro, :git]
+      expect(merged.evidence.find { |e| e.strategy == :cpansa }&.advisory).not_to be_nil
     end
 
     it "returns [] without hitting OSV when nothing is identifiable" do
@@ -592,6 +751,47 @@ RSpec.describe Homebrew::Vulns::Match do
       expect(record.dig(:database_specific, :source)).to eq "matched"
       expect(record.dig(:database_specific, :strategy)).to eq "registry"
       expect(record.dig(:database_specific, :confidence)).to eq "high"
+    end
+
+    it "deduplicates exported evidence after removing internal provenance" do
+      records = ["CVE-2024-1234", "GHSA-abcd"].map do |id|
+        vulnerability = vuln(
+          "id"       => id,
+          "aliases"  => [(id == "CVE-2024-1234") ? "GHSA-abcd" : "CVE-2024-1234"],
+          "affected" => [{
+            "package" => { "ecosystem" => "PyPI", "name" => "requests" },
+            "ranges"  => [{ "type" => "ECOSYSTEM", "events" => [
+              { "introduced" => "0" }, { "fixed" => "2.28.1" }
+            ] }],
+          }],
+        )
+        make_hit(vulnerability, ev(:registry, ecosystem: "PyPI", name: "requests",
+                                              subject_version: "2.31.0", key: "pkg:pypi/requests@2.31.0"))
+      end
+      hit = matcher.dedup_by_aliases(records).fetch(0)
+
+      evidence = matcher.to_brew_record(requests, hit, now:)
+                        .dig(:database_specific, :upstream_evidence)
+      expect(evidence).to eq [{
+        strategy:        :registry,
+        ecosystem:       "PyPI",
+        name:            "requests",
+        subject_version: "2.31.0",
+        key:             "pkg:pypi/requests@2.31.0",
+      }]
+    end
+
+    it "keeps exported evidence for separate resources of the same package" do
+      vulnerability = vuln("id" => "CVE-2024-1234")
+      evidence = ["first", "second"].map do |resource|
+        ev(:registry, ecosystem: "PyPI", name: "requests", subject_version: "2.31.0",
+                      key: "pkg:pypi/requests@2.31.0", resource:)
+      end
+      hit = make_hit(vulnerability, *evidence)
+
+      expect(matcher.to_brew_record(requests, hit, now:)
+                    .dig(:database_specific, :upstream_evidence).map { |row| row[:resource] })
+        .to eq ["first", "second"]
     end
 
     it "emits no fixed event and fix: nil when the range says the shipped version is still affected" do
@@ -742,6 +942,153 @@ RSpec.describe Homebrew::Vulns::Match do
       expect(matcher.first_fixed_version(requests, hit_fixed_at("2.28.1"))).to eq "2.28.1"
     end
 
+    describe "#first_introduced_version" do
+      it "excludes versions below the upstream introduction from a fixed range" do
+        stub_history(["2.31.0", "2.30.0", "2.29.0", "2.28.0"])
+        hit = hit_with_range({ "introduced" => "2.29.0" }, { "fixed" => "2.30.0" })
+
+        expect(matcher.first_introduced_version(requests, hit, first_fixed: "2.30.0")).to eq "2.29.0"
+      end
+
+      it "derives an introduction for a currently affected range" do
+        stub_history(["2.31.0", "2.30.0", "2.29.0"])
+        hit = hit_with_range({ "introduced" => "2.30.0" }, { "fixed" => "2.32.0" })
+
+        expect(matcher.first_introduced_version(requests, hit)).to eq "2.30.0"
+      end
+
+      it "uses the earliest shipped version when all history is affected" do
+        stub_history(["2.31.0", "2.30.0"])
+
+        expect(matcher.first_introduced_version(requests, hit_fixed_at("2.32.0"))).to eq "2.30.0"
+      end
+
+      it "does not infer an introduction through unreadable history" do
+        stub_history(["2.31.0", nil, "2.29.0"])
+
+        expect(matcher.first_introduced_version(requests, hit_fixed_at("2.32.0")))
+          .to eq :history_unavailable
+      end
+
+      it "does not infer an introduction from a shallow repository" do
+        allow(requests.tap!).to receive(:shallow?).and_return(true)
+        stub_history(["2.31.0"])
+
+        expect(matcher.first_introduced_version(requests, hit_fixed_at("2.32.0")))
+          .to eq :history_unavailable
+      end
+
+      it "does not infer an introduction without git history" do
+        stub_history([])
+
+        expect(matcher.first_introduced_version(requests, hit_fixed_at("2.32.0")))
+          .to eq :history_unavailable
+      end
+
+      it "rejects an interval containing a known non-affected version" do
+        stub_history(["2.31.0", "2.30.0", "2.29.0", "2.28.0"])
+        hit = hit_with_range({ "introduced" => "2.28.0" }, { "fixed" => "2.29.0" },
+                             { "introduced" => "2.30.0" }, { "fixed" => "2.32.0" })
+
+        expect(matcher.first_introduced_version(requests, hit)).to eq :history_unavailable
+      end
+
+      it "rejects an affected version at the proposed fixed boundary" do
+        stub_history(["2.31.0", "2.30.0"])
+
+        expect(matcher.first_introduced_version(requests, hit_fixed_at("2.32.0"), first_fixed: "2.31.0"))
+          .to eq :history_unavailable
+      end
+
+      it "excludes revisions before the affected resource was added" do
+        current = formula("requests") do
+          T.bind(self, T.class_of(Formula))
+          url "https://files.pythonhosted.org/packages/aa/bb/cc/requests-3.0.tar.gz"
+          resource("certifi") { url "https://files.pythonhosted.org/packages/11/22/33/certifi-1.0.tar.gz" }
+        end
+        stub_history([["3.0", "1.0"], ["2.0", "1.0"], ["1.0"]])
+        hit = make_hit(
+          vuln("id" => "CVE-1", "affected" => [
+            { "package" => { "ecosystem" => "PyPI", "name" => "certifi" },
+              "ranges"  => [{ "type" => "ECOSYSTEM", "events" => [{ "introduced" => "0" }] }] },
+          ]),
+          ev(:registry, ecosystem: "PyPI", name: "certifi", subject_version: "1.0", resource: "certifi"),
+        )
+
+        expect(matcher.first_introduced_version(current, hit)).to eq "2.0"
+      end
+
+      it "rejects affected and non-affected builds sharing a pkg_version" do
+        stub_history(["2.31.0", "2.30.0", "2.30.0"])
+        allow(matcher).to receive(:aggregate_state_at).and_return(:affected, :affected, :affected, :not_applicable)
+
+        expect(matcher.first_introduced_version(requests, hit_fixed_at("2.32.0")))
+          .to eq :history_unavailable
+      end
+
+      it "does not treat an affected state override as evidence of an affected historical build" do
+        stub_history(["2.31.0", "2.30.0", "2.29.0"])
+        overrides = Homebrew::Vulns::AdvisoryOverrides.new({
+          "requests" => { "advisories" => { "CVE-1" => { "range_state" => "affected" } } },
+        })
+        overridden = described_class.new(repology:, cpan_sec:, overrides:)
+
+        expect(overridden.first_introduced_version(requests, hit_fixed_at("2.30.0")))
+          .to eq :history_unavailable
+      end
+    end
+
+    def stub_pnpm_history(*formulae)
+      fv = instance_double(FormulaVersions)
+      revisions = formulae.each_index.map { |index| ["r#{index}", "Formula/p/pnpm.rb"] }
+      allow(fv).to receive(:rev_list) { |_, &block| revisions.each { |revision| block.call(*revision) } }
+      formulae.each_with_index do |old, index|
+        allow(fv).to receive(:formula_at_revision).with("r#{index}", anything).and_yield(old)
+      end
+      allow(FormulaVersions).to receive(:new).and_return(fv)
+    end
+
+    def pnpm_hit
+      make_hit(
+        vuln("id" => "CVE-1", "affected" => [
+          { "package" => { "ecosystem" => "npm", "name" => "pnpm" },
+            "ranges"  => [{ "type"   => "ECOSYSTEM",
+                            "events" => [{ "introduced" => "0" }, { "fixed" => "11.11.0" }] }] },
+        ]),
+        ev(:registry, ecosystem: "npm", name: "pnpm", subject_version: "12.3.4"),
+      )
+    end
+
+    it "uses an explicit registry identity across a source transition in history" do
+      overridden = described_class.new(repology:, cpan_sec:, overrides: pnpm_overrides)
+      current = formula("pnpm") do
+        T.bind(self, T.class_of(Formula))
+        url "https://github.com/pnpm/pnpm/archive/refs/tags/v12.3.4.tar.gz"
+      end
+      previous = formula("pnpm") do
+        T.bind(self, T.class_of(Formula))
+        url "https://registry.npmjs.org/pnpm/-/pnpm-11.10.0.tgz"
+      end
+      stub_pnpm_history(current, previous)
+
+      expect(overridden.first_fixed_version(current, pnpm_hit)).to eq "12.3.4"
+    end
+
+    it "fails a history walk closed when the declared registry identity conflicts" do
+      overridden = described_class.new(repology:, cpan_sec:, overrides: pnpm_overrides)
+      current = formula("pnpm") do
+        T.bind(self, T.class_of(Formula))
+        url "https://github.com/pnpm/pnpm/archive/refs/tags/v12.3.4.tar.gz"
+      end
+      conflicting = formula("pnpm") do
+        T.bind(self, T.class_of(Formula))
+        url "https://registry.npmjs.org/not-pnpm/-/not-pnpm-11.10.0.tgz"
+      end
+      stub_pnpm_history(conflicting)
+
+      expect(overridden.first_fixed_version(current, pnpm_hit)).to eq :history_unavailable
+    end
+
     it "honours last_affected inclusivity by re-running the range per revision" do
       stub_history(["2.31.0", "2.1", "2.0", "1.9"])
       hit = hit_with_range({ "introduced" => "0" }, { "last_affected" => "2.0" })
@@ -772,6 +1119,27 @@ RSpec.describe Homebrew::Vulns::Match do
     it "returns :never_affected when the formula was already past fixed at its first revision" do
       stub_history(["2.31.0"])
       expect(matcher.first_fixed_version(requests, hit_fixed_at("2.28.1"))).to eq :never_affected
+    end
+
+    it "returns :history_unavailable for a shallow formula repository" do
+      allow(requests.tap!).to receive(:shallow?).and_return(true)
+      stub_history(["2.31.0"])
+
+      expect(matcher.first_fixed_version(requests, hit_fixed_at("2.28.1"))).to eq :history_unavailable
+    end
+
+    it "does not derive a reintroduction from a shallow formula repository" do
+      allow(requests.tap!).to receive(:shallow?).and_return(true)
+      stub_history(["2.31.0", "2.30.0"])
+      allow(matcher).to receive(:aggregate_state_at).and_return(:affected, :fixed)
+
+      expect(matcher.first_reintroduced_version(requests, hit_fixed_at("2.32.0"))).to eq :not_reintroduced
+    end
+
+    it "returns :history_unavailable when the formula has no git history" do
+      stub_history([])
+
+      expect(matcher.first_fixed_version(requests, hit_fixed_at("2.28.1"))).to eq :history_unavailable
     end
 
     it "keeps Git history uncheckable across repository URL changes" do
@@ -811,7 +1179,7 @@ RSpec.describe Homebrew::Vulns::Match do
       expect([
         matcher.first_fixed_version(current, git_hit.call("1.1")),
         matcher.first_reintroduced_version(current, git_hit.call("3.0")),
-      ]).to eq ["2.0", :not_reintroduced]
+      ]).to eq [:history_unavailable, :not_reintroduced]
     end
 
     it "returns :never_affected when a fixed resource was absent from earlier formula revisions" do
@@ -856,6 +1224,32 @@ RSpec.describe Homebrew::Vulns::Match do
       expect(matcher.first_fixed_version(current, hit)).to eq "2.0"
     end
 
+    it "returns :history_unavailable when an older revision after a resource-absence gap cannot be loaded" do
+      stub_history([["3.0", "1.2.0"], ["2.0", nil], nil])
+      current = formula("requests") do
+        T.bind(self, T.class_of(Formula))
+        url "https://files.pythonhosted.org/packages/aa/bb/cc/requests-3.0.tar.gz"
+        resource("certifi") do
+          url "https://files.pythonhosted.org/packages/11/22/33/certifi-1.2.0.tar.gz"
+        end
+      end
+      hit = make_hit(
+        vuln("id" => "CVE-1", "affected" => [
+          { "package" => { "ecosystem" => "PyPI", "name" => "certifi" },
+            "ranges"  => [{ "type"   => "ECOSYSTEM",
+                            "events" => [{ "introduced" => "0" }, { "fixed" => "1.0.8" }] }] },
+        ]),
+        ev(:registry, ecosystem: "PyPI", name: "certifi", subject_version: "1.2.0", resource: "certifi"),
+      )
+
+      expect(matcher.first_fixed_version(current, hit)).to eq :history_unavailable
+    end
+
+    it "returns a verified boundary before reaching an older unloadable revision" do
+      stub_history(["2.31.0", "2.28.1", "2.28.0", nil])
+      expect(matcher.first_fixed_version(requests, hit_fixed_at("2.28.1"))).to eq "2.28.1"
+    end
+
     it "follows a resource package across historical resource-label changes" do
       stub_history([["3.0", "101.0", "certifi"], ["2.0", "100.0", "certifi-python"],
                     ["1.0", "99.0", "certifi-python"]])
@@ -878,6 +1272,68 @@ RSpec.describe Homebrew::Vulns::Match do
       expect(matcher.first_fixed_version(current, hit)).to eq "2.0"
     end
 
+    it "does not inherit the formula version when a verified package URL has no version" do
+      current = formula("requests") do
+        T.bind(self, T.class_of(Formula))
+        url "https://files.pythonhosted.org/packages/aa/bb/cc/requests-3.0.tar.gz"
+        resource("certifi") do
+          url "https://files.pythonhosted.org/packages/11/22/33/certifi-2.0.tar.gz"
+        end
+      end
+      historical = formula("requests") do
+        T.bind(self, T.class_of(Formula))
+        url "https://files.pythonhosted.org/packages/aa/bb/cc/requests-2.0.tar.gz"
+        resource("certifi") do
+          url "https://files.pythonhosted.org/packages/11/22/33/certifi-.tar.gz"
+        end
+      end
+      fv = instance_double(FormulaVersions)
+      allow(fv).to receive(:rev_list).and_yield("r0", "Formula/r/requests.rb")
+      allow(fv).to receive(:formula_at_revision).with("r0", anything).and_yield(historical)
+      allow(FormulaVersions).to receive(:new).and_return(fv)
+      hit = make_hit(
+        vuln("id" => "CVE-1", "affected" => [
+          { "package" => { "ecosystem" => "PyPI", "name" => "certifi" },
+            "ranges"  => [{ "type"   => "ECOSYSTEM",
+                            "events" => [{ "introduced" => "0" }, { "fixed" => "1.5" }] }] },
+        ]),
+        ev(:registry, ecosystem: "PyPI", name: "certifi", subject_version: "2.0", resource: "certifi"),
+      )
+
+      expect(matcher.first_fixed_version(current, hit)).to eq :history_unavailable
+    end
+
+    it "does not inherit package identity from a matching resource label" do
+      current = formula("requests") do
+        T.bind(self, T.class_of(Formula))
+        url "https://files.pythonhosted.org/packages/aa/bb/cc/requests-3.0.tar.gz"
+        resource("certifi") do
+          url "https://files.pythonhosted.org/packages/11/22/33/certifi-2.0.tar.gz"
+        end
+      end
+      historical = formula("requests") do
+        T.bind(self, T.class_of(Formula))
+        url "https://files.pythonhosted.org/packages/aa/bb/cc/requests-2.0.tar.gz"
+        resource("certifi") do
+          url "https://example.com/certifi-1.0.tar.gz"
+        end
+      end
+      fv = instance_double(FormulaVersions)
+      allow(fv).to receive(:rev_list).and_yield("r0", "Formula/r/requests.rb")
+      allow(fv).to receive(:formula_at_revision).with("r0", anything).and_yield(historical)
+      allow(FormulaVersions).to receive(:new).and_return(fv)
+      hit = make_hit(
+        vuln("id" => "CVE-1", "affected" => [
+          { "package" => { "ecosystem" => "PyPI", "name" => "certifi" },
+            "ranges"  => [{ "type"   => "ECOSYSTEM",
+                            "events" => [{ "introduced" => "0" }, { "fixed" => "1.5" }] }] },
+        ]),
+        ev(:registry, ecosystem: "PyPI", name: "certifi", subject_version: "2.0", resource: "certifi"),
+      )
+
+      expect(matcher.first_fixed_version(current, hit)).to eq :history_unavailable
+    end
+
     it "keeps versionless (distro) evidence uncheckable at historical revisions too" do
       stub_history(["2.31.0", "2.30.0", "2.28.1", "2.28.0"])
       # A distro record whose Debian range would spuriously match our formula
@@ -892,7 +1348,7 @@ RSpec.describe Homebrew::Vulns::Match do
           "ranges"  => [{ "type"   => "ECOSYSTEM",
                           "events" => [{ "introduced" => "0" }, { "fixed" => "2.28.1" }] }] },
       ])
-      hit = matcher.dedup_by_cve([
+      hit = matcher.dedup_by_aliases([
         make_hit(registry_record,
                  ev(:registry, ecosystem: "PyPI", name: "requests", subject_version: "2.31.0")),
         make_hit(distro_record,
@@ -927,9 +1383,9 @@ RSpec.describe Homebrew::Vulns::Match do
       expect(matcher.first_fixed_version(current, hit)).to eq "3.0"
     end
 
-    it "stops at an unloadable revision and returns the last known fixed pkg_version" do
+    it "returns :history_unavailable when a revision cannot be loaded" do
       stub_history(["2.31.0", "2.30.0", nil, "2.28.0"])
-      expect(matcher.first_fixed_version(requests, hit_fixed_at("2.28.1"))).to eq "2.30.0"
+      expect(matcher.first_fixed_version(requests, hit_fixed_at("2.28.1"))).to eq :history_unavailable
     end
 
     it "returns nil when the current version is still affected" do
@@ -1026,7 +1482,7 @@ RSpec.describe Homebrew::Vulns::Match do
       allow(FormulaVersions).to receive(:new).and_return(fv)
 
       expect(matcher.first_reintroduced_version(requests, hit_fixed_at("2.32.0"))).to eq :not_reintroduced
-      expect(matcher.first_fixed_version(requests, hit_fixed_at("2.28.1"))).to eq "2.31.0"
+      expect(matcher.first_fixed_version(requests, hit_fixed_at("2.28.1"))).to eq :history_unavailable
     end
 
     it "does not let fixed evidence mask another uncheckable historical subject" do

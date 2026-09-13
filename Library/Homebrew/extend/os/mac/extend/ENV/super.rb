@@ -33,18 +33,9 @@ module OS
         ].map { |p| ::Pathname.new(p) }
       end
 
-      sig { returns(T::Boolean) }
-      def libxml2_include_needed?
-        return false if deps.any? { |d| d.name == "libxml2" }
-        return false if ::Pathname.new("#{self["HOMEBREW_SDKROOT"]}/usr/include/libxml").directory?
-
-        true
-      end
-
       sig { returns(T::Array[::Pathname]) }
       def homebrew_extra_isystem_paths
         paths = []
-        paths << "#{self["HOMEBREW_SDKROOT"]}/usr/include/libxml2" if libxml2_include_needed?
         paths << "#{self["HOMEBREW_SDKROOT"]}/usr/include/apache2" if MacOS::Xcode.without_clt?
         paths << "#{self["HOMEBREW_SDKROOT"]}/System/Library/Frameworks/OpenGL.framework/Versions/Current/Headers"
         paths.map { |p| ::Pathname.new(p) }
@@ -64,7 +55,6 @@ module OS
       sig { returns(T::Array[::Pathname]) }
       def homebrew_extra_cmake_include_paths
         paths = []
-        paths << "#{self["HOMEBREW_SDKROOT"]}/usr/include/libxml2" if libxml2_include_needed?
         paths << "#{self["HOMEBREW_SDKROOT"]}/usr/include/apache2" if MacOS::Xcode.without_clt?
         paths << "#{self["HOMEBREW_SDKROOT"]}/System/Library/Frameworks/OpenGL.framework/Versions/Current/Headers"
         paths.map { |p| ::Pathname.new(p) }
@@ -156,7 +146,7 @@ module OS
         # This has little-to-no usage and doesn't make sense to have a special function for.
         # When removing this function, also cleanup related usage in the `cc` shim
         # and remove `no_weak_imports_support?`.
-        odeprecated "ENV.no_weak_imports"
+        odisabled "ENV.no_weak_imports", "passing `-Wl,-no_weak_imports` to the linker"
         append_to_cccfg "w" if no_weak_imports_support?
       end
 
@@ -164,7 +154,7 @@ module OS
       def no_fixup_chains
         # This function has been no-op for quite some time as it's set by default.
         # Unlike above, do not touch the `cc` shim or the support method when removing this.
-        odeprecated "ENV.no_fixup_chains"
+        odisabled "ENV.no_fixup_chains", "the default linker behaviour"
         append_to_cccfg "f" if no_fixup_chains_support?
       end
     end

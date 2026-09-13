@@ -7,6 +7,7 @@ require "development_tools"
 require "extend/ENV"
 require "system_command"
 require "git_repository"
+require "utils/popen"
 
 # Helper module for querying information about the system configuration.
 module SystemConfig
@@ -95,7 +96,7 @@ module SystemConfig
 
     sig { returns(String) }
     def kernel
-      `uname -m`.chomp
+      Utils.popen_read_text("uname", "-m", err: :err).chomp
     end
 
     sig { returns(T.nilable(String)) }

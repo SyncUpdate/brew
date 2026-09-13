@@ -1,10 +1,10 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 RSpec.describe Cask::CaskLoader::FromAPILoader, :cask do
   shared_context "with API setup" do |local_token|
     let(:api_token) { "#{local_token}-api" }
-    let(:cask_from_source) { Cask::CaskLoader.load(local_token) }
+    let(:cask_from_source) { Cask::CaskLoader.load(local_token.to_s) }
     let(:cask_json) do
       hash = cask_from_source.to_hash_with_variations
       # This value will always be present in the json API, but is skipped in tests
@@ -27,7 +27,7 @@ RSpec.describe Cask::CaskLoader::FromAPILoader, :cask do
 
   shared_context "with internal API setup" do |local_token|
     # Load the cask and generate its hash first before we enable internal API mode for the test body
-    let!(:cask_from_internal_source) { Cask::CaskLoader.load(local_token) }
+    let!(:cask_from_internal_source) { Cask::CaskLoader.load(local_token.to_s) }
     let!(:cask_internal_struct) do
       hash_with_variations = cask_from_internal_source.to_hash_with_variations
       Homebrew::API::Cask::CaskStructGenerator.generate_cask_struct_hash(hash_with_variations)
@@ -105,8 +105,8 @@ RSpec.describe Cask::CaskLoader::FromAPILoader, :cask do
 
           loader = Cask::CaskLoader::FromNameLoader.try_new(old_token)
           expect(loader).to be_a(described_class)
-          expect(loader.token).to eq api_token
-          expect(loader.path).not_to exist
+          expect(loader&.token).to eq api_token
+          expect(loader&.path).not_to exist
         end
 
         it "returns the tap migration rename by old full name" do
@@ -117,8 +117,8 @@ RSpec.describe Cask::CaskLoader::FromAPILoader, :cask do
 
           loader = Cask::CaskLoader::FromTapLoader.try_new("#{foo_tap}/#{old_token}")
           expect(loader).to be_a(described_class)
-          expect(loader.token).to eq api_token
-          expect(loader.path).not_to exist
+          expect(loader&.token).to eq api_token
+          expect(loader&.path).not_to exist
         end
       end
     end
@@ -157,8 +157,8 @@ RSpec.describe Cask::CaskLoader::FromAPILoader, :cask do
 
           loader = Cask::CaskLoader::FromNameLoader.try_new(old_token)
           expect(loader).to be_a(described_class)
-          expect(loader.token).to eq internal_api_token
-          expect(loader.path).not_to exist
+          expect(loader&.token).to eq internal_api_token
+          expect(loader&.path).not_to exist
         end
 
         it "returns the tap migration rename by old full name" do
@@ -169,8 +169,8 @@ RSpec.describe Cask::CaskLoader::FromAPILoader, :cask do
 
           loader = Cask::CaskLoader::FromTapLoader.try_new("#{foo_tap}/#{old_token}")
           expect(loader).to be_a(described_class)
-          expect(loader.token).to eq internal_api_token
-          expect(loader.path).not_to exist
+          expect(loader&.token).to eq internal_api_token
+          expect(loader&.path).not_to exist
         end
       end
     end
@@ -181,6 +181,22 @@ RSpec.describe Cask::CaskLoader::FromAPILoader, :cask do
   end
 
   describe "#load" do
+    it "loads existing JSON metadata that still has a verified URL spec" do
+      cask = described_class.new(
+        "legacy-verified",
+        from_json:               {
+          "version"   => "1.0",
+          "url"       => "https://cdn.example.com/app.dmg",
+          "url_specs" => { "verified" => "cdn.example.com/" },
+          "artifacts" => [{ "app" => ["App.app"] }],
+        },
+        path:                    Pathname("/tmp/legacy-verified.json"),
+        from_installed_caskfile: true,
+      ).load(config: nil)
+
+      expect(cask.url.to_s).to eq("https://cdn.example.com/app.dmg")
+    end
+
     it "does not dispatch unknown raw artifacts" do
       marker = mktmpdir/"unexpected-dispatch"
       cask_struct = Homebrew::API::CaskStruct.new(
@@ -354,6 +370,7 @@ RSpec.describe Cask::CaskLoader::FromAPILoader, :cask do
           cask.config_path.dirname.mkpath
           (cask.staged_path/"container").write "app"
           (cask.staged_path/"move-source").write "moved"
+          allow(Sandbox).to receive(:use_for?).and_return(false)
 
           Cask::Installer.new(cask, command: NeverSudoSystemCommand).install_artifacts
 
@@ -365,20 +382,13 @@ RSpec.describe Cask::CaskLoader::FromAPILoader, :cask do
       end
     end
 
-    context "with a preflight stanza" do
-      include_examples "loads from API", "with-preflight"
-    end
+    context "with legacy flight stanzas" do
+      before do
+        ENV["HOMEBREW_DEVELOPER"] = nil
+        Homebrew.raise_deprecation_exceptions = false
+      end
 
-    context "with an uninstall-preflight stanza" do
-      include_examples "loads from API", "with-uninstall-preflight"
-    end
-
-    context "with a postflight stanza" do
-      include_examples "loads from API", "with-postflight"
-    end
-
-    context "with an uninstall-postflight stanza" do
-      include_examples "loads from API", "with-uninstall-postflight"
+      include_examples "loads from API", "many-artifacts"
     end
 
     context "with a language stanza" do

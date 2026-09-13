@@ -1,6 +1,8 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "utils/text"
+
 require "abstract_command"
 require "cask"
 require "system_command"
@@ -86,7 +88,7 @@ module Homebrew
         "/Library/Preferences",
       ].freeze
 
-      UUID_PATTERN = /[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}/i
+      UUID_PATTERN = /[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}/i
 
       # Keep in sync with `RuboCop::Cop::Cask::SharedFilelistGlob`.
       SHARED_FILELIST_PATTERN = /\.sfl\d\z/
@@ -320,7 +322,7 @@ module Homebrew
 
       sig { params(patterns: T::Array[String]).returns(String) }
       def format_patterns(patterns)
-        patterns.map { |pattern| "\"#{pattern}\"" }.to_sentence
+        Utils::Text.to_sentence(patterns.map { |pattern| "\"#{pattern}\"" })
       end
 
       sig { params(basenames: T::Array[String]).returns(T::Array[String]) }

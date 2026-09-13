@@ -80,7 +80,6 @@ module OS
             check_clt_minimum_version
             check_if_xcode_needs_clt_installed
             check_if_supported_sdk_available
-            check_broken_sdks
           ].freeze
         end
 
@@ -95,9 +94,9 @@ module OS
 
         sig { returns(T::Array[String]) }
         def supported_configuration_checks
-          %w[
+          (super + %w[
             check_for_unsupported_macos
-          ].freeze
+          ]).freeze
         end
 
         sig { returns(T::Array[String]) }
@@ -134,24 +133,14 @@ module OS
 
           tier = 2
           who = +"We"
-          remediation = nil
           version = MacOS.version
-          macports_url = Formatter.url("https://www.macports.org")
           what = if OS::Mac.version.outdated_release?
             tier = 3
             who << " (and Apple)"
-            remediation = <<~EOS
-              You will have better luck with MacPorts which still supports older versions of macOS:
-                #{macports_url}
-            EOS
             "old version."
           elsif ::Hardware::CPU.intel?
             tier = 3
             version = "on Intel x86_64"
-            remediation = <<~EOS
-              You will have better luck with MacPorts which still supports macOS Intel x86_64:
-                #{macports_url}
-            EOS
             <<~EOS
               platform (as-of September 2026, announced August 2025).
 
@@ -173,8 +162,8 @@ module OS
               You are using macOS #{version}.
               #{who} do not provide support for this #{what.chomp}
             EOS
-            remediation:,
             tier:,
+            remediation: macos_bottle_remediation(MacOS.version, intel: ::Hardware::CPU.intel?),
           )
         end
 
@@ -297,7 +286,7 @@ module OS
           ::Homebrew::Diagnostic::Finding.new(
             <<~EOS,
               The directory Xcode is reportedly installed to doesn't exist:
-              #{prefix}
+                #{prefix}
             EOS
             remediation: <<~EOS,
               You may need to `xcode-select` the proper path if you have moved Xcode.
@@ -313,17 +302,16 @@ module OS
 
           path = MacOS::Xcode.bundle_path
           path = "/Developer" if path.nil? || !path.directory?
-
+          commands = ["sudo xcode-select --switch #{path}"]
           ::Homebrew::Diagnostic::Finding.new(
             <<~EOS,
               Your Xcode is configured with an invalid path.
             EOS
             remediation: ::Homebrew::Diagnostic::Finding::Remediation.new(
-              commands: ["sudo xcode-select --switch #{path}"],
-              text:     <<~EOS,
+              text:     append_indented_list(commands, <<~EOS),
                 You should change it to the correct path:
-                  sudo xcode-select --switch #{path}
               EOS
+              commands:,
             ),
           )
         end
@@ -332,19 +320,19 @@ module OS
         def check_xcode_license_approved
           # If the user installs Xcode-only, they have to approve the
           # license or no "xc*" tool will work.
-          return unless `/usr/bin/xcrun --find clang 2>&1`.include?("license")
+          return unless Utils.popen_read_text("/usr/bin/xcrun", "--find", "clang", err: :out).include?("license")
           return if $CHILD_STATUS.success?
 
+          commands = ["sudo xcodebuild -license"]
           ::Homebrew::Diagnostic::Finding.new(
             <<~EOS,
               You have not agreed to the Xcode license.
             EOS
             remediation: ::Homebrew::Diagnostic::Finding::Remediation.new(
-              commands: ["sudo xcodebuild -license"],
-              text:     <<~EOS,
+              text:     append_indented_list(commands, <<~EOS),
                 Agree to the license by opening Xcode.app or running:
-                  sudo xcodebuild -license
               EOS
+              commands:,
             ),
           )
         end
@@ -420,9 +408,8 @@ module OS
               These files can cause compilation and link failures, especially if they
               are compiled with improper architectures.
             EOS
-            remediation: <<~EOS,
+            remediation: append_indented_list(@found, <<~EOS),
               Consider removing these files:
-                #{@found.join("\n  ")}
             EOS
           )
         end
@@ -456,9 +443,8 @@ module OS
                 architectures. macOS itself never installs anything to /usr/local so
                 it was either installed by a user or some other third party software.
               EOS
-              remediation: <<~EOS,
-                tl;dr: delete these files:
-                  #{@found.join("\n")}
+              remediation: append_indented_list(@found, <<~EOS),
+                Consider removing these files:
               EOS
             )
           end
@@ -532,47 +518,6 @@ module OS
                 #{update_instructions}
               EOS
             ),
-          )
-        end
-
-        # The CLT 10.x -> 11.x upgrade process on 10.14 contained a bug which broke the SDKs.
-        # Notably, MacOSX10.14.sdk would indirectly symlink to MacOSX10.15.sdk.
-        # This diagnostic was introduced to check for this and recommend a full reinstall.
-        sig { returns(T.nilable(::Homebrew::Diagnostic::Finding)) }
-        def check_broken_sdks
-          locator = MacOS.sdk_locator
-
-          return if locator.all_sdks.all? do |sdk|
-            path_version = sdk.path.basename.to_s[MacOS::SDK::VERSIONED_SDK_REGEX, 1]
-            next true if path_version.blank?
-
-            sdk.version == MacOSVersion.new(path_version).strip_patch
-          end
-
-          if locator.source == :clt
-            source = "Command Line Tools (CLT)"
-            path_to_remove = MacOS::CLT::PKG_PATH
-            installation_instructions = MacOS::CLT.installation_instructions
-          else
-            source = "Xcode"
-            path_to_remove = MacOS::Xcode.bundle_path
-            installation_instructions = MacOS::Xcode.installation_instructions
-          end
-
-          remediation = ::Homebrew::Diagnostic::Finding::Remediation.new(
-            commands: ["sudo rm -rf #{path_to_remove}"],
-            text:     <<~EOS,
-              Remove the broken installation before reinstalling
-
-                #{installation_instructions}
-            EOS
-          )
-          ::Homebrew::Diagnostic::Finding.new(
-            <<~EOS,
-              The contents of the SDKs in your #{source} installation do not match the SDK folder names.
-              A clean reinstall of #{source} should fix this.
-            EOS
-            remediation:,
           )
         end
 
@@ -654,12 +599,10 @@ module OS
             [msg, nil]
           end
 
-          return unless messages.first.present?
+          message, remediation = messages
+          return if message.blank?
 
-          ::Homebrew::Diagnostic::Finding.new(
-            T.must(messages.first),
-            remediation: messages.last,
-          )
+          ::Homebrew::Diagnostic::Finding.new(message, remediation:)
         end
       end
     end

@@ -62,17 +62,15 @@ module OS
     def self.latest_sdk_version
       # TODO: bump version when new Xcode macOS SDK is released
       # NOTE: We only track the major version of the SDK.
-      ::Version.new("26")
+      ::Version.new("27")
     end
 
     sig { returns(String) }
     def self.preferred_perl_version
       if version >= :sonoma
         "5.34"
-      elsif version >= :big_sur
-        "5.30"
       else
-        "5.18"
+        "5.30"
       end
     end
 
@@ -168,7 +166,7 @@ module OS
     # @api public
     sig { params(version: T.nilable(MacOSVersion)).returns(T.nilable(::Pathname)) }
     def self.sdk_path_if_needed(version = nil)
-      odeprecated "MacOS.sdk_path_if_needed", "MacOS.sdk_path"
+      odisabled "MacOS.sdk_path_if_needed", "MacOS.sdk_path"
       sdk_path(version)
     end
 

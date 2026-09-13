@@ -1,6 +1,9 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "system_command"
+require "utils/interrupts"
+
 require "cachable"
 require "keg_relocate"
 require "language/python"
@@ -24,7 +27,7 @@ class Keg
     def initialize(keg)
       super <<~EOS
         Cannot link #{keg.name}
-        Another version is already linked: #{keg.linked_keg_record.resolved_path}
+        Another version is already linked: #{Utils::Path.resolved_path(keg.linked_keg_record)}
       EOS
     end
   end
@@ -90,8 +93,8 @@ class Keg
   end
 
   # Locale-specific directories have the form `language[_territory][.codeset][@modifier]`
-  LOCALEDIR_RX = %r{(locale|man)/([a-z]{2}|C|POSIX)(_[A-Z]{2})?(\.[a-zA-Z\-0-9]+(@.+)?)?}
-  INFOFILE_RX = %r{info/([^.].*?\.info(\.gz)?|dir)$}
+  LOCALEDIR_RX = %r{(?:locale|man)/(?:[a-z]{2}|C|POSIX)(?:_[A-Z]{2})?(?:\.[a-zA-Z\-0-9]+(?:@.+)?)?}
+  INFOFILE_RX = %r{info/(?:[^.].*?\.info(?:\.gz)?|dir)$}
 
   # These paths relative to the keg's share directory should always be real
   # directories in the prefix, never symlinks.
@@ -183,7 +186,7 @@ class Keg
       HOMEBREW_LOCKS,
       HOMEBREW_LOGS,
       HOMEBREW_REPOSITORY,
-      Language::Python.homebrew_site_packages,
+      *HOMEBREW_PREFIX.glob("lib/python*/site-packages"),
     ]).sort.uniq.freeze, T.nilable(T::Array[Pathname]))
   end
 
@@ -203,7 +206,7 @@ class Keg
 
   sig { params(path: Pathname).void }
   def initialize(path)
-    path = path.resolved_path if path.to_s.start_with?("#{HOMEBREW_PREFIX}/opt/")
+    path = resolved_path(path) if path.to_s.start_with?("#{HOMEBREW_PREFIX}/opt/")
     raise "#{path} is not a valid keg" if path.parent.parent.realpath != HOMEBREW_CELLAR.realpath
     raise "#{path} is not a directory" unless path.directory?
 
@@ -213,6 +216,8 @@ class Keg
     @opt_record = T.let(HOMEBREW_PREFIX/"opt/#{name}", Pathname)
     @oldname_opt_records = T.let([], T::Array[Pathname])
     @require_relocation = T.let(false, T::Boolean)
+    @overwritten_cask_symlinks = T.let({}, T::Hash[Pathname, [String, Pathname]])
+    @cask_symlink_tokens = T.let(nil, T.nilable(T::Hash[Pathname, String]))
   end
 
   sig { returns(Pathname) }
@@ -242,7 +247,7 @@ class Keg
   sig { returns(T::Boolean) }
   def empty_installation?
     Pathname.glob("#{path}/*") do |file|
-      return false if file.directory? && !file.children.reject(&:ds_store?).empty?
+      return false if file.directory? && file.children.any? { |child| child.basename.to_s != ".DS_Store" }
 
       basename = file.basename.to_s
 
@@ -268,18 +273,18 @@ class Keg
   def linked?
     linked_keg_record.symlink? &&
       linked_keg_record.directory? &&
-      path == linked_keg_record.resolved_path
+      path == resolved_path(linked_keg_record)
   end
 
   sig { void }
   def remove_linked_keg_record
     linked_keg_record.unlink
-    linked_keg_record.parent.rmdir_if_possible
+    rmdir_if_possible(linked_keg_record.parent)
   end
 
   sig { returns(T::Boolean) }
   def optlinked?
-    opt_record.symlink? && path == opt_record.resolved_path
+    opt_record.symlink? && path == resolved_path(opt_record)
   end
 
   sig { void }
@@ -312,7 +317,7 @@ class Keg
   sig { void }
   def remove_opt_record
     opt_record.unlink
-    opt_record.parent.rmdir_if_possible
+    rmdir_if_possible(opt_record.parent)
   end
 
   sig { params(raise_failures: T::Boolean).void }
@@ -326,7 +331,7 @@ class Keg
     end
 
     FileUtils.rm_r(path)
-    path.parent.rmdir_if_possible
+    rmdir_if_possible(path.parent)
     remove_opt_record if optlinked?
     remove_linked_keg_record if linked?
     remove_old_aliases
@@ -342,7 +347,7 @@ class Keg
 
   sig { void }
   def ignore_interrupts_and_uninstall!
-    ignore_interrupts do
+    Utils::Interrupts.ignore do
       uninstall
     end
   end
@@ -364,7 +369,7 @@ class Keg
 
         # check whether the file to be unlinked is from the current keg first
         next unless dst.symlink?
-        next if src != dst.resolved_path
+        next if src != resolved_path(dst)
 
         if dry_run
           puts dst
@@ -372,7 +377,9 @@ class Keg
           next
         end
 
-        dst.uninstall_info if dst.to_s.match?(INFOFILE_RX)
+        if dst.to_s.match?(INFOFILE_RX)
+          Utils::Path.uninstall_info(dst, verbose: ObserverPathnameExtension.verbose?)
+        end
         dst.unlink
         Find.prune if src.directory?
       end
@@ -381,7 +388,7 @@ class Keg
     unless dry_run
       remove_old_aliases
       remove_linked_keg_record if linked?
-      (dirs - self.class.must_exist_subdirectories).reverse_each(&:rmdir_if_possible)
+      (dirs - self.class.must_exist_subdirectories).reverse_each { |dir| rmdir_if_possible(dir) }
     end
 
     ObserverPathnameExtension.n
@@ -475,7 +482,7 @@ class Keg
 
     @oldname_opt_records = if (opt_dir = HOMEBREW_PREFIX/"opt").directory?
       opt_dir.subdirs.select do |dir|
-        dir.symlink? && dir != opt_record && path.parent == dir.resolved_path.parent
+        dir.symlink? && dir != opt_record && path.parent == resolved_path(dir).parent
       end
     else
       []
@@ -567,11 +574,28 @@ class Keg
       end
     end
     make_relative_symlink(linked_keg_record, path, verbose:, dry_run:, overwrite:) unless dry_run
-  rescue LinkError
+    @overwritten_cask_symlinks.group_by { |_, (cask_token, _)| cask_token }.each do |cask_token, symlinks|
+      opoo <<~EOS
+        Overwrote symlinks from the #{cask_token} cask:
+          #{symlinks.map(&:first).join("\n  ")}
+        To restore them, run:
+          brew unlink --formula #{name} && brew link --cask #{cask_token}
+      EOS
+    end
+  rescue => e
+    raise if dry_run || e.is_a?(AlreadyLinkedError)
+
     unlink(verbose:)
+    @overwritten_cask_symlinks.each do |dst, (_, source)|
+      dst.dirname.mkpath
+      FileUtils.ln_sf(source, dst)
+    end
     raise
   else
     ObserverPathnameExtension.n
+  ensure
+    @overwritten_cask_symlinks.clear
+    @cask_symlink_tokens = nil
   end
 
   sig { void }
@@ -583,10 +607,10 @@ class Keg
   sig { void }
   def remove_oldname_opt_records
     oldname_opt_records.reject! do |record|
-      next false if record.resolved_path != path
+      next false if resolved_path(record) != path
 
       record.unlink
-      record.parent.rmdir_if_possible
+      rmdir_if_possible(record.parent)
       true
     end
   end
@@ -636,14 +660,16 @@ class Keg
     # leaves its intermediate objects and static archives behind; they embed
     # build paths that pin bottles and are never needed at run time (addons
     # load the linked `.node` files, not the objects they were linked from).
+    # It always writes them into the package's `build` directory, so anything
+    # matching elsewhere under `node_modules` is shipped by the package.
     path.find do |pn|
       next unless pn.to_s.include?("/node_modules/")
+      next unless pn.to_s.include?("/build/")
 
       if pn.directory? && pn.basename.to_s == "obj.target"
         FileUtils.rm_rf pn
         Find.prune
-      elsif %w[.o .d].include?(pn.extname) ||
-            (pn.extname == ".a" && pn.to_s.include?("/build/"))
+      elsif %w[.o .d .a].include?(pn.extname) && pn.file?
         pn.delete
       end
     end
@@ -663,7 +689,7 @@ class Keg
       # Strip to a temporary file so a failure (e.g. an addon `strip` cannot
       # parse) leaves the addon untouched.
       stripped = Pathname("#{pn}.stripped")
-      if quiet_system(strip.to_s, "-S", "-o", stripped.to_s, pn.to_s)
+      if SystemCommand.quiet_system(strip.to_s, "-S", "-o", stripped.to_s, pn.to_s)
         mode = pn.stat.mode
         FileUtils.mv stripped, pn
         pn.chmod mode
@@ -760,7 +786,7 @@ class Keg
   def resolve_any_conflicts(dst, dry_run: false, verbose: false, overwrite: false)
     return unless dst.symlink?
 
-    src = dst.resolved_path
+    src = resolved_path(dst)
 
     # `src` itself may be a symlink, so check lstat to ensure we are dealing with
     # a directory and not a symlink pointing to a directory (which needs to be
@@ -790,7 +816,7 @@ class Keg
 
   sig { params(dst: Pathname, src: Pathname, verbose: T::Boolean, dry_run: T::Boolean, overwrite: T::Boolean).void }
   def make_relative_symlink(dst, src, verbose: false, dry_run: false, overwrite: false)
-    if dst.symlink? && src == dst.resolved_path
+    if dst.symlink? && src == resolved_path(dst)
       puts "Skipping; link already exists: #{dst}" if verbose
       return
     end
@@ -798,7 +824,7 @@ class Keg
     # cf. git-clean -n: list files to delete, don't really link or delete
     if dry_run && overwrite
       if dst.symlink?
-        puts "#{dst} -> #{dst.resolved_path}"
+        puts "#{dst} -> #{resolved_path(dst)}"
       elsif dst.exist?
         puts dst
       end
@@ -811,10 +837,13 @@ class Keg
       return
     end
 
-    dst.delete if overwrite && (dst.exist? || dst.symlink?)
+    if overwrite && (dst.exist? || dst.symlink?)
+      record_cask_symlink(dst)
+      dst.delete
+    end
     dst.make_relative_symlink(src)
   rescue Errno::EEXIST => e
-    raise ConflictError.new(self, src.relative_path_from(path), dst, e) if dst.exist?
+    raise ConflictError.new(self, src.relative_path_from(path), dst, e) if dst.exist? && record_cask_symlink(dst).nil?
 
     if dst.symlink?
       dst.unlink
@@ -835,6 +864,28 @@ class Keg
     elsif alias_symlink.symlink? || alias_symlink.exist?
       alias_symlink.delete
     end
+  end
+
+  # Casks skip linking over formula symlinks (`Cask::Artifact::Symlinked#conflicting_formula`) and
+  # formulae overwrite cask symlinks, so record `dst` for the trailing warning and rollback if it is one,
+  # returning the cask's token.
+  sig { params(dst: Pathname).returns(T.nilable(String)) }
+  def record_cask_symlink(dst)
+    return unless dst.symlink?
+
+    @cask_symlink_tokens ||= begin
+      require "cask/caskroom"
+      Cask::Caskroom.casks.each_with_object({}) do |cask, tokens|
+        cask.artifacts.each do |artifact|
+          next unless artifact.is_a?(Cask::Artifact::Symlinked)
+
+          tokens[artifact.target] = cask.token if artifact.target_links_to_source?
+        end
+      end
+    end
+    cask_token = @cask_symlink_tokens[dst]
+    @overwritten_cask_symlinks[dst] = [cask_token, dst.readlink] if cask_token
+    cask_token
   end
 
   protected
@@ -862,7 +913,7 @@ class Keg
 
       if src.symlink? || src.file?
         Find.prune if File.basename(src) == ".DS_Store"
-        resolved_src = src.resolved_path
+        resolved_src = resolved_path(src)
         Find.prune if resolved_src == dst
         # Skip symlinks where the source is located in another keg at the same
         # relative path. Split formulae (e.g. llvm + flang) can use these when
@@ -880,7 +931,7 @@ class Keg
           next if File.basename(src) == "dir" # skip historical local 'dir' files
 
           make_relative_symlink(dst, src, verbose:, dry_run:, overwrite:)
-          dst.install_info
+          Utils::Path.install_info(dst, verbose: ObserverPathnameExtension.verbose?)
         else
           make_relative_symlink dst, src, verbose:, dry_run:, overwrite:
         end

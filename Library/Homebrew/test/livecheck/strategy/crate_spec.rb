@@ -85,9 +85,23 @@ RSpec.describe Homebrew::Livecheck::Strategy::Crate do
     it "finds versions in fetched content" do
       allow(Homebrew::Livecheck::Strategy).to receive(:page_content).and_return({ content: })
 
+      expect(Homebrew::Livecheck::Strategy).to receive(:page_content)
+        .at_least(:once)
+        .with(generated[:url], options: Homebrew::Livecheck::Options.new(user_agent: :browser))
       expect(crate.find_versions(url: crate_url, regex:))
         .to eq(match_data[:fetched].merge({ regex: }))
       expect(crate.find_versions(url: crate_url)).to eq(match_data[:fetched])
+    end
+
+    it "finds versions in fetched content using explicit user_agent" do
+      allow(Homebrew::Livecheck::Strategy).to receive(:page_content).and_return({ content: })
+
+      options = Homebrew::Livecheck::Options.new(user_agent: :curl)
+      expect(Homebrew::Livecheck::Strategy).to receive(:page_content)
+        .at_least(:once)
+        .with(generated[:url], options:)
+      expect(crate.find_versions(url: crate_url, options:))
+        .to eq(match_data[:fetched])
     end
 
     it "finds versions in provided content" do

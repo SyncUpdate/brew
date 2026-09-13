@@ -2,11 +2,15 @@
 # frozen_string_literal: true
 
 require "version"
+require "utils/output"
+require "utils/popen"
 
 # Helper class for gathering information about development tools.
 #
 # @api public
 class DevelopmentTools
+  extend Utils::Output::Mixin
+
   class << self
     # Locate a development tool.
     #
@@ -66,7 +70,7 @@ class DevelopmentTools
     def clang_version_output
       @clang_version_output ||= T.let(
         if (path = locate("clang"))
-          `#{path} --version`
+          Utils.popen_read_text(path, "--version", err: :err)
         end, T.nilable(String)
       )
     end
@@ -91,7 +95,7 @@ class DevelopmentTools
     sig { returns(Version) }
     def clang_build_version
       @clang_build_version ||= T.let(
-        if (build_version = clang_version_output&.[](%r{clang(-| version [^ ]+ \(tags/RELEASE_)(\d{2,})}, 2))
+        if (build_version = clang_version_output&.[](%r{clang(?:-| version [^ ]+ \(tags/RELEASE_)(\d{2,})}, 1))
           Version.new(build_version)
         else
           Version::NULL
@@ -101,12 +105,22 @@ class DevelopmentTools
 
     # Get the LLVM Clang build version.
     #
+    # @deprecated Query the required LLVM compiler with `--version` instead.
     # @api public
     sig { returns(Version) }
     def llvm_clang_build_version
-      @llvm_clang_build_version ||= T.let(begin
+      odeprecated "DevelopmentTools.llvm_clang_build_version", "the required LLVM compiler's `--version` output"
+
+      llvm_clang_version
+    end
+
+    # @api private
+    sig { returns(Version) }
+    def llvm_clang_version
+      @llvm_clang_version ||= T.let(begin
         path = Formula["llvm"].opt_prefix/"bin/clang"
-        if path.executable? && (build_version = `#{path} --version`[/clang version (\d+\.\d\.\d)/, 1])
+        if path.executable? &&
+           (build_version = Utils.popen_read_text(path, "--version", err: :err)[/clang version (\d+\.\d\.\d)/, 1])
           Version.new(build_version)
         else
           Version::NULL
@@ -130,7 +144,9 @@ class DevelopmentTools
         path = HOMEBREW_PREFIX/"opt/#{CompilerSelector.preferred_gcc}/bin"/cc
         path = locate(cc) unless path.exist?
         version = if path &&
-                     (build_version = `#{path} --version`[/gcc(?:(?:-\d+(?:\.\d)?)? \(.+\))? (\d+\.\d\.\d)/, 1])
+                     (build_version = Utils.popen_read_text(path, "--version", err: :err)[
+                       /gcc(?:(?:-\d+(?:\.\d)?)? \(.+\))? (\d+\.\d\.\d)/, 1
+                     ])
           Version.new(build_version)
         else
           Version::NULL
@@ -142,7 +158,7 @@ class DevelopmentTools
     sig { void }
     def clear_version_cache
       @clang_version_output = T.let(nil, T.nilable(String))
-      @clang_version = @clang_build_version = T.let(nil, T.nilable(Version))
+      @clang_version = @clang_build_version = @llvm_clang_version = T.let(nil, T.nilable(Version))
       @gcc_version = T.let({}, T.nilable(T::Hash[String, Version]))
     end
 
@@ -162,20 +178,13 @@ class DevelopmentTools
     end
 
     sig { returns(T::Boolean) }
-    def ca_file_handles_most_https_certificates?
-      # The system CA file is too old for some modern HTTPS certificates on
-      # older OS versions.
-      ENV["HOMEBREW_SYSTEM_CA_CERTIFICATES_TOO_OLD"].nil?
-    end
-
-    sig { returns(T::Boolean) }
     def curl_handles_most_https_certificates?
       true
     end
 
     sig { returns(T::Boolean) }
     def ca_file_substitution_required?
-      (!ca_file_handles_most_https_certificates? || ENV["HOMEBREW_FORCE_BREWED_CA_CERTIFICATES"].present?) &&
+      ENV["HOMEBREW_FORCE_BREWED_CA_CERTIFICATES"].present? &&
         !(HOMEBREW_PREFIX/"etc/ca-certificates/cert.pem").exist?
     end
 

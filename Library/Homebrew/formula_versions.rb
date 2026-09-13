@@ -11,6 +11,49 @@ class FormulaVersions
   include Context
   include Utils::Output::Mixin
 
+  # Parses bottle syntax that was removed in February 2021 without exposing it
+  # to normal formula loading.
+  class LegacyBottleSpecification < BottleSpecification
+    sig { override.void }
+    def initialize
+      super
+      @legacy_cellar = T.let(nil, T.nilable(T.any(Symbol, String)))
+    end
+
+    sig { override.params(hash: T::Hash[T.any(Symbol, String), T.any(String, Symbol)]).void }
+    def sha256(hash)
+      legacy = hash.find do |key, value|
+        key.is_a?(String) && key.match?(/^[a-f0-9]{64}$/i) && value.is_a?(Symbol)
+      end
+      return super if legacy.nil?
+
+      digest, tag = legacy
+      converted = T.let({ tag => digest }, T::Hash[T.any(Symbol, String), T.any(String, Symbol)])
+      cellar = hash[:cellar] || @legacy_cellar
+      converted[:cellar] = cellar unless cellar.nil?
+      super(converted)
+    end
+
+    sig { params(value: T.any(Symbol, String)).returns(T.any(Symbol, String)) }
+    def cellar(value)
+      @legacy_cellar = value
+    end
+  end
+
+  @legacy_formula_class = T.let(nil, T.nilable(T.class_of(Formula)))
+
+  sig { returns(T.class_of(Formula)) }
+  def self.legacy_formula_class
+    @legacy_formula_class ||= Class.new(Formula) do
+      class << self
+        define_method(:inherited) do |child|
+          super(child)
+          child.stable&.instance_variable_set(:@bottle_specification, LegacyBottleSpecification.new)
+        end
+      end
+    end
+  end
+
   IGNORED_EXCEPTIONS = [
     ArgumentError, NameError, SyntaxError, TypeError, LegacyDSLError,
     FormulaSpecificationError, FormulaValidationError,
@@ -24,8 +67,8 @@ class FormulaVersions
     @repository = T.let(formula.tap!.path, Pathname)
     @relative_path = T.let(@path.relative_path_from(repository).to_s, String)
     # Also look at e.g. older homebrew-core paths before sharding.
-    if (match = @relative_path.match(%r{^(HomebrewFormula|Formula)/([a-z]|lib)/(.+)}))
-      @old_relative_path = T.let("#{match[1]}/#{match[3]}", T.nilable(String))
+    if (match = @relative_path.match(%r{^(HomebrewFormula|Formula)/(?:[a-z]|lib)/(.+)}))
+      @old_relative_path = T.let("#{match[1]}/#{match[2]}", T.nilable(String))
     end
     @formula_at_revision = T.let({}, T::Hash[String, Formula])
   end
@@ -53,19 +96,37 @@ class FormulaVersions
   def formula_at_revision(revision, formula_relative_path = relative_path, &_block)
     Homebrew.raise_deprecation_exceptions = true
 
-    yield @formula_at_revision[revision] ||= begin
-      contents = file_contents_at_revision(revision, formula_relative_path)
-      nostdout { Formulary.from_contents(name, path, contents, ignore_errors: true) }
-    end
-  rescue *IGNORED_EXCEPTIONS => e
-    require "utils/backtrace"
+    formula = @formula_at_revision[revision] || begin
+      nostdout do
+        Formulary.from_contents(
+          name,
+          path,
+          file_contents_at_revision(revision, formula_relative_path)
+            .sub(/\A(?:(?:[ \t]*#[^\n]*\n|[ \t]*\n)|(?:=begin[^\n]*(?:\n|\z).*?^=end[^\n]*(?:\n|\z)))*/m) do |header|
+              "#{header}Formula = ::FormulaVersions.legacy_formula_class;"
+            end,
+          ignore_errors: true,
+        )
+      end
+    rescue FormulaUnavailableError
+      nil
+    rescue Homebrew::UntrustedTapError, MacOSVersion::Error
+      raise
+    rescue StandardError, ScriptError => e
+      raise if Homebrew::EnvConfig.disable_load_formula?
 
-    # We rescue these so that we can skip bad versions and
-    # continue walking the history
-    odebug "#{e} in #{name} at revision #{revision}", Utils::Backtrace.clean(e)
-    nil
-  rescue FormulaUnavailableError
-    nil
+      require "utils/backtrace"
+
+      # We rescue these so that we can skip bad versions and
+      # continue walking the history
+      odebug "#{e} in #{name} at revision #{revision}", Utils::Backtrace.clean(e)
+      nil
+    end
+
+    return if formula.nil?
+
+    @formula_at_revision[revision] = formula
+    yield formula
   ensure
     Homebrew.raise_deprecation_exceptions = false
   end
@@ -95,7 +156,7 @@ class FormulaVersions
     if verbose?
       yield
     else
-      redirect_stdout(File::NULL, &block)
+      Utils::Output.redirect_stdout(File::NULL, &block)
     end
   end
 end

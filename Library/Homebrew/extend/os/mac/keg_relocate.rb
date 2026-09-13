@@ -43,7 +43,7 @@ module OS
 
         linkage_files = []
         candidates.each do |file|
-          file.ensure_writable do
+          Utils::Path.ensure_writable(file.to_path) do
             modified = T.let(false, T::Boolean)
 
             if file.dylib? && (dylib_id = file.dylib_id) && (id = relocated_name_for(dylib_id, relocation))
@@ -79,7 +79,7 @@ module OS
       def fix_dynamic_linkage
         fixed_files = []
         mach_o_files.each do |file|
-          file.ensure_writable do
+          Utils::Path.ensure_writable(file.to_path) do
             modified = T.let(false, T::Boolean)
 
             modified = change_dylib_id(dylib_id_for(file), file, write: false) if file.dylib?
@@ -178,7 +178,9 @@ module OS
 
       sig { params(file: MachOShim).returns(String) }
       def dylib_id_for(file)
-        dylib_id = T.must(file.dylib_id)
+        dylib_id = file.dylib_id
+        raise ArgumentError, "#{file} has no dylib ID" if dylib_id.nil?
+
         # Swift dylib IDs should be /usr/lib/swift
         return dylib_id if dylib_id.start_with?("/usr/lib/swift/libswift")
 
@@ -217,11 +219,7 @@ module OS
 
       sig { params(bad_name: String).returns(String) }
       def find_dylib_suffix_from(bad_name)
-        if (framework = bad_name.match(FRAMEWORK_RX))
-          T.must(framework[1])
-        else
-          File.basename(bad_name)
-        end
+        bad_name[FRAMEWORK_RX, 1] || File.basename(bad_name)
       end
 
       sig { params(bad_name: String).returns(T.nilable(::Pathname)) }

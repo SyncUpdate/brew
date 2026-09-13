@@ -122,6 +122,10 @@ begin
     # `Homebrew::Help.help` never returns, except for unknown and deferred commands.
   end
 
+  if !help_flag && (internal_cmd || external_ruby_v2_cmd || external_ruby_cmd_path || external_cmd_path)
+    Homebrew::EnvConfig.check_deprecated_bash_variables
+  end
+
   if cmd.nil?
     raise UsageError, "Unknown command: brew #{ARGV.join(" ")}"
   elsif internal_cmd || external_ruby_v2_cmd
@@ -142,19 +146,7 @@ begin
       Utils::Analytics.report_command_run(command_instance)
       command_instance.run
     else
-      Utils::Output.odisabled "Calling `brew #{cmd}` without subclassing `AbstractCommand`",
-                              "subclassing of `Homebrew::AbstractCommand` " \
-                              "(see https://docs.brew.sh/External-Commands)"
-      begin
-        Homebrew.public_send Commands.method_name(cmd)
-      rescue NoMethodError => e
-        converted_cmd = cmd.downcase.tr("-", "_")
-        case_error = "undefined method `#{converted_cmd}' for module Homebrew"
-        private_method_error = "private method `#{converted_cmd}' called for module Homebrew"
-        Utils::Output.odie "Unknown command: brew #{cmd}" if [case_error, private_method_error].include?(e.message)
-
-        raise
-      end
+      Utils::Output.odie "Unknown command: brew #{cmd}"
     end
   elsif external_ruby_cmd_path
     Homebrew.running_command = cmd

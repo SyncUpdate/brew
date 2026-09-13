@@ -54,6 +54,7 @@ module Cask
           "context" => {
             "name"          => cask.name,
             "token"         => cask.token,
+            "arch"          => cask.arch,
             "version"       => cask.version.to_s,
             "staged_path"   => cask.staged_path.to_s,
             "caskroom_path" => cask.caskroom_path.to_s,

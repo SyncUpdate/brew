@@ -1,8 +1,11 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "utils/editor"
+
 require "fileutils"
 require "utils/output"
+require "utils/shell"
 
 module Homebrew
   module Aliases
@@ -93,7 +96,7 @@ module Homebrew
 
         script.open("w") do |f|
           f.write <<~EOS
-            #! #{`which bash`.chomp}
+            #! #{Utils::Shell.which("bash")}
             # alias: brew #{name}
             #{content}
           EOS
@@ -113,7 +116,7 @@ module Homebrew
       sig { void }
       def edit
         write(override: false)
-        exec_editor script.to_s
+        Utils::Editor.open script.to_s
       end
     end
   end

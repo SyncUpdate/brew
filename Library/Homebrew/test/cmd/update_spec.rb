@@ -12,7 +12,7 @@ RSpec.describe Homebrew::Cmd::Update do
     (repository_root/"tmp").mkpath
     Pathname(Dir.mktmpdir("brew-update-", repository_root/"tmp"))
   end
-  let(:repository_root) { Pathname(T.must(__dir__)).parent.parent.parent.parent }
+  let(:repository_root) { HOMEBREW_LIBRARY_PATH.parent.parent }
 
   after do
     FileUtils.rm_rf test_root
@@ -34,6 +34,42 @@ RSpec.describe Homebrew::Cmd::Update do
       FileUtils.ln_s repository_root/"Library/Homebrew/utils/#{name}.sh",
                      test_root/"Library/Homebrew/utils/#{name}.sh"
     end
+  end
+
+  it "detects shallow clones and their linked worktrees but not full clones" do
+    setup_update_utils
+    FileUtils.ln_s repository_root/"Library/Homebrew/shims", test_root/"Library/Homebrew/shims"
+    repositories = test_root/"repositories"
+
+    stdout, stderr, status = run_update_shell(
+      <<~SH,
+        source "#{update_script}"
+        git() {
+          "#{Utils::Git.git}" -c init.defaultBranch=main -c user.name=Homebrew \\
+            -c user.email=homebrew@example.com "$@"
+        }
+        mkdir -p "#{repositories}" && cd "#{repositories}"
+        git init -q remote
+        git -C remote commit -q --allow-empty -m init
+        git clone -q remote full
+        git clone -q --depth 1 "file://#{repositories}/remote" shallow
+        git -C shallow worktree add -q --detach "#{repositories}/shallow-worktree"
+        for repository in full shallow shallow-worktree missing
+        do
+          if shallow_repository "#{repositories}/${repository}"
+          then
+            echo "${repository}: shallow"
+          else
+            echo "${repository}: full"
+          fi
+        done
+      SH
+      { "HOMEBREW_LIBRARY" => (test_root/"Library").to_s },
+    )
+
+    expect([status.success?, stdout]).to eq(
+      [true, "full: full\nshallow: shallow\nshallow-worktree: shallow\nmissing: full\n"],
+    ), stderr
   end
 
   it "retries a failed conditional API download without the time condition" do
@@ -102,6 +138,23 @@ RSpec.describe Homebrew::Cmd::Update do
       "Warning: Use `brew upgrade testball --auto-update --merge` to upgrade formulae; running it instead.\n",
     )
     expect(args_file.read).to eq("upgrade\ntestball\n--auto-update\n--merge\n")
+  end
+
+  it "disables `--merge` in the shell implementation" do
+    setup_update_utils
+
+    _stdout, stderr, status = run_update_shell(
+      <<~SH,
+        source "#{update_script}"
+        odie() { echo "Error: $*" >&2; exit 1; }
+        homebrew-update --merge
+      SH
+      { "HOMEBREW_LIBRARY" => (test_root/"Library").to_s },
+    )
+
+    expect([status.success?, stderr]).to eq(
+      [false, "Error: Calling the `--merge` switch is disabled! There is no replacement.\n"],
+    )
   end
 
   it "passes `--auto-update` through to `update-report`" do

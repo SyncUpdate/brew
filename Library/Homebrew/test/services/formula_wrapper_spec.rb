@@ -13,16 +13,16 @@ RSpec.describe Homebrew::Services::FormulaWrapper, :needs_daemon_manager do
                     name:                   "mysql",
                     plist_name:             "sh.brew.mysql",
                     plist_names:            ["sh.brew.mysql"],
-                    service_name:           "homebrew.mysql",
-                    service_names:          ["homebrew.mysql", "sh.brew.mysql"],
+                    service_name:           "sh.brew.mysql",
+                    service_names:          ["sh.brew.mysql", "homebrew.mysql"],
                     launchd_service_path:   Pathname.new("/usr/local/opt/mysql/sh.brew.mysql.plist"),
                     launchd_service_paths:  [Pathname.new("/usr/local/opt/mysql/sh.brew.mysql.plist")],
-                    systemd_service_path:   Pathname.new("/usr/local/opt/mysql/homebrew.mysql.service"),
-                    systemd_service_paths:  [Pathname.new("/usr/local/opt/mysql/homebrew.mysql.service"),
-                                             Pathname.new("/usr/local/opt/mysql/sh.brew.mysql.service")],
-                    systemd_timer_path:     Pathname.new("/usr/local/opt/mysql/homebrew.mysql.timer"),
-                    systemd_timer_paths:    [Pathname.new("/usr/local/opt/mysql/homebrew.mysql.timer"),
-                                             Pathname.new("/usr/local/opt/mysql/sh.brew.mysql.timer")],
+                    systemd_service_path:   Pathname.new("/usr/local/opt/mysql/sh.brew.mysql.service"),
+                    systemd_service_paths:  [Pathname.new("/usr/local/opt/mysql/sh.brew.mysql.service"),
+                                             Pathname.new("/usr/local/opt/mysql/homebrew.mysql.service")],
+                    systemd_timer_path:     Pathname.new("/usr/local/opt/mysql/sh.brew.mysql.timer"),
+                    systemd_timer_paths:    [Pathname.new("/usr/local/opt/mysql/sh.brew.mysql.timer"),
+                                             Pathname.new("/usr/local/opt/mysql/homebrew.mysql.timer")],
                     opt_prefix:             Pathname.new("/usr/local/opt/mysql"),
                     any_version_installed?: true,
                     service?:               false)
@@ -74,7 +74,7 @@ RSpec.describe Homebrew::Services::FormulaWrapper, :needs_daemon_manager do
 
     it "systemD - outputs the full service file path" do
       allow(Homebrew::Services::System).to receive_messages(launchctl?: false, systemctl?: true)
-      expect(service.service_file.to_s).to eq("/usr/local/opt/mysql/homebrew.mysql.service")
+      expect(service.service_file.to_s).to eq("/usr/local/opt/mysql/sh.brew.mysql.service")
     end
 
     it "Other - raises an error" do
@@ -110,7 +110,7 @@ RSpec.describe Homebrew::Services::FormulaWrapper, :needs_daemon_manager do
     end
 
     it "uses the compatible systemd service file when it is the only one present" do
-      service_files = [mktmpdir/"homebrew.mysql.service", mktmpdir/"sh.brew.mysql.service"]
+      service_files = [mktmpdir/"sh.brew.mysql.service", mktmpdir/"homebrew.mysql.service"]
       service_files.last.write("service")
       allow(Homebrew::Services::System).to receive_messages(launchctl?: false, systemctl?: true)
       allow(formula).to receive(:systemd_service_paths).and_return(service_files)
@@ -121,12 +121,12 @@ RSpec.describe Homebrew::Services::FormulaWrapper, :needs_daemon_manager do
 
   describe "#timer_file" do
     it "uses the compatible systemd timer file when it is the only one present" do
-      timer_files = [mktmpdir/"homebrew.mysql.timer", mktmpdir/"sh.brew.mysql.timer"]
+      timer_files = [mktmpdir/"sh.brew.mysql.timer", mktmpdir/"homebrew.mysql.timer"]
       timer_files.last.write("timer")
       allow(Homebrew::Services::System).to receive_messages(launchctl?: false, systemctl?: true)
       allow(formula).to receive(:systemd_timer_paths).and_return(timer_files)
 
-      expect([service.timer_file, service.timer_name]).to eq([timer_files.last, "homebrew.mysql.timer"])
+      expect([service.timer_file, service.timer_name]).to eq([timer_files.last, "sh.brew.mysql.timer"])
     end
   end
 
@@ -217,7 +217,7 @@ RSpec.describe Homebrew::Services::FormulaWrapper, :needs_daemon_manager do
 
     it "systemD - outputs the service name" do
       allow(Homebrew::Services::System).to receive_messages(launchctl?: false, systemctl?: true)
-      expect(service.service_name).to eq("homebrew.mysql")
+      expect(service.service_name).to eq("sh.brew.mysql")
     end
 
     it "Other - raises an error" do
@@ -240,7 +240,7 @@ RSpec.describe Homebrew::Services::FormulaWrapper, :needs_daemon_manager do
     it "includes both compatible default systemd labels" do
       allow(Homebrew::Services::System).to receive_messages(launchctl?: false, systemctl?: true)
 
-      expect(service.service_names).to eq(["homebrew.mysql", "sh.brew.mysql"])
+      expect(service.service_names).to eq(["sh.brew.mysql", "homebrew.mysql"])
     end
   end
 
@@ -285,15 +285,15 @@ RSpec.describe Homebrew::Services::FormulaWrapper, :needs_daemon_manager do
 
     it "systemD - outputs the destination for the service file" do
       allow(Homebrew::Services::System).to receive(:systemctl?).and_return(true)
-      expect(service.dest.to_s).to eq("/tmp_home/.config/systemd/user/homebrew.mysql.service")
+      expect(service.dest.to_s).to eq("/tmp_home/.config/systemd/user/sh.brew.mysql.service")
     end
 
     it "systemD - includes both compatible destinations" do
       allow(Homebrew::Services::System).to receive_messages(launchctl?: false, systemctl?: true)
 
       expect(service.destinations.map(&:to_s)).to eq([
-        "/tmp_home/.config/systemd/user/homebrew.mysql.service",
         "/tmp_home/.config/systemd/user/sh.brew.mysql.service",
+        "/tmp_home/.config/systemd/user/homebrew.mysql.service",
       ])
     end
   end
@@ -303,8 +303,8 @@ RSpec.describe Homebrew::Services::FormulaWrapper, :needs_daemon_manager do
       allow(Homebrew::Services::System).to receive_messages(launchctl?: false, systemctl?: true)
 
       expect(service.timer_destinations.map(&:to_s)).to eq([
-        "/tmp_home/.config/systemd/user/homebrew.mysql.timer",
         "/tmp_home/.config/systemd/user/sh.brew.mysql.timer",
+        "/tmp_home/.config/systemd/user/homebrew.mysql.timer",
       ])
     end
   end
@@ -393,13 +393,13 @@ RSpec.describe Homebrew::Services::FormulaWrapper, :needs_daemon_manager do
       allow(Homebrew::Services::System).to receive_messages(launchctl?: false, systemctl?: true)
       allow(service).to receive(:timed?).and_return(true)
       expect(Homebrew::Services::System::Systemctl).to receive(:quiet_run)
-        .with("status", "homebrew.mysql.timer")
+        .with("status", "sh.brew.mysql.timer")
         .and_return(true)
       expect(Homebrew::Services::System::Systemctl).to receive(:quiet_run)
-        .with("status", "sh.brew.mysql.timer")
+        .with("status", "homebrew.mysql.timer")
         .and_return(false)
       expect(Homebrew::Services::System::Systemctl).to receive(:quiet_run)
-        .with("status", "sh.brew.mysql.service")
+        .with("status", "homebrew.mysql.service")
         .and_return(false)
 
       expect(service.loaded?).to be(true)
@@ -410,53 +410,74 @@ RSpec.describe Homebrew::Services::FormulaWrapper, :needs_daemon_manager do
       allow(service).to receive(:timed?).and_return(true)
       allow(Homebrew::Services::System::Systemctl).to receive(:quiet_run).and_return(false)
       expect(Homebrew::Services::System::Systemctl).to receive(:quiet_run)
-        .with("status", "sh.brew.mysql.service").and_return(true)
+        .with("status", "homebrew.mysql.service").and_return(true)
 
-      expect(service.loaded_service_names).to eq(["sh.brew.mysql"])
+      expect(service.loaded_service_names).to eq(["homebrew.mysql"])
     end
 
     it "finds a service loaded with the compatible systemd label" do
       allow(Homebrew::Services::System).to receive_messages(launchctl?: false, systemctl?: true)
       expect(Homebrew::Services::System::Systemctl).to receive(:quiet_run)
-        .with("status", "homebrew.mysql.service").and_return(false)
+        .with("status", "sh.brew.mysql.service").and_return(false)
       expect(Homebrew::Services::System::Systemctl).to receive(:quiet_run)
-        .with("status", "sh.brew.mysql.service").and_return(true)
+        .with("status", "homebrew.mysql.service").and_return(true)
 
-      expect(service.loaded_service_names).to eq(["sh.brew.mysql"])
+      expect(service.loaded_service_names).to eq(["homebrew.mysql"])
     end
 
     it "caches compatible systemd loaded-name probes" do
       allow(Homebrew::Services::System).to receive_messages(launchctl?: false, systemctl?: true)
       expect(Homebrew::Services::System::Systemctl).to receive(:quiet_run)
-        .with("status", "homebrew.mysql.service").once.and_return(false)
+        .with("status", "sh.brew.mysql.service").once.and_return(false)
       expect(Homebrew::Services::System::Systemctl).to receive(:quiet_run)
-        .with("status", "sh.brew.mysql.service").once.and_return(true)
+        .with("status", "homebrew.mysql.service").once.and_return(true)
 
       expect([
         service.loaded?,
         service.loaded?(cached: true),
         service.loaded_service_names,
-      ]).to eq([true, true, ["sh.brew.mysql"]])
+      ]).to eq([true, true, ["homebrew.mysql"]])
     end
 
     it "reports the active compatible systemd label" do
       allow(Homebrew::Services::System).to receive_messages(launchctl?: false, systemctl?: true)
       allow(Homebrew::Services::System::Systemctl).to receive(:popen_read)
-        .with("status", "sh.brew.mysql.service").and_return("Main PID: 123 (mysqld)")
-      allow(service).to receive(:loaded_service_names).and_return(["sh.brew.mysql"])
+        .with("status", "homebrew.mysql.service").and_return("Main PID: 123 (mysqld)")
+      allow(service).to receive(:loaded_service_names).and_return(["homebrew.mysql"])
 
-      expect(service.active_service_name).to eq("sh.brew.mysql")
+      expect(service.active_service_name).to eq("homebrew.mysql")
     end
 
     it "finds a running compatible systemd service when its timer is inactive" do
       allow(Homebrew::Services::System).to receive_messages(launchctl?: false, systemctl?: true)
       allow(service).to receive_messages(timed?: true, loaded_service_names: [])
       allow(Homebrew::Services::System::Systemctl).to receive(:popen_read)
-        .with("status", "homebrew.mysql.service").and_return("Active: inactive (dead)")
+        .with("status", "sh.brew.mysql.service").and_return("Active: inactive (dead)")
       allow(Homebrew::Services::System::Systemctl).to receive(:popen_read)
-        .with("status", "sh.brew.mysql.service").and_return("Main PID: 123 (mysqld)")
+        .with("status", "homebrew.mysql.service").and_return("Main PID: 123 (mysqld)")
 
-      expect(service.active_service_name).to eq("sh.brew.mysql")
+      expect(service.active_service_name).to eq("homebrew.mysql")
+    end
+
+    it "reports a failed legacy systemd service when the canonical unit is absent" do
+      output = <<~EOS
+        ● homebrew.mysql.service - Homebrew MySQL service
+             Loaded: loaded (/tmp/homebrew.mysql.service; enabled)
+             Active: failed (Result: exit-code)
+            Process: 123 ExecStart=/bin/false (code=exited, status=1)
+      EOS
+      allow(Homebrew::Services::System).to receive_messages(launchctl?: false, systemctl?: true)
+      allow(service).to receive(:loaded_service_names).and_return([])
+      expect(Homebrew::Services::System::Systemctl).to receive(:popen_read)
+        .with("status", "sh.brew.mysql.service").and_return("")
+      expect(Homebrew::Services::System::Systemctl).to receive(:popen_read)
+        .with("status", "homebrew.mysql.service").and_return(output)
+
+      expect([
+        service.active_service_name,
+        service.exit_code,
+        service.loaded_file,
+      ]).to eq(["homebrew.mysql", 1, "/tmp/homebrew.mysql.service"])
     end
 
     it "Other - raises an error" do
@@ -578,10 +599,10 @@ RSpec.describe Homebrew::Services::FormulaWrapper, :needs_daemon_manager do
 
     it "prefers the systemd service file matching the active compatible label" do
       allow(Homebrew::Services::System).to receive_messages(launchctl?: false, root?: false, systemctl?: true)
-      allow(service).to receive_messages(active_service_name: "sh.brew.mysql", dest_dir: mktmpdir)
+      allow(service).to receive_messages(active_service_name: "homebrew.mysql", dest_dir: mktmpdir)
       service.destinations.each { |destination| destination.write("service") }
 
-      expect(service.registered_destination.basename.to_s).to eq("sh.brew.mysql.service")
+      expect(service.registered_destination.basename.to_s).to eq("homebrew.mysql.service")
     end
   end
 
@@ -630,10 +651,10 @@ RSpec.describe Homebrew::Services::FormulaWrapper, :needs_daemon_manager do
       allow(Homebrew::Services::System).to receive_messages(launchctl?: false, systemctl?: true)
       allow(Formulary).to receive(:factory).with("mysql").and_return(formula)
 
-      discovered_service = described_class.from("/tmp/sh.brew.mysql.service")
+      discovered_service = described_class.from("/tmp/homebrew.mysql.service")
       raise "Expected service to be discovered" unless discovered_service
 
-      expect(discovered_service.service_names).to eq(["sh.brew.mysql"])
+      expect(discovered_service.service_names).to eq(["homebrew.mysql"])
     end
   end
 

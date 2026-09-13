@@ -1,6 +1,8 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "utils/text"
+
 require "diagnostic"
 require "diagnostic/finding"
 require "fileutils"
@@ -37,11 +39,8 @@ module Homebrew
       def check_cc_argv(cc)
         return unless cc
 
-        opoo <<~EOS
-          You passed `--cc=#{cc}`.
-
-          #{Diagnostic::Finding.support_tier_message(tier: 3)}
-        EOS
+        opoo "You passed `--cc=#{cc}`."
+        Diagnostic.support_tiers << 3
       end
 
       sig { params(all_fatal: T::Boolean).void }
@@ -290,7 +289,7 @@ module Homebrew
                                  cask_names.map { |name| Formatter.identifier(name) }
         return if combined_fetch_targets.empty?
 
-        "Fetching downloads for: #{combined_fetch_targets.to_sentence}"
+        "Fetching downloads for: #{Utils::Text.to_sentence(combined_fetch_targets)}"
       end
 
       # Leave the cask downloads queued so the caller fetches them alongside
@@ -690,7 +689,7 @@ module Homebrew
       def outdated_kegs(formula)
         [formula, *formula.old_installed_formulae].map(&:linked_keg)
                                                   .select(&:directory?)
-                                                  .map { |k| Keg.new(k.resolved_path) }
+                                                  .map { |k| Keg.new(Utils::Path.resolved_path(k)) }
       end
 
       sig { void }

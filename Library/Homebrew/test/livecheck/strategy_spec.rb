@@ -286,13 +286,68 @@ RSpec.describe Homebrew::Livecheck::Strategy do
     it "returns an empty array if `curl_headers` only raises an `ErrorDuringExecution` error" do
       allow(strategy).to receive(:curl_headers).and_raise(ErrorDuringExecution.new([], status: 1))
 
+      # TODO: Remove this line when removing the user agent fallback logic
+      expect(Utils::Output).not_to receive(:odeprecated)
+
       expect(strategy.page_headers(url)).to eq([])
+    end
+
+    it "returns an empty array if `curl_headers` returns a hash without responses" do
+      allow(strategy).to receive(:curl_headers).and_return({})
+
+      # TODO: Remove this line when removing the user agent fallback logic
+      expect(Utils::Output).not_to receive(:odeprecated)
+
+      expect(strategy.page_headers(url)).to eq([])
+    end
+
+    # TODO: Remove this block when removing the user agent fallback logic
+    context "when the `:default` user agent request fails" do
+      before do
+        allow(strategy).to receive(:curl_headers) do |*_args, user_agent:, **|
+          raise ErrorDuringExecution.new([], status: 1) if user_agent == :default
+
+          { responses:, body: }
+        end
+      end
+
+      it "deprecates the user agent fallback if the `:browser` user agent request succeeds" do
+        expect(Utils::Output).to receive(:odeprecated).with(
+          "the user agent fallback in `page_headers`",
+          "the `user_agent:` option in a `livecheck` block",
+        )
+
+        strategy.page_headers(url)
+      end
+
+      it "returns headers from the `:browser` user agent request" do
+        allow(Utils::Output).to receive(:odeprecated)
+
+        expect(strategy.page_headers(url)).to eq([responses.first[:headers]])
+      end
+    end
+
+    # TODO: Remove this block when removing the user agent fallback logic
+    it "deprecates the user agent fallback if `:default` doesn't return headers but `:browser` succeeds" do
+      allow(strategy).to receive(:curl_headers) do |*_args, user_agent:, **|
+        next { responses: [], body: } if user_agent == :default
+
+        { responses:, body: }
+      end
+
+      expect(Utils::Output).to receive(:odeprecated).with(
+        "the user agent fallback in `page_headers`",
+        "the `user_agent:` option in a `livecheck` block",
+      )
+
+      strategy.page_headers(url)
     end
   end
 
   describe "::page_content" do
     let(:curl_version) { Version.new("8.7.1") }
     let(:success_status) { instance_double(Process::Status, success?: true, exitstatus: 0) }
+    let(:failure_status) { instance_double(Process::Status, success?: false, exitstatus: 1) }
 
     it "returns hash including fetched content" do
       allow_any_instance_of(Utils::Curl).to receive(:curl_version).and_return(curl_version)
@@ -447,11 +502,10 @@ RSpec.describe Homebrew::Livecheck::Strategy do
 
     it "returns default error `messages` in the return hash on failure when `stderr` is `nil`" do
       allow_any_instance_of(Utils::Curl).to receive(:curl_version).and_return(curl_version)
-      allow(strategy).to receive(:curl_output).and_return([
-        nil,
-        nil,
-        instance_double(Process::Status, success?: false, exitstatus: 1),
-      ])
+      allow(strategy).to receive(:curl_output).and_return([nil, nil, failure_status])
+
+      # TODO: Remove this line when removing the user agent fallback logic
+      expect(Utils::Output).not_to receive(:odeprecated)
 
       expect(strategy.page_content(url)).to eq({ messages: ["cURL failed without a detectable error"] })
     end
@@ -461,6 +515,33 @@ RSpec.describe Homebrew::Livecheck::Strategy do
       allow(strategy).to receive(:curl_output).and_return([response_text[:redirection_to_ok], nil, success_status])
 
       expect(strategy.page_content(url)).to eq({ content: body, final_url: redirection_url })
+    end
+
+    # TODO: Remove this block when removing the user agent fallback logic
+    context "when the `:default` user agent request fails" do
+      before do
+        allow_any_instance_of(Utils::Curl).to receive(:curl_version).and_return(curl_version)
+        allow(strategy).to receive(:curl_output) do |*_args, user_agent:, **|
+          next [nil, nil, failure_status] if user_agent == :default
+
+          [response_text[:ok], nil, success_status]
+        end
+      end
+
+      it "deprecates the user agent fallback if the `:browser` user agent request succeeds" do
+        expect(Utils::Output).to receive(:odeprecated).with(
+          "the user agent fallback in `page_content`",
+          "the `user_agent:` option in a `livecheck` block",
+        )
+
+        strategy.page_content(url)
+      end
+
+      it "returns hash including content from the `:browser` user agent request" do
+        allow(Utils::Output).to receive(:odeprecated)
+
+        expect(strategy.page_content(url)).to eq({ content: body })
+      end
     end
   end
 

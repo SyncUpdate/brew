@@ -281,11 +281,10 @@ module Homebrew
       end
 
       sig {
-        params(only: T.nilable(Symbol), ignore_unavailable: T::Boolean, all_kegs: T.nilable(T::Boolean))
+        params(only: T.nilable(Symbol), ignore_unavailable: T::Boolean, method: Symbol)
           .returns([T::Array[Keg], T::Array[Cask::Cask]])
       }
-      def to_kegs_to_casks(only: parent.only_formula_or_cask, ignore_unavailable: false, all_kegs: nil)
-        method = all_kegs ? :kegs : :default_kegs
+      def to_kegs_to_casks(only: parent.only_formula_or_cask, ignore_unavailable: false, method: :default_kegs)
         key = [method, only, ignore_unavailable]
 
         @to_kegs_to_casks ||= T.let(
@@ -559,7 +558,9 @@ module Homebrew
         else
           stable_kegs.max_by(&:scheme_and_version)
         end
-        T.must(latest_keg)
+        raise NoSuchKegError, name if latest_keg.nil?
+
+        latest_keg
       end
 
       sig { params(name: String).returns(Keg) }
@@ -570,8 +571,10 @@ module Homebrew
         opt_prefix = HOMEBREW_PREFIX/"opt/#{rack.basename}"
 
         begin
-          return Keg.new(opt_prefix.resolved_path) if opt_prefix.symlink? && opt_prefix.directory?
-          return Keg.new(linked_keg_ref.resolved_path) if linked_keg_ref.symlink? && linked_keg_ref.directory?
+          return Keg.new(Utils::Path.resolved_path(opt_prefix)) if opt_prefix.symlink? && opt_prefix.directory?
+          if linked_keg_ref.symlink? && linked_keg_ref.directory?
+            return Keg.new(Utils::Path.resolved_path(linked_keg_ref))
+          end
           return kegs.fetch(0) if kegs.length == 1
 
           f = if name.include?("/") || File.exist?(name)
@@ -608,14 +611,14 @@ module Homebrew
         case package
         when Formula, Keg, Array
           message += " For the formula, "
-          if package.is_a?(Formula) && (tap = package.tap)
-            message += "use #{tap.name}/#{package.name} or "
+          if package.is_a?(Formula) && package.tap
+            message += "use #{Utils.fully_qualified_name(package)} or "
           end
           message += "specify the `--formula` flag. To silence this message, use the `--cask` flag."
         when Cask::Cask
           message += " For the cask, "
-          if (tap = package.tap)
-            message += "use #{tap.name}/#{package.token} or "
+          if package.tap
+            message += "use #{Utils.fully_qualified_name(package)} or "
           end
           message += "specify the `--cask` flag. To silence this message, use the `--formula` flag."
         end

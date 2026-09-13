@@ -59,9 +59,9 @@ module RuboCop
         end
 
         # Prefer ftpmirror.gnu.org as suggested by https://www.gnu.org/prep/ftp.en.html
-        gnu_pattern = %r{^(?:https?|ftp)://ftp\.gnu\.org/(.*)}
+        gnu_pattern = %r{^(?:https?|ftp)://ftp\.gnu\.org/(?:gnu/)?(.*)}
         audit_urls(urls, gnu_pattern) do |match, url|
-          problem "#{url} should be: https://ftpmirror.gnu.org/gnu/#{match[1]}"
+          problem "#{url} should be: https://ftpmirror.gnu.org/#{match[1]}"
         end
 
         # Fossies upstream requests they aren't used as primary URLs
@@ -92,7 +92,11 @@ module RuboCop
 
         version_control_pattern = %r{^(cvs|bzr|hg|fossil)://}
         audit_urls(urls, version_control_pattern) do |match, _|
-          problem "Use of the \"#{match[1]}://\" scheme is deprecated, pass `using: :#{match[1]}` instead"
+          if match[1] == "bzr"
+            problem "Use of the \"bzr://\" scheme is deprecated, use Git or a stable archive URL instead"
+          else
+            problem "Use of the \"#{match[1]}://\" scheme is deprecated, pass `using: :#{match[1]}` instead"
+          end
         end
 
         svn_pattern = %r{^svn\+http://}
@@ -154,9 +158,9 @@ module RuboCop
           problem "#{url} should be: https://cpan.metacpan.org/#{match[1]}"
         end
 
-        gnome_pattern = %r{^(http|ftp)://ftp\.gnome\.org/pub/gnome/(.*)}i
+        gnome_pattern = %r{^(?:http|ftp)://ftp\.gnome\.org/pub/gnome/(.*)}i
         audit_urls(urls, gnome_pattern) do |match, url|
-          problem "#{url} should be: https://download.gnome.org/#{match[2]}"
+          problem "#{url} should be: https://download.gnome.org/#{match[1]}"
         end
 
         debian_pattern = %r{^git://anonscm\.debian\.org/users/(.*)}i
@@ -176,7 +180,7 @@ module RuboCop
         end
 
         # SourceForge url patterns
-        sourceforge_patterns = %r{^https?://.*\b(sourceforge|sf)\.(com|net)}
+        sourceforge_patterns = %r{^https?://.*\b(?:sourceforge|sf)\.(?:com|net)}
         audit_urls(urls, sourceforge_patterns) do |_, url|
           # Skip if the URL looks like a SVN repository.
           next if url.include? "/svnroot/"
@@ -254,7 +258,7 @@ module RuboCop
 
         # Check for default branch GitHub archives.
         if type == :formula
-          tarball_gh_pattern = %r{^https://github\.com/.*archive/(main|master)\.(tar\.gz|zip)$}
+          tarball_gh_pattern = %r{^https://github\.com/.*archive/(?:main|master)\.(?:tar\.gz|zip)$}
           audit_urls(urls, tarball_gh_pattern) do
             problem "Use versioned rather than branch tarballs for stable checksums."
           end
@@ -268,17 +272,17 @@ module RuboCop
           problem "Use /archive/ URLs for GitHub tarballs (`url` is #{url})."
         end
 
-        archive_refs_gh_pattern = %r{https://.*github.+/archive/(?![a-fA-F0-9]{40})(?!refs/(tags|heads)/)(.*)\.tar\.gz$}
+        archive_refs_gh_pattern = %r{https://.*github.+/archive/(?![a-fA-F0-9]{40})(?!refs/(?:tags|heads)/)(.*)\.tar\.gz$}
         audit_urls(urls, archive_refs_gh_pattern) do |match, url|
           next if url.end_with?(".git")
 
-          problem %Q(Use "refs/tags/#{match[2]}" or "refs/heads/#{match[2]}" for GitHub references (`url` is #{url}).)
+          problem %Q(Use "refs/tags/#{match[1]}" or "refs/heads/#{match[1]}" for GitHub references (`url` is #{url}).)
         end
 
         # Don't use GitHub .zip files
-        zip_gh_pattern = %r{https://.*github.*/(archive|releases)/.*\.zip$}
+        zip_gh_pattern = %r{https://.*github.*/(?:archive|releases)/.*\.zip$}
         audit_urls(urls, zip_gh_pattern) do |_, url|
-          next if url.match? %r{raw.githubusercontent.com/.*/.*/(main|master|HEAD)/}
+          next if url.match? %r{raw\.githubusercontent\.com/.*/.*/(main|master|HEAD)/}
           next if url.include?("releases/download")
           next if url.include?("desktop.githubusercontent.com/releases/")
 

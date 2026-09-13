@@ -92,9 +92,15 @@ Tier 3 configurations include:
 - Systems that build official packages from source despite available bottles
 - Homebrew installed outside the default prefix (e.g. `/opt/homebrew`, `/usr/local` or `/home/linuxbrew/.linuxbrew` used on mismatched architectures)
 - Homebrew installations managed by Nix (e.g. nix-darwin or nix-homebrew)
+- Homebrew invoked through a third-party wrapper
 - Installing formulae using `--HEAD`
 - Installing deprecated or disabled formulae
 - Intel x86_64 systems running macOS
+
+If you are using a Homebrew wrapper, get support from and file issues with that wrapper instead of Homebrew unless the same problem is reproducible when running Homebrew directly.
+Homebrew's internal `brew` commands invoke Homebrew directly, not the wrapper.
+The legacy `HOMEBREW_FORCE_BREW_WRAPPER`, `HOMEBREW_FORCE_BREW_WRAPPER_HELP_MESSAGE` and `HOMEBREW_NO_FORCE_BREW_WRAPPER` settings are ignored and produce deprecation warnings in Ruby commands.
+`brew doctor` warns if another `brew` executable takes precedence over the current installation in your `PATH`.
 
 ## Unsupported
 
@@ -106,8 +112,8 @@ An unsupported configuration is one in which:
 Unsupported configurations include:
 
 - FreeBSD
-- macOS Mojave 10.14 and earlier
-- Multi-user Homebrew environments where multiple users share the same installation
+- macOS Catalina 10.15 and earlier
+- Multi-user Homebrew environments where multiple users share the same installation, including through a setuid wrapper that switches to the installation's owner
 - Beowulf clusters
 - Nokia 3210s
 - CPUs built inside of Minecraft
@@ -121,28 +127,20 @@ While Homebrew may assist third-party maintainers in resolving issues related to
 
 Bugs that occur only when using third-party formulae or casks may be closed without investigation.
 
-If you are using a Homebrew wrapper, get support from and file issues with that wrapper instead of Homebrew unless the same problem is reproducible when running Homebrew directly.
-
 ## Future macOS support
 
 macOS Tahoe 26 is the final version of macOS to run on Intel hardware. In alignment with this change, Homebrew has stopped building new bottles for Intel systems, and will remove the ability to run Homebrew on Intel systems in or after September 2027.
+
+Where Homebrew no longer builds bottles, `brew doctor` suggests [MacPorts](https://www.macports.org) for Intel macOS Sequoia 15 and earlier or older Apple Silicon macOS versions.
+At the time of writing, MacPorts does not provide a full set of binary packages for Intel Tahoe ([builder status](https://build.macports.org/builders/ports-26_x86_64-builder)).
+On Intel Tahoe, `brew doctor` explains that existing bottles may still work, but updated formulae may build from source.
 
 The following timeline outlines expected Tier classifications based on Apple’s release cycle and Homebrew’s CI coverage.
 
 - As of September 2026:
 
   Apple Silicon:
-  - Tier 1: macOS Tahoe 26, Sequoia 15, Sonoma 14
-  - Tier 3: macOS Big Sur 11 through Ventura 13
-
-  Intel x86_64:
-  - Tier 3: macOS Catalina 10.15 through Tahoe 26
-  - Unsupported: macOS Mojave 10.14 and earlier
-
-- Expected in or after September 2026:
-
-  Apple Silicon:
-  - Tier 1: macOS 27, Tahoe 26, Sequoia 15
+  - Tier 1: macOS Golden Gate 27, Tahoe 26, Sequoia 15
   - Tier 3: macOS Big Sur 11 through Sonoma 14
 
   Intel x86_64:
@@ -152,7 +150,7 @@ The following timeline outlines expected Tier classifications based on Apple’s
 - Expected in or after September 2027:
 
   Apple Silicon:
-  - Tier 1: macOS 28, 27, Tahoe 26
+  - Tier 1: macOS 28, Golden Gate 27, Tahoe 26
   - Tier 3: macOS Monterey 12 through Sequoia 15
   - Unsupported: macOS Big Sur 11
 

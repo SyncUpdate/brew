@@ -91,6 +91,13 @@ Raw C strings are the only length-limited content at pour time:
   with NUL bytes; a string in an ELF dynamic string table that a linker has
   suffix-merged (referenced from its interior) is instead padded with extra
   path separators after the prefix so those references keep their offsets.
+  Only NUL-delimited chunks that could be text strings are patched: valid
+  UTF-8 without control characters other than whitespace and up to 16 KiB,
+  an empirical bound (php's configure line, the longest C string found
+  carrying a prefix, is 3740 bytes; `node`'s embedded `config.gypi` JSON
+  exceeds 21 KiB). A prefix inside serialised or length-prefixed data, such
+  as `node`'s V8 startup snapshot and that JSON, is left unrelocated because
+  shifting its neighbours corrupts them (#23808).
 
 `Keg#relocate_build_prefix` (`keg_relocate.rb`) implements that NUL-padded
 patching and re-signs patched Mach-O files, and
@@ -323,8 +330,17 @@ a named, formula-annotated exception:
    audit of known container formats with warnings; the Phase 4
    validation sweep and the test-bot relocated-pour test are the functional
    catch-all; findings become per-formula fixes. NUL padding inside a
-   length-prefixed field can also corrupt rare formats, which the same
-   validation catches.
+   length-prefixed field can also corrupt rare formats: the patcher skips
+   chunks that cannot be text strings, which keeps `node`'s V8 snapshot
+   intact (#23808), and the same validation catches the rest. The bytes
+   alone cannot tell a text payload read by length from a C string, and
+   Rust and Go address strings by length and pack them without NUL
+   separators, so shifting such a chunk corrupts whatever follows the
+   prefix in it. Padding each occurrence with separators instead, as
+   `replace_prefix_preserving_length` already does for suffix-merged string
+   tables and as Spack does throughout, keeps every offset and is the
+   layout-agnostic fix should those cases surface, at the cost of `//` runs
+   in printed paths and in programs comparing paths against the prefix.
 4. **glibc**: relocating the dynamic linker is deliberately skipped because
    patchelf breaks it. Strategy: investigate NUL-padded string patching of
    padded-built glibc (plain C string replacement, a different mechanism

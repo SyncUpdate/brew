@@ -2,6 +2,8 @@
 # frozen_string_literal: true
 
 require "api/env"
+require "utils/text"
+
 require "cask/cask_loader"
 require "cask/denylist"
 require "cask/download"
@@ -13,9 +15,11 @@ require "source_location"
 require "system_command"
 require "utils/backtrace"
 require "formula_name_cask_token_auditor"
+require "install"
 require "utils/curl"
 require "utils/shared_audits"
 require "utils/output"
+require "utils/path"
 
 module Cask
   # Audit a cask for various problems.
@@ -244,9 +248,7 @@ module Cask
 
       # Propagate quarantine attributes from the downloaded file to extracted contents.
       # This is necessary because some extraction tools (like 7zr) don't preserve xattrs.
-      if Quarantine.available? && Quarantine.detect(downloaded_path)
-        Quarantine.propagate(from: downloaded_path, to: @tmpdir)
-      end
+      Quarantine.propagate(from: downloaded_path, to: @tmpdir)
 
       # Process rename operations after extraction
       # Create a temporary installer to process renames in the audit directory
@@ -265,34 +267,10 @@ module Cask
       return if min_os.nil?
       return if min_os.is_a?(String) && min_os.blank?
 
-      min_os = if min_os.is_a?(MacOSVersion)
-        min_os.strip_patch
-      else
-        MacOSVersion.new(min_os).strip_patch
-      end
-
-      # Big Sur is sometimes identified as 10.16, so we override it to the
-      # expected macOS version (11).
-      min_os = MacOSVersion.new("11") if min_os == "10.16"
-
-      min_os
+      min_os = MacOSVersion.new(min_os) unless min_os.is_a?(MacOSVersion)
+      MacOSVersion.new(min_os.release_version)
     rescue MacOSVersion::Error
       nil
-    end
-
-    sig { void }
-    def audit_untrusted_pkg
-      odebug "Auditing pkg stanza: allow_untrusted"
-
-      return if @cask.sourcefile_path.nil?
-
-      tap = @cask.tap
-      return if tap.nil?
-      return if tap.user != "Homebrew"
-
-      return if cask.artifacts.none? { |k| k.is_a?(Artifact::Pkg) && k.stanza_options.key?(:allow_untrusted) }
-
-      add_error "allow_untrusted is not permitted in the official homebrew/cask tap"
     end
 
     sig { void }
@@ -306,40 +284,8 @@ module Cask
     end
 
     sig { void }
-    def audit_single_pre_postflight
-      odebug "Auditing preflight and postflight stanzas"
-
-      if cask.artifacts.count { |k| k.is_a?(Artifact::PreflightBlock) && k.directives.key?(:preflight) } > 1
-        add_error "only a single preflight stanza is allowed"
-      end
-
-      count = cask.artifacts.count do |k|
-        k.is_a?(Artifact::PostflightBlock) &&
-          k.directives.key?(:postflight)
-      end
-      return if count <= 1
-
-      add_error "only a single postflight stanza is allowed"
-    end
-
-    sig { void }
-    def audit_single_uninstall_zap
-      odebug "Auditing single uninstall_* and zap stanzas"
-
-      count = cask.artifacts.count do |k|
-        k.is_a?(Artifact::PreflightBlock) &&
-          k.directives.key?(:uninstall_preflight)
-      end
-
-      add_error "only a single uninstall_preflight stanza is allowed" if count > 1
-
-      count = cask.artifacts.count do |k|
-        k.is_a?(Artifact::PostflightBlock) &&
-          k.directives.key?(:uninstall_postflight)
-      end
-
-      add_error "only a single uninstall_postflight stanza is allowed" if count > 1
-
+    def audit_single_zap
+      odebug "Auditing single zap stanzas"
       return if cask.artifacts.count { |k| k.is_a?(Artifact::Zap) } <= 1
 
       add_error "only a single zap stanza is allowed"
@@ -502,20 +448,18 @@ module Cask
 
       add_livecheck = "please add a livecheck. See #{Formatter.url(LIVECHECK_REFERENCE_URL)}"
 
-      case url.to_s
-      when %r{sourceforge.net/(\S+)}
+      case url.uri.host
+      when /(?:\A|\.)sourceforge\.net\z/
         return unless online?
 
         add_error "Download is hosted on SourceForge, #{add_livecheck}", location: url.location
-      when %r{dl.devmate.com/(\S+)}
+      when "dl.devmate.com"
         add_error "Download is hosted on DevMate, #{add_livecheck}", location: url.location
-      when %r{rink.hockeyapp.net/(\S+)}
-        add_error "Download is hosted on HockeyApp, #{add_livecheck}", location: url.location
       end
     end
 
-    SOURCEFORGE_OSDN_REFERENCE_URL = "https://docs.brew.sh/Cask-Cookbook#sourceforgeosdn-urls"
-    private_constant :SOURCEFORGE_OSDN_REFERENCE_URL
+    SOURCEFORGE_REFERENCE_URL = "https://docs.brew.sh/Cask-Cookbook#sourceforge-urls"
+    private_constant :SOURCEFORGE_REFERENCE_URL
 
     sig { void }
     def audit_download_url_format
@@ -524,7 +468,7 @@ module Cask
       odebug "Auditing URL format"
       return unless bad_sourceforge_url?
 
-      add_error "SourceForge URL format incorrect. See #{Formatter.url(SOURCEFORGE_OSDN_REFERENCE_URL)}",
+      add_error "SourceForge URL format incorrect. See #{Formatter.url(SOURCEFORGE_REFERENCE_URL)}",
                 location: url.location
     end
 
@@ -534,14 +478,6 @@ module Cask
       return unless bad_osdn_url?
 
       add_error "OSDN download urls are disabled.", location: url.location, strict_only: true
-    end
-
-    sig { void }
-    def audit_unnecessary_verified
-      return unless cask.url
-      return unless verified_present?
-
-      add_error "the `verified` parameter has been deprecated; use the `url` stanza without it"
     end
 
     sig { void }
@@ -567,8 +503,8 @@ module Cask
       token_auditor = Homebrew::FormulaNameCaskTokenAuditor.new(cask.token)
       return if (errors = token_auditor.errors).none?
 
-      add_error "Cask token '#{cask.token}' must not contain #{errors.to_sentence(two_words_connector: " or ",
-                                                                                  last_word_connector: " or ")}."
+      add_error "Cask token '#{cask.token}' must not contain " \
+                "#{::Utils::Text.to_sentence(errors, conjunction: "or")}."
     end
 
     sig { void }
@@ -699,7 +635,7 @@ module Cask
             end
           when Artifact::Binary
             # Shell scripts cannot be signed, so we skip them
-            next false if path.text_executable?
+            next false if ::Utils::Path.text_executable?(path)
 
             system_command("codesign", args:         ["--verify", "-R=notarized", "--check-notarization", path],
                                        print_stderr: false)
@@ -958,7 +894,7 @@ module Cask
                 app_min_os < cask_min_os
 
       min_os_definition = if cask_min_os && cask_min_os > HOMEBREW_MACOS_OLDEST_ALLOWED
-        definition = if T.must(on_system_block_min_os.to_s <=> depends_on_min_os.to_s).positive?
+        definition = if on_system_block_min_os.to_s > depends_on_min_os.to_s
           "an on_system block"
         else
           "a depends_on stanza"
@@ -967,7 +903,7 @@ module Cask
       else
         "no minimum macOS version"
       end
-      source = T.must(bundle_min_os.to_s <=> sparkle_min_os.to_s).positive? ? "Artifact" : "Upstream"
+      source = (bundle_min_os.to_s > sparkle_min_os.to_s) ? "Artifact" : "Upstream"
       message = "#{source} defined #{app_min_os.to_sym.inspect} as the minimum macOS version " \
                 "but the cask declared #{min_os_definition}"
 
@@ -1460,7 +1396,7 @@ module Cask
       _, user, repo = *regex.match(cask.homepage) unless user
       return if !user || !repo
 
-      repo.gsub!(/.git$/, "")
+      repo.delete_suffix!(".git")
 
       [user, repo]
     end
@@ -1483,26 +1419,23 @@ module Cask
 
     sig { returns(T::Boolean) }
     def bad_sourceforge_url?
-      bad_url_format?(%r{((downloads|\.dl)\.|//)sourceforge},
+      bad_url_format?(%r{(?:(?:downloads|\.dl)\.|//)sourceforge},
                       [
                         %r{\Ahttps://sourceforge\.net/projects/[^/]+/files/latest/download\Z},
-                        %r{\Ahttps://downloads\.sourceforge\.net/(?!(project|sourceforge)/)},
+                        %r{\Ahttps://downloads\.sourceforge\.net/(?!(?:project|sourceforge)/)},
                       ])
     end
 
     sig { returns(T::Boolean) }
     def bad_osdn_url?
-      T.must(domain).match?(%r{^(?:\w+\.)*osdn\.jp(?=/|$)})
+      return false unless (host = domain)
+
+      host.match?(%r{^(?:\w+\.)*osdn\.jp(?=/|$)})
     end
 
     sig { returns(T.nilable(String)) }
     def domain
       URI(cask.url.to_s).host
-    end
-
-    sig { returns(T::Boolean) }
-    def verified_present?
-      cask.url&.verified.present?
     end
 
     sig { returns(Tap) }

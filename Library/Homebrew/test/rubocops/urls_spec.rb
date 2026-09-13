@@ -8,9 +8,9 @@ RSpec.describe RuboCop::Cop::FormulaAudit::Urls do
 
   let(:offense_list) do
     [{
-      "url" => "https://ftp.gnu.org/lightning/lightning-2.1.0.tar.gz",
-      "msg" => "https://ftp.gnu.org/lightning/lightning-2.1.0.tar.gz should be: " \
-               "https://ftpmirror.gnu.org/gnu/lightning/lightning-2.1.0.tar.gz",
+      "url" => "https://ftp.gnu.org/gnu/lightning/lightning-2.1.0.tar.gz",
+      "msg" => "https://ftp.gnu.org/gnu/lightning/lightning-2.1.0.tar.gz should be: " \
+               "https://ftpmirror.gnu.org/lightning/lightning-2.1.0.tar.gz",
       "col" => 2,
     }, {
       "url" => "https://fossies.org/linux/privat/monit-5.23.0.tar.gz",
@@ -171,7 +171,7 @@ RSpec.describe RuboCop::Cop::FormulaAudit::Urls do
       "col" => 2,
     }, {
       "url" => "bzr://brew.sh/foo/bar",
-      "msg" => "Use of the \"bzr://\" scheme is deprecated, pass `using: :bzr` instead",
+      "msg" => "Use of the \"bzr://\" scheme is deprecated, use Git or a stable archive URL instead",
       "col" => 2,
     }, {
       "url" => "hg://brew.sh/foo/bar",

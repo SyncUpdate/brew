@@ -20,7 +20,7 @@ module Homebrew
         EOS
         switch "--with-hostname",
                description: "Include the hostname in the Gist.",
-               odeprecated: true
+               odisabled:   true
         switch "-n", "--new-issue",
                description: "Automatically create a new issue in the appropriate GitHub repository " \
                             "after creating the Gist."
@@ -56,17 +56,9 @@ module Homebrew
         glue_bytes = glue.encode("BINARY")
         n_front_bytes = (max_bytes_in * front_weight).floor
         n_back_bytes = max_bytes_in - n_front_bytes
-        if n_front_bytes.zero?
-          front = bytes[1..0]
-          back = bytes[-max_bytes_in..]
-        elsif n_back_bytes.zero?
-          front = bytes[0..(max_bytes_in - 1)]
-          back = bytes[1..0]
-        else
-          front = bytes[0..(n_front_bytes - 1)]
-          back = bytes[-n_back_bytes..]
-        end
-        out = T.must(front) + glue_bytes + T.must(back)
+        front = bytes.byteslice(0, n_front_bytes).to_s
+        back = bytes.byteslice(bytes.bytesize - n_back_bytes, n_back_bytes).to_s
+        out = front + glue_bytes + back
         out.force_encoding("UTF-8")
         out.encode!("UTF-16", invalid: :replace)
         out.encode!("UTF-8")
@@ -85,7 +77,7 @@ module Homebrew
         SystemConfig.dump_verbose_config s
         # Dummy summary file, asciibetically first, to control display title of gist
         files["# #{formula.name} - #{timestamp}.txt"] = {
-          content: brief_build_info(formula, with_hostname: args.with_hostname?),
+          content: brief_build_info(formula, with_hostname: false),
         }
         files["00.config.out"] = { content: s.string }
         files["00.doctor.out"] = { content: Utils.popen_read("#{HOMEBREW_PREFIX}/bin/brew", "doctor", err: :out) }

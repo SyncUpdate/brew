@@ -1,6 +1,8 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "utils/output"
+
 require "open3"
 
 require "utils/timer"
@@ -278,7 +280,7 @@ module Utils
         return result unless out.include?("HTTP2")
 
         # The bug is fixed in `curl` >= 7.60.0.
-        curl_version = out[/curl (\d+(\.\d+)+)/, 1]
+        curl_version = out[/curl (\d+(?:\.\d+)+)/, 1]
         return result if Gem::Version.new(curl_version) >= Gem::Version.new("7.60.0")
 
         return curl_with_workarounds(*args, "--http1.1", **command_options, **options)
@@ -528,17 +530,15 @@ module Utils
         # Strategy:
         # If the `:homepage` 404s, it's a GitHub link and we have a token then
         # check the API (which does use tokens) for the repository
-        repo_details = url.match(%r{https?://github\.com/(?<user>[^/]+)/(?<repo>[^/]+)/?.*})
-        check_github_api = url_type == SharedAudits::URL_TYPE_HOMEPAGE &&
-                           details[:status_code] == "404" &&
-                           repo_details &&
-                           Homebrew::EnvConfig.github_api_token.present?
-
-        unless check_github_api
+        github_repo_regex = %r{https?://github\.com/(?<user>[^/]+)/(?<repo>[^/]+)/?.*}
+        user = url[github_repo_regex, :user]
+        repo = url[github_repo_regex, :repo]
+        if url_type != SharedAudits::URL_TYPE_HOMEPAGE || details[:status_code] != "404" ||
+           user.nil? || repo.nil? || Homebrew::EnvConfig.github_api_token.blank?
           return "The #{url_type} #{url} is not reachable (HTTP status code #{details[:status_code]})"
         end
 
-        if SharedAudits.github_repo_data(T.must(repo_details[:user]), T.must(repo_details[:repo])).nil?
+        if SharedAudits.github_repo_data(user, repo).nil?
           "Unable to find homepage"
         end
       end
@@ -691,7 +691,7 @@ module Utils
         responses:,
       }
     ensure
-      T.must(file).unlink
+      file&.unlink
     end
 
     sig { returns(Version) }
@@ -716,7 +716,7 @@ module Utils
     sig { returns(T::Boolean) }
     def curl_supports_tls13?
       @curl_supports_tls13 ||= T.let(Hash.new do |h, key|
-        h[key] = quiet_system(curl_executable, "--tlsv1.3", "--head", "https://brew.sh/")
+        h[key] = SystemCommand.quiet_system(curl_executable, "--tlsv1.3", "--head", "https://brew.sh/")
       end, T.nilable(T::Hash[T.any(Pathname, String), T::Boolean]))
       @curl_supports_tls13[curl_path]
     end
@@ -816,8 +816,6 @@ module Utils
       base_url
     end
 
-    private
-
     # Parses HTTP response text from `curl` output into a hash containing the
     # information from the status line (status code and, optionally,
     # descriptive text) and headers.
@@ -833,7 +831,7 @@ module Utils
       # Parse the status line and remove it
       response[:status_code] = match["code"]
       response[:status_text] = match["text"] if match["text"].present?
-      response_text = response_text.sub(%r{^HTTP/.* (\d+).*$\s*}, "")
+      response_text = response_text.sub(%r{^HTTP/.* \d+.*$\s*}, "")
 
       # Create a hash from the header lines
       response[:headers] = {}

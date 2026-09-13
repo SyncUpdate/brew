@@ -104,7 +104,7 @@ module Homebrew
           @packages = if (cargo = package_manager_executable) &&
                          (!cargo.to_s.start_with?("/") || cargo.exist?)
             with_env(cargo_env(cargo)) do
-              parse_package_list(`#{cargo} install --list`)
+              parse_package_list(Utils.popen_read_text(cargo, "install", "--list", err: :err))
             end
           end
           return [] if @packages.nil?

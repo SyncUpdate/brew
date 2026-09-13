@@ -1,6 +1,8 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "utils/brew_command"
+
 require "abstract_command"
 require "formula"
 require "formulary"
@@ -48,7 +50,7 @@ module Homebrew
         tap_with_name = Tap.with_formula_name(formula_input)
         tap, base_name = tap_with_name || [nil, formula_input]
         base_name = base_name.downcase
-                             .sub(/\b@(.*)\z\b/i, "")
+                             .sub(/\b@.*\z\b/i, "")
         normalized_version = version_input.to_s
                                           .sub(/\D*(.+?)\D*$/, "\\1")
                                           .gsub(/\D+/, ".")
@@ -65,11 +67,6 @@ module Homebrew
           return
         end
 
-        existing_tap = Tap.installed
-                          .sort_by(&:name)
-                          .find { |tap| tap.formula_files_by_name.key?(versioned_name) }
-        install_target = "#{existing_tap}/#{versioned_name}" if existing_tap
-
         versioned_formula = begin
           Formulary.factory(versioned_ref, warn: false)
         rescue TapFormulaAmbiguityError, FormulaUnavailableError, TapFormulaUnavailableError,
@@ -77,24 +74,22 @@ module Homebrew
           nil
         end
 
-        if install_target.nil?
-          install_target = if versioned_formula
-            versioned_formula.full_name
-          else
-            current_formula = begin
-              Formulary.factory(formula_input, warn: false)
-            rescue FormulaUnavailableError, TapFormulaUnavailableError, TapFormulaUnreadableError
-              nil
+        install_target = if versioned_formula
+          versioned_formula.full_name
+        else
+          current_formula = begin
+            Formulary.factory(formula_input, warn: false)
+          rescue FormulaUnavailableError, TapFormulaUnavailableError, TapFormulaUnreadableError
+            nil
+          end
+
+          if current_formula && current_formula.version.to_s == version_input
+            if installed_formula_names.include?(current_formula.name)
+              ohai "#{current_formula.full_name} is already installed"
+              return
             end
 
-            if current_formula && current_formula.version.to_s == version_input
-              if installed_formula_names.include?(current_formula.name)
-                ohai "#{current_formula.full_name} is already installed"
-                return
-              end
-
-              current_formula.full_name
-            end
+            current_formula.full_name
           end
         end
 
@@ -117,11 +112,11 @@ module Homebrew
           tap = Tap.fetch("#{username}/homebrew-#{DEFAULT_TAP_REPOSITORY}")
           unless tap.installed?
             ohai "Creating #{tap.name} tap for storing versioned formulae..."
-            safe_system HOMEBREW_BREW_FILE, "tap-new", "--no-git", tap.name
+            Utils::BrewCommand.run! "tap-new", "--no-git", tap.name
           end
 
           ohai "Extracting #{formula_input}@#{version_input} into #{tap.name}..."
-          safe_system HOMEBREW_BREW_FILE, "extract", formula_input, tap.name, "--version=#{version_input}"
+          Utils::BrewCommand.run! "extract", formula_input, tap.name, "--version=#{version_input}"
 
           install_target = "#{tap}/#{versioned_name}"
 
@@ -134,7 +129,7 @@ module Homebrew
         end
 
         ohai "Installing #{install_target}..."
-        safe_system HOMEBREW_BREW_FILE, "install", install_target
+        Utils::BrewCommand.run! "install", install_target
       end
     end
   end

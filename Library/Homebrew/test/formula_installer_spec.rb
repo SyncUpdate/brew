@@ -269,6 +269,21 @@ RSpec.describe FormulaInstaller do
   end
 
   describe "#post_install_formula_path" do
+    it "compares installed versions without evaluating installed recipes" do
+      formula = formula("installed-version") do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+      end
+      installer = described_class.new(formula)
+      (formula.prefix/".brew").mkpath
+      formula.path.dirname.mkpath
+      formula.path.write("# current recipe")
+      allow(formula).to receive(:any_installed_prefix).and_return(formula.prefix)
+      allow(Formulary).to receive(:factory).and_raise("Recipe evaluation is not permitted")
+
+      expect(installer.post_install_formula_path).to eq(formula.path)
+    end
+
     it "uses the API formula for structured-only post-installs" do
       formula = formula("api-install-steps") do
         T.bind(self, T.class_of(Formula))
@@ -365,6 +380,44 @@ RSpec.describe FormulaInstaller do
       allow(keg).to receive(:replace_placeholders_with_locations)
       allow(keg).to receive(:relativize_prefix_symlinks!)
       allow(f.bottle_specification).to receive(:skip_relocation?).with(tab:).and_return(true)
+    end
+
+    context "with a bottle" do
+      let(:downloadable) do
+        bottle_spec = BottleSpecification.new
+        bottle_spec.root_url("https://example.com")
+        bottle_spec.sha256(cellar: :any_skip_relocation, Utils::Bottles.tag.to_sym => "0" * 64)
+        bottle = Bottle.new(nil, bottle_spec, Utils::Bottles.tag,
+                            name: "missing-bottle-tab", pkg_version: PkgVersion.new(Version.new("1.0"), 0))
+        allow(bottle).to receive(:downloader).and_return(downloader)
+        bottle
+      end
+
+      before { allow(keg).to receive(:optlinked?).and_return(false) }
+
+      it "moves a queue-staged keg into the Cellar when its marker and keg are genuine" do
+        keg = downloadable.staged_path_from_download_queue
+        marker = downloadable.staged_path_from_download_queue_marker
+        keg.mkpath
+        FileUtils.ln_s(keg, marker)
+
+        installer.pour
+
+        expect([f.prefix.directory?, keg.exist?, marker.symlink?]).to eq([true, false, false])
+      end
+
+      it "discards a marker that does not point at the keg before staging the bottle afresh" do
+        keg = downloadable.staged_path_from_download_queue
+        marker = downloadable.staged_path_from_download_queue_marker
+        keg.mkpath
+        FileUtils.ln_s(mktmpdir, marker)
+        calls = []
+        allow(downloadable).to receive(:stage) { calls << [:stage, marker.symlink?, keg.exist?] }
+
+        installer.pour
+
+        expect(calls).to eq([[:stage, false, false]])
+      end
     end
 
     it "retargets absolute symlinks from the prefix the bottle was built for" do
@@ -622,6 +675,29 @@ RSpec.describe FormulaInstaller do
 
       installer.enqueue_fetch
     end
+
+    context "when verifying attestations for a third-party tap" do
+      let(:formula) do
+        tap = Tap.fetch("thirdparty", "tap")
+        path = Formulary.find_formula_in_tap("fformula-name", tap)
+        Class.new(Formula) do
+          url "https://brew.sh/fformula-name-1.0.tar.gz"
+        end.new("fformula-name", path, :stable, tap:)
+      end
+
+      before do
+        allow(Homebrew::EnvConfig).to receive(:verify_attestations?).and_return(true)
+      end
+
+      it "enqueues bottle attestation verification" do
+        expect(installer).to receive(:fetch_dependencies).ordered
+        expect(installer).to receive(:fetch_bottle_tab).with(enqueue: true).ordered
+        expect(download_queue).to receive(:enqueue)
+          .with(bottle, check_attestation: true).ordered
+
+        installer.enqueue_fetch
+      end
+    end
   end
 
   describe "linking defaults" do
@@ -718,6 +794,13 @@ RSpec.describe FormulaInstaller do
         conflicts_with "testball"
       end
     end
+    let(:self_conflicting_formula) do
+      formula("terraform", tap: Tap.fetch("thirdparty", "selfconflict")) do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+        conflicts_with "terraform"
+      end
+    end
 
     before { allow(Formulary).to receive(:factory).with("other").and_return(conflicting_formula) }
 
@@ -763,11 +846,7 @@ RSpec.describe FormulaInstaller do
     end
 
     it "ignores conflicts that name the formula being installed" do
-      f = formula("terraform", tap: Tap.fetch("thirdparty", "selfconflict")) do
-        T.bind(self, T.class_of(Formula))
-        url "foo-1.0"
-        conflicts_with "terraform"
-      end
+      f = self_conflicting_formula
 
       expect(Formulary).not_to receive(:factory)
 
@@ -1050,7 +1129,6 @@ RSpec.describe FormulaInstaller do
 
     before do
       allow(Formula).to receive(:clear_cache)
-      allow(Cask::Caskroom).to receive(:path).and_return(Pathname("/tmp/nonexistent-caskroom"))
       allow(versioned_formula).to receive_messages(link_overwrite_formulae: [other_version],
                                                    any_version_installed?:  false)
       allow(other_version).to receive(:any_version_installed?).and_return(true)
@@ -1110,6 +1188,30 @@ RSpec.describe FormulaInstaller do
   end
 
   describe "#check_install_sanity" do
+    it "does not assign a support tier when a bottle is unavailable" do
+      installer = described_class.new(Testball.new, ignore_deps: true)
+      allow(Homebrew).to receive(:default_prefix?).and_return(true)
+      allow(installer.formula).to receive(:tap).and_return(CoreTap.instance)
+      allow(installer).to receive_messages(pour_bottle?: false, fresh_install?: true)
+
+      expect { installer.check_install_sanity }.to raise_error(CannotInstallFormulaError, <<~EOS)
+        testball: no bottle available!
+        If no compatible bottle is available, you can try to install from source with:
+          brew install --build-from-source testball
+      EOS
+    end
+
+    it "allows reinstalling an explicitly requested formula without a bottle" do
+      installer = described_class.new(Testball.new, installed_on_request: true, ignore_deps: true)
+      allow(Homebrew).to receive(:default_prefix?).and_return(true)
+      allow(Homebrew::EnvConfig).to receive(:developer?).and_return(false)
+      allow(Hardware::CPU).to receive(:arm?).and_return(true)
+      allow(installer.formula).to receive_messages(tap: CoreTap.instance, any_version_installed?: true)
+      allow(installer).to receive(:pour_bottle?).and_return(false)
+
+      expect { installer.check_install_sanity }.not_to raise_error
+    end
+
     it "raises on direct cyclic dependency" do
       ENV["HOMEBREW_DEVELOPER"] = "1"
 
@@ -1660,9 +1762,10 @@ RSpec.describe FormulaInstaller do
 
       expect([
         launchd_service_path.basename.to_s,
+        service_path.basename.to_s,
         launchd_service_path.exist?,
         service_path.exist?,
-      ]).to eq(["sh.brew.testball.plist", true, true])
+      ]).to eq(["sh.brew.testball.plist", "sh.brew.testball.service", true, true])
     end
 
     it "works if timed service is set" do
@@ -1690,9 +1793,13 @@ RSpec.describe FormulaInstaller do
         installer.install_service
       end.not_to output(/Error: Failed to install service files/).to_stderr
 
-      expect(launchd_service_path).to exist
-      expect(service_path).to exist
-      expect(timer_path).to exist
+      expect([
+        service_path.basename.to_s,
+        timer_path.basename.to_s,
+        launchd_service_path.exist?,
+        service_path.exist?,
+        timer_path.exist?,
+      ]).to eq(["sh.brew.testball.service", "sh.brew.testball.timer", true, true, true])
     end
 
     it "returns without definition" do
@@ -1713,6 +1820,31 @@ RSpec.describe FormulaInstaller do
   end
 
   describe "#build" do
+    it "denies build writes to the temporary Cellar after granting the formula's var", :needs_macos do
+      skip "Sandbox not available." unless Sandbox.available?
+      skip "Nested sandboxing is not supported." if Sandbox.nested_sandbox?
+
+      formula = Testball.new
+      installer = described_class.new(formula)
+      sandbox = Sandbox.new
+      allow(Sandbox).to receive_messages(new: sandbox, use_for?: true)
+      formula.var.mkpath
+      HOMEBREW_TEMP_CELLAR.mkpath
+      allow(installer).to receive(:build_args).and_return([
+        "/bin/sh", "-c", 'printf allowed > "$1/allowed"; printf planted > "$2/planted" 2>/dev/null; exit 0',
+        "sandbox-fixture", formula.var, HOMEBREW_TEMP_CELLAR
+      ])
+      allow(formula).to receive_messages(logs: mktmpdir, update_head_version: nil, prefix: mktmpdir,
+                                         network_access_allowed?: true)
+      allow(Keg).to receive(:new).and_return(instance_double(Keg, empty_installation?: false))
+
+      installer.build
+      written = [(formula.var/"allowed").exist?, (HOMEBREW_TEMP_CELLAR/"planted").exist?]
+      FileUtils.rm_rf([formula.var/"allowed", HOMEBREW_TEMP_CELLAR])
+
+      expect(written).to eq([true, false])
+    end
+
     it "attempts source download when formula is loaded from API" do
       formula = Testball.new
       allow(formula).to receive(:loaded_from_api?).and_return(true)
@@ -1797,7 +1929,7 @@ RSpec.describe FormulaInstaller do
       allow(sandbox).to receive_messages(record_log: nil, allow_read_if_exists: nil, allow_write_temp_and_cache: nil,
                                          allow_write_log: nil, allow_cvs: nil, allow_fossil: nil,
                                          allow_write_xcode: nil, allow_write_cellar: nil, deny_read_home: nil,
-                                         run: nil)
+                                         deny_write_temp_cellar: nil, run: nil)
       allow(formula).to receive_messages(logs: mktmpdir, update_head_version: nil, prefix: mktmpdir,
                                          network_access_allowed?: true)
       allow(Keg).to receive(:new).and_return(instance_double(Keg, empty_installation?: false))
@@ -1805,9 +1937,7 @@ RSpec.describe FormulaInstaller do
       expect(sandbox).to receive(:allow_read_if_exists).with(path: formula_path).ordered
       expect(sandbox).to receive(:allow_read_if_exists).with(path: Homebrew::Trust.trust_file).ordered
 
-      with_env(HOMEBREW_REQUIRE_TAP_TRUST: "1") do
-        installer.build
-      end
+      installer.build
     end
   end
 end

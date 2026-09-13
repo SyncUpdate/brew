@@ -168,6 +168,34 @@ RSpec.describe Keg do
       expect(padded).to eq "#{newdir}-extra:#{newdir}/lib#{null_padding}"
     end
 
+    specify "leaves prefix strings inside serialised data untouched" do
+      serialised = "\x01\x1a#{dir}/lib\x02\x03"
+      binary_file.atomic_write "\x00#{dir}\x00#{serialised}\x00"
+
+      keg.relocate_build_prefix(keg, dir, newdir)
+
+      null_padding = "\x00" * (dir.to_s.length - newdir.to_s.length)
+      expect(binary_file.binread).to eq "\x00#{newdir}#{null_padding}\x00#{serialised}\x00"
+    end
+
+    specify "replaces the prefix in strings of UTF-8 text" do
+      binary_file.atomic_write "\x00Konfiguration „#{dir}/etc“ fehlt\x00"
+
+      keg.relocate_build_prefix(keg, dir, newdir)
+
+      null_padding = "\x00" * (dir.to_s.length - newdir.to_s.length)
+      expect(binary_file.binread).to eq "\x00Konfiguration „#{newdir}/etc“ fehlt#{null_padding}\x00".b
+    end
+
+    specify "leaves prefix strings inside long length-prefixed text untouched" do
+      json = "{\"prefix\": \"#{dir}\", \"padding\": \"#{"x" * 16 * 1024}\"}"
+      binary_file.atomic_write "\x00#{json}\x00"
+
+      keg.relocate_build_prefix(keg, dir, newdir)
+
+      expect(binary_file.binread).to eq "\x00#{json}\x00"
+    end
+
     specify "does not rewrite recorded files without the old prefix" do
       binary_file.atomic_write "\x00unrelated\x00"
       inode = binary_file.stat.ino

@@ -29,7 +29,7 @@ module Cask
       output << "#{repo}\n" if repo
       deps = deps_info(cask, mark_uninstalled: installed)
       output << deps if deps
-      requirements = requirements_info(cask, mark_uninstalled: installed)
+      requirements = requirements_info(cask)
       output << requirements if requirements
       language = language_info(cask)
       output << language if language
@@ -51,11 +51,15 @@ module Cask
 
     sig { params(cask: Cask, installed: T::Boolean).returns(String) }
     def self.title_info(cask, installed:)
-      name_with_status = if installed
-        pretty_install_status(cask.token, installed: true, outdated: cask.outdated?, bold: true)
-      else
-        pretty_uninstalled(cask.token)
-      end
+      name_with_status = pretty_install_status(
+        cask.token,
+        installed:,
+        outdated:    installed && cask.outdated?,
+        deprecated:  cask.deprecated?,
+        disabled:    cask.disabled?,
+        can_install: cask.valid_platform? && !cask.disabled?,
+        bold:        true,
+      )
       title = oh1_title(name_with_status).to_s
       title += " (#{cask.name.join(", ")})" unless cask.name.empty?
 

@@ -7,6 +7,7 @@ require "extend/pathname/eager_initialize_extension"
 require "extend/pathname/observer_pathname_extension"
 require "extend/pathname/write_mkpath_extension"
 require "utils/output"
+require "utils/path"
 
 # Stubs needed to keep Sorbet happy.
 # rubocop:disable Style/OneClassPerFile
@@ -43,7 +44,7 @@ class Pathname
   sig {
     params(sources: T.any(
       Resource, Resource::Partial, String, Pathname,
-      T::Array[T.any(String, Pathname)], T::Hash[T.any(String, Pathname), String]
+      T::Array[T.any(String, Pathname)], T::Hash[T.any(String, Pathname), T.any(String, Pathname)]
     )).void
   }
   def install(*sources)
@@ -76,7 +77,8 @@ class Pathname
   # @api public
   sig {
     params(
-      sources: T.any(String, Pathname, T::Array[T.any(String, Pathname)], T::Hash[T.any(String, Pathname), String]),
+      sources: T.any(String, Pathname, T::Array[T.any(String, Pathname)],
+                     T::Hash[T.any(String, Pathname), T.any(String, Pathname)]),
     ).void
   }
   def install_symlink(*sources)
@@ -99,7 +101,7 @@ class Pathname
   def append_lines(content, **open_args)
     raise "Cannot append file that doesn't exist: #{self}" unless exist?
 
-    T.unsafe(self).open("a", **open_args) { |f| f.puts(content) }
+    File.open(self, "a", **open_args) { |f| f.puts(content) }
   end
 
   # Write to a file atomically.
@@ -141,24 +143,11 @@ class Pathname
 
   sig {
     params(pattern: T.any(Pathname, String, Regexp), replacement: T.any(Pathname, String),
-           _block: T.nilable(T.proc.params(src: Pathname, dst: Pathname).returns(Pathname))).void
+           block: T.nilable(T.proc.params(src: Pathname, dst: Pathname).returns(Pathname))).void
   }
-  def cp_path_sub(pattern, replacement, &_block)
-    raise "#{self} does not exist" unless exist?
-
-    pattern = pattern.to_s if pattern.is_a?(Pathname)
-    replacement = replacement.to_s if replacement.is_a?(Pathname)
-    dst = sub(pattern, replacement)
-
-    raise "#{self} is the same file as #{dst}" if self == dst
-
-    if directory?
-      dst.mkpath
-    else
-      dst.dirname.mkpath
-      dst = yield(self, dst) if block_given?
-      FileUtils.cp(self, dst)
-    end
+  def cp_path_sub(pattern, replacement, &block)
+    Utils::Output.odeprecated "Pathname#cp_path_sub", "Utils::Path.cp_path_sub"
+    Utils::Path.cp_path_sub(self, pattern, replacement, &block)
   end
 
   # Extended to support common double extensions.
@@ -171,7 +160,7 @@ class Pathname
     bottle_ext, = HOMEBREW_BOTTLES_EXTNAME_REGEX.match(basename).to_a
     return bottle_ext if bottle_ext
 
-    archive_ext = basename[/(\.(tar|cpio|pax)\.(gz|bz2|lz|xz|zst|Z))\Z/, 1]
+    archive_ext = basename[/(\.(?:tar|cpio|pax)\.(?:gz|bz2|lz|xz|zst|Z))\Z/, 1]
     return archive_ext if archive_ext
 
     # Don't treat version numbers as extname.
@@ -188,22 +177,10 @@ class Pathname
     File.basename(self, extname)
   end
 
-  # I don't trust the children.length == 0 check particularly, not to mention
-  # it is slow to enumerate the whole directory just to see if it is empty,
-  # instead rely on good ol' libc and the filesystem
   sig { returns(T::Boolean) }
   def rmdir_if_possible
-    rmdir
-    true
-  rescue Errno::ENOTEMPTY
-    if (ds_store = join(".DS_Store")).exist? && children.length == 1
-      ds_store.unlink
-      retry
-    else
-      false
-    end
-  rescue Errno::EACCES, Errno::ENOENT, Errno::EBUSY, Errno::EPERM
-    false
+    Utils::Output.odeprecated "Pathname#rmdir_if_possible", "Utils::Path.rmdir_if_possible"
+    Utils::Path.rmdir_if_possible(self)
   end
 
   sig { returns(Version) }
@@ -214,7 +191,8 @@ class Pathname
 
   sig { returns(T::Boolean) }
   def text_executable?
-    /\A#!\s*\S+/.match?(open("r") { |f| f.read(1024) })
+    Utils::Output.odeprecated "Pathname#text_executable?", "Utils::Path.text_executable?"
+    Utils::Path.text_executable?(self)
   end
 
   sig { returns(String) }
@@ -258,17 +236,14 @@ class Pathname
 
   sig { returns(Pathname) }
   def resolved_path
-    symlink? ? dirname.join(readlink) : self
+    Utils::Output.odeprecated "Pathname#resolved_path", "Utils::Path.resolved_path"
+    Utils::Path.resolved_path(self)
   end
 
   sig { returns(T::Boolean) }
   def resolved_path_exists?
-    link = readlink
-  rescue ArgumentError
-    # The link target contains NUL bytes
-    false
-  else
-    dirname.join(link).exist?
+    Utils::Output.odeprecated "Pathname#resolved_path_exists?", "Utils::Path.resolved_path_exists?"
+    Utils::Path.resolved_path_exists?(self)
   end
 
   sig { params(src: Pathname).void }
@@ -277,26 +252,22 @@ class Pathname
     File.symlink(src.relative_path_from(dirname), self)
   end
 
-  sig { params(_block: T.proc.void).void }
-  def ensure_writable(&_block)
-    saved_perms = nil
-    unless writable?
-      saved_perms = stat.mode
-      FileUtils.chmod "u+rw", to_path
-    end
-    yield
-  ensure
-    chmod saved_perms if saved_perms
+  sig { params(block: T.proc.void).void }
+  def ensure_writable(&block)
+    Utils::Output.odeprecated "Pathname#ensure_writable", "Utils::Path.ensure_writable"
+    Utils::Path.ensure_writable(self, &block)
   end
 
   sig { void }
   def install_info
-    quiet_system(which_install_info, "--quiet", to_s, "#{dirname}/dir")
+    Utils::Output.odeprecated "Pathname#install_info", "Utils::Path.install_info"
+    Utils::Path.install_info(self)
   end
 
   sig { void }
   def uninstall_info
-    quiet_system(which_install_info, "--delete", "--quiet", to_s, "#{dirname}/dir")
+    Utils::Output.odeprecated "Pathname#uninstall_info", "Utils::Path.uninstall_info"
+    Utils::Path.uninstall_info(self)
   end
 
   # Writes an exec script in this folder for each target pathname.
@@ -330,18 +301,19 @@ class Pathname
         T::Array[T.any(String, Pathname)],
         T::Hash[T.any(String, Symbol), T.any(String, Pathname)]
       ),
-      env:         T::Hash[T.any(String, Symbol), T.any(String, Pathname)],
+      env:         T.nilable(T::Hash[T.any(String, Symbol), T.any(String, Pathname)]),
     ).void
   }
-  def write_env_script(target, args_or_env, env = T.unsafe(nil))
+  def write_env_script(target, args_or_env, env = nil)
     args = if env.nil?
-      env = args_or_env if args_or_env.is_a?(Hash)
+      raise ArgumentError, "#{args_or_env.inspect} is not a Hash" unless args_or_env.is_a?(Hash)
 
+      env = args_or_env
       nil
     elsif args_or_env.is_a?(Array)
       args_or_env.join(" ")
     else
-      T.cast(args_or_env, T.nilable(T.any(String, Pathname)))
+      args_or_env
     end
 
     env_export = +""
@@ -403,7 +375,7 @@ class Pathname
       next unless Metafiles.copy?(p.basename.to_s)
 
       # Some software symlinks these files (see help2man.rb)
-      filename = p.resolved_path
+      filename = Utils::Path.resolved_path(p)
       # Some software links metafiles together, so by the time we iterate to one of them
       # we may have already moved it. libxml2's COPYING and Copyright are affected by this.
       next unless filename.exist?
@@ -411,11 +383,6 @@ class Pathname
       filename.chmod 0644
       install(filename)
     end
-  end
-
-  sig { returns(T::Boolean) }
-  def ds_store?
-    basename.to_s == ".DS_Store"
   end
 
   sig { returns(T::Boolean) }
@@ -441,36 +408,6 @@ class Pathname
   sig { returns(T::Array[String]) }
   def rpaths
     []
-  end
-
-  sig { returns(String) }
-  def magic_number
-    @magic_number ||= T.let(nil, T.nilable(String))
-    @magic_number ||= if directory?
-      ""
-    else
-      # Length of the longest regex (currently Tar).
-      max_magic_number_length = 262
-      binread(max_magic_number_length) || ""
-    end
-  end
-
-  sig { returns(String) }
-  def file_type
-    @file_type ||= T.let(nil, T.nilable(String))
-    @file_type ||= system_command("file", args: ["-b", self], print_stderr: false)
-                   .stdout.chomp
-  end
-
-  sig { returns(T::Array[String]) }
-  def zipinfo
-    @zipinfo ||= T.let(
-      system_command("zipinfo", args: ["-1", self], print_stderr: false)
-      .stdout
-      .encode(Encoding::UTF_8, invalid: :replace)
-      .split("\n"),
-      T.nilable(T::Array[String]),
-    )
   end
 
   private
@@ -508,17 +445,6 @@ class Pathname
     src = Pathname(src).expand_path(dstdir)
     src = src.dirname.realpath/src.basename if src.dirname.exist?
     FileUtils.ln_sf(src.relative_path_from(dstdir), dstdir/new_basename)
-  end
-
-  sig { returns(T.nilable(String)) }
-  def which_install_info
-    @which_install_info ||= T.let(nil, T.nilable(String))
-    @which_install_info ||=
-      if File.executable?("/usr/bin/install-info")
-        "/usr/bin/install-info"
-      elsif (texinfo_formula = Formula["texinfo"]).any_version_installed?
-        (texinfo_formula.opt_bin/"install-info").to_s
-      end
   end
 end
 # rubocop:enable Style/OneClassPerFile

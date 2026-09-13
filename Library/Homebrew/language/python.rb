@@ -1,9 +1,13 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "system_command"
+require "utils/shell"
+
 require "utils"
 require "utils/output"
 require "utils/path"
+require "utils/popen"
 
 module Language
   # Helper functions for Python formulae.
@@ -34,7 +38,7 @@ module Language
 
     sig { params(python: T.any(String, Pathname)).returns(T.nilable(Version)) }
     def self.major_minor_version(python)
-      version = `#{python} --version 2>&1`.chomp[/(\d\.\d+)/, 1]
+      version = Utils.popen_read_text(python, "--version", err: :out).chomp[/(\d\.\d+)/, 1]
       return unless version
 
       Version.new(version)
@@ -42,11 +46,18 @@ module Language
 
     sig { params(python: T.any(String, Pathname)).returns(Pathname) }
     def self.homebrew_site_packages(python = "python3.7")
+      odeprecated "Language::Python.homebrew_site_packages", "HOMEBREW_PREFIX/Language::Python.site_packages(python)"
+
       HOMEBREW_PREFIX/site_packages(python)
     end
 
-    sig { params(python: T.any(String, Pathname)).returns(String) }
-    def self.site_packages(python = "python3.7")
+    sig { params(python: T.nilable(T.any(String, Pathname))).returns(String) }
+    def self.site_packages(python = nil)
+      if python.nil?
+        odeprecated "Language::Python.site_packages without an interpreter", "an explicit Python interpreter argument"
+        python = "python3.7"
+      end
+
       if (python == "pypy") || (python == "pypy3")
         "site-packages"
       else
@@ -61,6 +72,8 @@ module Language
       ).void
     }
     def self.each_python(build, &block)
+      odeprecated "Language::Python.each_python", "Formula#python3 or explicit Python dependency iteration"
+
       original_pythonpath = ENV.fetch("PYTHONPATH", nil)
       pythons = { "python@3" => "python3",
                   "pypy"     => "pypy",
@@ -73,7 +86,7 @@ module Language
         ENV["PYTHONPATH"] = if python_formula.latest_version_installed?
           nil
         else
-          homebrew_site_packages(python).to_s
+          (HOMEBREW_PREFIX/site_packages(python)).to_s
         end
         block&.call python, version
       end
@@ -82,13 +95,18 @@ module Language
 
     sig { params(python: T.any(String, Pathname)).returns(T::Boolean) }
     def self.reads_brewed_pth_files?(python)
-      return false unless homebrew_site_packages(python).directory?
-      return false unless homebrew_site_packages(python).writable?
+      odeprecated "Language::Python.reads_brewed_pth_files?", "an isolated Python virtualenv"
 
-      probe_file = homebrew_site_packages(python)/"homebrew-pth-probe.pth"
+      site_packages = HOMEBREW_PREFIX/site_packages(python)
+      return false unless site_packages.directory?
+      return false unless site_packages.writable?
+
+      probe_file = site_packages/"homebrew-pth-probe.pth"
       begin
         probe_file.atomic_write("import site; site.homebrew_was_here = True")
-        with_homebrew_path { quiet_system python, "-c", "import site; assert(site.homebrew_was_here)" }
+        Utils::Shell.with_homebrew_path do
+          SystemCommand.quiet_system python, "-c", "import site; assert(site.homebrew_was_here)"
+        end
       ensure
         probe_file.unlink if probe_file.exist?
       end
@@ -96,16 +114,23 @@ module Language
 
     sig { params(python: T.any(String, Pathname)).returns(Pathname) }
     def self.user_site_packages(python)
-      Pathname.new(`#{python} -c "import site; print(site.getusersitepackages())"`.chomp)
+      odeprecated "Language::Python.user_site_packages",
+                  "querying `site.getusersitepackages()` with the Python interpreter"
+
+      Pathname.new(
+        Utils.popen_read_text(python, "-c", "import site; print(site.getusersitepackages())", err: :err).chomp,
+      )
     end
 
     sig { params(python: T.any(String, Pathname), path: T.any(String, Pathname)).returns(T::Boolean) }
     def self.in_sys_path?(python, path)
+      odeprecated "Language::Python.in_sys_path?", "querying `sys.path` with the Python interpreter"
+
       script = <<~PYTHON
         import os, sys
         [os.path.realpath(p) for p in sys.path].index(os.path.realpath("#{path}"))
       PYTHON
-      quiet_system python, "-c", script
+      SystemCommand.quiet_system python, "-c", script
     end
 
     # Mixin module for {Formula} adding shebang rewrite features.
@@ -272,7 +297,10 @@ module Language
         venv = virtualenv_create(libexec, python.delete("@"), system_site_packages:,
                                                               without_pip:)
         venv.pip_install venv_resources
-        venv.pip_install_and_link(T.must(buildpath), link_manpages:)
+        buildpath = self.buildpath
+        raise "#{name}: `virtualenv_install_with_resources` can only be called from `install`" if buildpath.nil?
+
+        venv.pip_install_and_link(buildpath, link_manpages:)
         venv
       end
 
@@ -373,8 +401,9 @@ module Language
           if (cfg_file = @venv_root/"pyvenv.cfg").exist?
             cfg = cfg_file.read
             framework = "Frameworks/Python.framework/Versions"
-            cfg.match(%r{= *(#{HOMEBREW_CELLAR}/(python@[\d.]+)/[^/]+(?:/#{framework}/[\d.]+)?/bin)}) do |match|
-              cfg.sub! match[1].to_s, Utils::Path.formula_opt_bin(T.must(match[2])).to_s
+            match = cfg.match(%r{= *(#{HOMEBREW_CELLAR}/(python@[\d.]+)/[^/]+(?:/#{framework}/[\d.]+)?/bin)})
+            if match && (python_formula = match[2])
+              cfg.sub! match[1].to_s, Utils::Path.formula_opt_bin(python_formula).to_s
               cfg_file.atomic_write cfg
             end
           end

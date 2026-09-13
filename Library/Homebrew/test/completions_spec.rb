@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "completions"
+require "open3"
 
 RSpec.describe Homebrew::Completions do
   let(:completions_dir) { HOMEBREW_REPOSITORY/"completions" }
@@ -16,6 +17,8 @@ RSpec.describe Homebrew::Completions do
       (completions_dir/shell).mkpath
     end
     internal_path.mkpath
+    allow(Tap.fetch("homebrew/bar").git_repository).to receive(:origin_url)
+      .and_return("https://github.com/Homebrew/homebrew-bar")
     external_path.mkpath
   end
 
@@ -381,6 +384,34 @@ RSpec.describe Homebrew::Completions do
     end
 
     describe ".generate_bash_completion_file" do
+      it "completes literal package names without invoking an expanding wordlist" do
+        script = described_class.generate_bash_completion_file(%w[install]) + <<~'BASH'
+          compgen() { return 99; }
+          brew() { printf '%s\n' 'alpha' 'alpine' 'beta'; }
+          COMP_WORDS=(brew install al)
+          COMP_CWORD=2
+          COMPREPLY=()
+          __brew_complete_formulae
+          printf '%s\n' "${COMPREPLY[@]}"
+        BASH
+
+        expect(Open3.capture3("/bin/bash", "-c", script).first).to eq("alpha\nalpine\n")
+      end
+
+      it "preserves literal characters and spaces in package completion records" do
+        script = described_class.generate_bash_completion_file(%w[install]) + <<~'BASH'
+          compgen() { return 99; }
+          brew() { printf '%s\n' 'alpha*' 'alpha space' 'alpha\path' 'beta'; }
+          COMP_WORDS=(brew install alpha)
+          COMP_CWORD=2
+          COMPREPLY=()
+          __brew_complete_formulae
+          printf '%s\n' "${COMPREPLY[@]}"
+        BASH
+
+        expect(Open3.capture3("/bin/bash", "-c", script).first).to eq("alpha*\nalpha space\nalpha\\path\n")
+      end
+
       it "returns the correct completion file" do
         file = described_class.generate_bash_completion_file(%w[install missing update])
         expect(file).to match(/^__brewcomp\(\) {$/)
@@ -406,7 +437,7 @@ RSpec.describe Homebrew::Completions do
         expect(file).not_to match(/^ {4}up\) _brew_up ;;/)
         expect(file).to include('[[ $(__brew_internal_command_alias "${line}") == "${line}" ]] || continue')
         expect(file).to include('cmd="$(__brew_internal_command_alias "${cmd}")"')
-        expect(file).to include('compgen -W "${cmds} ${maintainer_cmds} ${user_aliases}" -- "${cur}"')
+        expect(file).to include('__brewcomp_words "${cmds} ${maintainer_cmds} ${user_aliases}"')
         expect(file).to match(/^ {4}up\) echo "update" ;;$/)
         expect(file).to match(/^ {4}update\) _brew_update ;;$/)
       end

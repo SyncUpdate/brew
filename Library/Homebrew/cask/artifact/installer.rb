@@ -1,8 +1,10 @@
 # typed: strict
 # frozen_string_literal: true
 
-require "cask/artifact/abstract_artifact"
 require "utils/data"
+
+require "cask/artifact/abstract_artifact"
+require "extend/hash/keys"
 
 module Cask
   module Artifact
@@ -28,10 +30,9 @@ module Cask
           command.run!(
             executable_path,
             **args,
-            env:       { "PATH" => PATH.new(
+            env: { "PATH" => PATH.new(
               HOMEBREW_PREFIX/"bin", HOMEBREW_PREFIX/"sbin", ENV.fetch("PATH")
             ) },
-            reset_uid: !args[:sudo],
           )
         end
       end

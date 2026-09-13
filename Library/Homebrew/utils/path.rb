@@ -26,8 +26,11 @@ module Utils
 
       sig { params(parent: T.any(Pathname, String), child: T.any(Pathname, String), message: String).void }
       def ensure_child_of!(parent, child, message:)
-        return if child_of?(parent, child)
+        return if child_of?(resolve_symlinks(parent), resolve_symlinks(child))
 
+        raise message
+      rescue SystemCallError
+        # Fail closed: an unresolvable symlink leaves containment unproven.
         raise message
       end
 
@@ -102,6 +105,18 @@ module Utils
         yield
       ensure
         path.chmod saved_perms if saved_perms
+      end
+
+      private
+
+      # `child_of?` is lexical, so resolve the deepest existing component first.
+      # Stop at a symlink too: `exist?` follows one, hiding a dangling link.
+      sig { params(path: T.any(Pathname, String)).returns(Pathname) }
+      def resolve_symlinks(path)
+        pathname = Pathname(path).expand_path
+        existing = pathname
+        existing = existing.parent until existing.exist? || existing.symlink? || existing.root?
+        (existing.realpath/pathname.relative_path_from(existing)).cleanpath
       end
     end
 

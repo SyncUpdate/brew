@@ -438,11 +438,16 @@ module Cask
       caller_location = caller_locations.fetch(0)
       return @url unless uri
 
-      # Keep accepting `verified` as a no-op for compatibility with existing casks.
-      # odeprecated "the `verified` parameter in the `url` stanza" if options[:verified]
+      unless @cask.loaded_from_api?
+        URL::DEPRECATED_URL_SPECS.each do |spec|
+          next unless options[spec]
+
+          odeprecated "the `#{spec}` parameter in the `url` stanza", "the default URL verification behaviour"
+        end
+      end
 
       set_unique_stanza(:url, false) do
-        URL.new(uri, **options, caller_location:)
+        URL.new(uri, **options.except(*URL::DEPRECATED_URL_SPECS), caller_location:)
       end
     end
 
@@ -482,12 +487,10 @@ module Cask
     # ```
     #
     # @api public
-    sig {
-      params(from: String,
-             to:   String).returns(T::Array[DSL::Rename])
-    }
-    def rename(from = T.unsafe(nil), to = T.unsafe(nil))
+    sig { params(from: T.nilable(String), to: T.nilable(String)).returns(T::Array[DSL::Rename]) }
+    def rename(from = nil, to = nil)
       return @rename if from.nil?
+      raise CaskInvalidError.new(cask, "`rename` requires both a `from` and a `to` filename") if to.nil?
 
       @rename << DSL::Rename.new(from, to)
     end
@@ -855,7 +858,7 @@ module Cask
       [klass.dsl_key, klass.uninstall_dsl_key].each do |dsl_key|
         define_method(dsl_key) do |&block|
           T.bind(self, DSL)
-          # odeprecated "`#{dsl_key}`", "`#{dsl_key}_steps`"
+          odeprecated "`#{dsl_key}`", "`#{dsl_key}_steps`"
           artifacts.add(klass.new(cask, dsl_key => block))
         end
       end
@@ -915,8 +918,6 @@ module Cask
       if !@cask.allow_reassignment && no_autobump_defined?
         raise CaskInvalidError.new(cask, "'no_autobump!' stanza may only appear once.")
       end
-
-      odisabled "no_autobump! because: :requires_manual_review" if because == :requires_manual_review
 
       @no_autobump_defined = true
       @no_autobump_message = because

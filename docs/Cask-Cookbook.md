@@ -1,5 +1,5 @@
 ---
-last_review_date: "2026-08-25"
+last_review_date: "2026-09-06"
 ---
 
 # Cask Cookbook
@@ -40,6 +40,8 @@ The [token reference](#token-reference) describes the current naming rules and e
 ## Stanza order
 
 Having a common order for stanzas makes casks easier to update and parse. Below is the complete stanza sequence (no cask will have all stanzas). The empty lines shown here are also important, as they help to visually delimit information.
+
+When multiple `depends_on` stanzas are present, order them alphabetically by dependency type and then value.
 
     arch
     on_arch_conditional # additional custom-defined substitutions
@@ -115,7 +117,8 @@ Having a common order for stanzas makes casks easier to update and parse. Below 
 
     caveats
 
-Note that every stanza that has additional parameters (`:symbols` after a `,`) shall have them on separate lines, one per line, in alphabetical order. An exception is `target:` which typically consists of short lines.
+Note that every stanza that has additional parameters (`:symbols` after a `,`) shall have them on separate lines, one per line.
+An exception is `target:` which typically consists of short lines.
 
 ## Stanzas
 
@@ -187,6 +190,12 @@ Official macOS casks must also meet the [Gatekeeper requirement](Acceptable-Cask
 
 Generated completion artifacts are different: `generate_completions_from_executable` runs an installed executable only to produce shell completion text. The complete generation operation, including writing the completion, runs in an isolated Ruby subprocess where Homebrew has an available sandbox. The sandbox allows reading the staged cask, writing the completion and temporary/cache files and blocks network access. This limits side effects from commands that should only print completion data.
 
+On macOS, sandboxed operations can only look up explicitly allowed Mach services for directory information, power management, networking and certificates.
+They cannot register or launch applications through LaunchServices (including `lsregister` and `open`) or send Apple Events to other applications.
+These restrictions also apply to steps with `network_access: true`.
+Outbound Unix socket connections are denied except for Homebrew's internal communication and, when network access is allowed, macOS DNS resolution.
+Allowing writes to a directory does not allow connections to sockets in it.
+
 `installer script:` is not sandboxed. Many installer scripts are vendor installers that require broad filesystem writes, macOS services or `sudo`; macOS sandboxing does not work for root processes, and narrowing the write allowlist to the Caskroom plus uninstall or zap paths would break installers that legitimately write elsewhere. It would also change documented `SystemCommand` behaviours such as `sudo:`, `must_succeed:` and output handling.
 
 `pkg` artifacts are not run in the cask sandbox either. They are installed by macOS `/usr/sbin/installer`, which applies package payloads, scripts and receipts according to the package metadata.
@@ -209,7 +218,7 @@ Generated completion artifacts are different: `generate_completions_from_executa
 | `uninstall_postflight_steps`               | yes                           | Declarative file preparation steps run after artifact uninstallation. |
 | [`language`](#stanza-language)             | yes                           | Ruby block, called with language code parameters, containing other stanzas and/or a return value. |
 | `container nested:`                        | no                            | Relative path to an inner container that must be extracted before moving on with the installation. This allows for support of `.dmg` inside `.tar`, `.zip` inside `.dmg`, etc. (Example: [blocs.rb](https://github.com/Homebrew/homebrew-cask/blob/aa461148bbb5119af26b82cccf5003e2b4e50d95/Casks/b/blocs.rb#L17-L19)) |
-| `container type:`                          | no                            | Symbol to override container-type autodetect. May be one of: `:air`, `:bzip2`, `:cab`, `:dmg`, `:generic_unar`, `:gzip`, `:otf`, `:pkg`, `:rar`, `:seven_zip`, `:sit`, `:tar`, `:ttf`, `:xar`, `:zip`, `:naked`. (Example: [parse.rb](https://github.com/Homebrew/homebrew-cask/blob/aa461148bbb5119af26b82cccf5003e2b4e50d95/Casks/p/parse.rb#L10)) |
+| `container type:`                          | no                            | Symbol to override container-type autodetect. May be one of: `:bzip2`, `:dmg`, `:generic_unar`, `:gzip`, `:otf`, `:pkg`, `:p7zip`, `:tar`, `:ttf`, `:zip`, `:naked`. The deprecated `:seven_zip` alias should use `:p7zip`. The deprecated `:cab`, `:rar`, `:sit` and `:xar` types should use `:generic_unar`; deprecated `:air` containers should migrate to an `app` or `pkg` artifact. (Example: [parse.rb](https://github.com/Homebrew/homebrew-cask/blob/aa461148bbb5119af26b82cccf5003e2b4e50d95/Casks/p/parse.rb#L10)) |
 | `auto_updates`                             | no                            | `true`. Asserts that the cask artifacts auto-update. Use if `Check for Updates…` or similar is present in an app menu, but not if it only opens a webpage and does not do the download and installation for you. |
 | [`no_autobump!`](#stanza-no_autobump)      | no                            | Allowed symbol or a string. Excludes cask from autobumping if set. |
 | [`rename`](#stanza-rename)      | yes                            | A pair of strings. |
@@ -410,7 +419,7 @@ conflicts_with cask: "macfuse@dev"
 | ---------------- | ----------- |
 | `cask:`          | required Homebrew cask tokens as string or array |
 | `formula:`       | required Homebrew formula names as string or array |
-| `macos:`         | minimum macOS release as a symbol, or an array of exact acceptable releases; the older string comparison form is deprecated |
+| `macos:`         | minimum macOS release as a symbol, or an array of two or more exact acceptable releases |
 | `maximum_macos:` | maximum macOS release requirement using a `<=` comparison |
 | `linux:`         | Linux requirement, expressed as `depends_on :linux` |
 | `arch:`          | hardware requirements as symbol or array |
@@ -447,18 +456,13 @@ Only major releases are covered (10.x numbers containing a single dot or whole n
 depends_on macos: :big_sur
 ```
 
-`depends_on macos:` still accepts a string starting with a comparison operator such as `>=`, followed by a macOS release in the form above. The following is a valid expression meaning “at least macOS Big Sur (11.0)”:
-
-```ruby
-depends_on macos: ">= :big_sur"
-```
-
-Use `==` in the string form only when a cask must run on one exact macOS release. An array of symbols is also accepted when a cask must run on one of an exact set of macOS releases:
+An array of symbols is accepted when a cask must run on one of an exact set of macOS releases.
+The array must list two or more releases; a single-element array means the same thing as the bare symbol, i.e. a minimum:
 
 ```ruby
 depends_on macos: [
-  :catalina,
   :big_sur,
+  :monterey,
 ]
 ```
 
@@ -475,6 +479,16 @@ on_macos do
   depends_on macos: :big_sur
 end
 ```
+
+##### Choosing the minimum macOS release
+
+The minimum comes from the software, not from the vendor’s documentation.
+`brew audit --online` reads the minimum the artifact declares for itself, from `LSMinimumSystemVersion` in a bundle’s `Info.plist`, the `Distribution` file in a `pkg`, or the load commands of a bundle’s main executable.
+It compares that with `minimumSystemVersion` from the feed when the cask’s `livecheck` uses `strategy :sparkle`, takes the newer of the two, and errors when the cask declares something else.
+A vendor’s website or release notes claiming a different minimum does not change what is expected here.
+`brew audit --cask --online --fix` can write the correct value for a cask with no architecture-, OS- or release-specific stanzas.
+
+Casks are only expected to declare a minimum newer than the oldest macOS release Homebrew allows.
 
 #### `depends_on` *linux*
 
@@ -664,15 +678,17 @@ Use `if_path_exists`, `unless_path_exists`, `on_macos` and `on_linux` blocks to 
 
 `run` does not evaluate a shell command string. It supports a literal `env:`, `stdin_path:`, `stdout_path:`, `chdir:` and `sudo:`. Standard output is hidden by default and standard error is printed; use `print_stdout: true` or `print_stderr: false` to change that behaviour. Failure aborts the installation or uninstallation; pass `must_succeed: false` when a non-zero exit status is expected and should be ignored, such as a cleanup command that cannot run when its dependency is absent. Nothing is written to `stdout_path:` when an ignored command fails. The complete steps block runs in an isolated Ruby subprocess without network or general home-directory access where Homebrew has an available sandbox. Pass `network_access: true` when a `run` command must access the network. The sandbox permits writes to declared step destinations, the caskroom, app directory, temporary and cache directories and Homebrew's link directories. Ruby file operations and system or cask-provided commands therefore share the same restrictions. Use `writable_paths:` with directory roots, and `writable_base:` for relative roots, when an opaque command needs another declared write location.
 
+`mkdir_p` grants write access to its target directory when the parent already exists, otherwise to the parent directory.
+
 #### Interpolation in steps blocks
 
 Ruby `#{...}` interpolation is normally evaluated before structured steps are serialised. The Ruby expression does not pass through the JSON API; only the string it produced does. A concrete result is safe only when it is identical for every installation represented by the JSON. RuboCop cannot generally establish that from arbitrary Ruby, so use interpolation in ordinary cask stanzas, for example `command_wrapper "example", executable: "#{appdir}/Example.app/Contents/MacOS/example"`.
 
 `{{...}}` is not Ruby interpolation. It remains literal in the JSON API and the install-step runner expands supported tokens at install time. Use this form for install-time values inside `preflight_steps`, `postflight_steps`, `uninstall_preflight_steps` and `uninstall_postflight_steps`. When a path argument supports `base:`, `source_base:` or `target_base:`, prefer those options to embedding a path token.
 
-The runtime steps DSL retains compatibility helpers for `token`, `name`, `version`, `version.major` and `version.major_minor`. Interpolating these helpers is safe and permitted by RuboCop because they return the corresponding `{{...}}` token text rather than a concrete value. Other Ruby interpolation is rejected. Prefer explicit `{{...}}` tokens in new steps so it is clear that expansion is deferred until installation.
+The runtime steps DSL retains compatibility helpers for `token`, `name`, `arch`, `version`, `version.major` and `version.major_minor`. Interpolating these helpers is safe and permitted by RuboCop because they return the corresponding `{{...}}` token text rather than a concrete value. Other Ruby interpolation is rejected. Prefer explicit `{{...}}` tokens in new steps so it is clear that expansion is deferred until installation.
 
-Content, replacements, command arguments and command environments may use fixed install-time tokens. These include `{{HOMEBREW_BREW_FILE}}`, `{{HOMEBREW_CELLAR}}`, `{{HOMEBREW_PREFIX}}`, `{{token}}`, `{{name}}`, `{{user}}`, `{{staged_path}}`, `{{appdir}}`, `{{caskroom_path}}`, `{{temp}}`, `{{version}}`, `{{version.major}}` and `{{version.major_minor}}`. `{{name}}` is retained for compatibility; prefer `{{token}}`. Any other `{{...}}` is left verbatim. For example: `write_file "settings.conf", "application = {{appdir}}/Example.app"`.
+Content, replacements, command arguments and command environments may use fixed install-time tokens. These include `{{HOMEBREW_BREW_FILE}}`, `{{HOMEBREW_CELLAR}}`, `{{HOMEBREW_PREFIX}}`, `{{token}}`, `{{name}}`, `{{arch}}`, `{{user}}`, `{{staged_path}}`, `{{appdir}}`, `{{caskroom_path}}`, `{{temp}}`, `{{version}}`, `{{version.major}}` and `{{version.major_minor}}`. `{{name}}` is retained for compatibility; prefer `{{token}}`. `{{arch}}` expands to the value the cask's `arch` stanza selected for the current architecture, and to an empty string when the cask has no matching value. Any other `{{...}}` is left verbatim. For example: `write_file "settings.conf", "application = {{appdir}}/Example.app"`.
 
 {% endraw %}
 
@@ -966,7 +982,7 @@ The easiest and most useful `uninstall` directive is [`pkgutil:`](#uninstall-pkg
 * [`trash:`](#uninstall-trash) (string or array) - double-quoted, absolute paths of files or directory trees to move to Trash
 * **`rmdir:`** (string or array) - double-quoted, absolute paths of directories to remove if empty; works recursively
 
-Each `uninstall` technique is applied according to the order above. The order in which `uninstall` keys appear in the cask file is ignored.
+Each `uninstall` technique is applied according to the order above, regardless of the order present in the cask file.
 
 Working out an `uninstall` stanza is easiest when done on a system where the package is currently installed and operational. To operate on an uninstalled `.pkg` file, see [Working with a `.pkg` file manually](#working-with-a-pkg-file-manually), below.
 
@@ -1011,6 +1027,8 @@ for plist in /Library/Launch{Agents,Daemons}/*.plist ~/Library/LaunchAgents/*.pl
   /usr/libexec/PlistBuddy -c "Print Label" "$plist"
 done
 ```
+
+A job ID may contain a `*` wildcard, which removes every currently running `launchd` job whose ID matches.
 
 #### `uninstall` *quit*
 
@@ -1226,19 +1244,15 @@ Artifacts may also be distributed via Git repositories. URLs that end in `.git` 
 | `branch:`          | string identifying the Git branch to download |
 | `only_path:`       | path within the repository to limit the checkout to. If only a single directory of a large repository is required, using this option can significantly speed up downloads. If provided, artifact paths are relative to this path. (Example: [font-geo.rb](https://github.com/Homebrew/homebrew-cask/blob/a6348a1710928bf43510098725c2068ffe3adc69/Casks/font/font-g/font-geo.rb#L5-L8)) |
 
-#### SourceForge/OSDN URLs
+#### SourceForge URLs
 
-SourceForge and OSDN (formerly `SourceForge.JP`) projects are common ways to distribute binaries, but they provide many different styles of URLs to get to the goods.
+SourceForge projects are a common way to distribute binaries, but they provide many different styles of URLs to get to the goods.
 
 We prefer URLs of this format:
 
     https://downloads.sourceforge.net/<project_name>/<filename>.<ext>
 
-Or, if it’s from OSDN, where `<subdomain>` is typically of the form `dl` or `<user>.dl`:
-
-    http://<subdomain>.osdn.jp/<project_name>/<release_id>/<filename>.<ext>
-
-If these formats are not available, and the application is macOS-exclusive (otherwise a command-line download defaults to the Windows version) we prefer the use of this format:
+If that format is not available, and the application is macOS-exclusive (otherwise a command-line download defaults to the Windows version) we prefer the use of this format:
 
     https://sourceforge.net/projects/<project_name>/files/latest/download
 
@@ -1363,7 +1377,11 @@ If no additional files are discovered, instead of a zap stanza, include the foll
 
 Casks can deliver specific versions of artifacts depending on the current macOS release, CPU architecture, or system OS by either tailoring the `url` / `sha256` / `version` stanzas, using the [`on_<system>` syntax](Formula-Cookbook.md#handling-different-system-configurations) (which replaces conditional statements using `MacOS.version` or `Hardware::CPU`), or both.
 
-If your cask's artifact is offered as separate downloads for Apple Silicon and Intel architectures, or offers downloads for Linux, they'll presumably be downloadable at distinct URLs that differ only slightly. To adjust the URL depending on the current CPU architecture and system OS, supply a hash for each to the `arm:`, `intel:`, `arm64_linux:`, and `x86_64_linux:` parameters of `sha256`; use the special `arch` and `os` stanzas to define the unique components of the respective URLs for substitution in the `url`. Additional substitutions can be defined by calling `on_arch_conditional` and `on_system_conditional` directly. Example (from [libreoffice.rb](https://github.com/Homebrew/homebrew-cask/blob/a4164b8f5084fdaefb6e2e2f4f699270690b7845/Casks/l/libreoffice.rb#L1-L10)):
+If your cask's artifact is offered as separate downloads for Apple Silicon and Intel architectures, or offers downloads for Linux, they'll presumably be downloadable at distinct URLs that differ only slightly.
+To adjust the URL depending on the current CPU architecture and system OS, supply a hash for each to the `arm:`, `intel:`, `arm64_linux:`, and `x86_64_linux:` parameters of `sha256`; use the special `arch` (`arm:`, `intel:`) and `os` (`macos:`, `linux:`) stanzas to define the unique components of the respective URLs for substitution in the `url`.
+Leave a key out rather than giving it an empty string when a component is only present on one architecture or operating system.
+Each stanza defines one substitution; additional substitutions can be defined by calling `on_arch_conditional` and `on_system_conditional` directly.
+Example (from [libreoffice.rb](https://github.com/Homebrew/homebrew-cask/blob/a4164b8f5084fdaefb6e2e2f4f699270690b7845/Casks/l/libreoffice.rb#L1-L10)):
 
 ```ruby
 cask "libreoffice" do
@@ -1375,6 +1393,24 @@ cask "libreoffice" do
          intel: "ede541af151487f60eb518e310d20dad1a973f3dbe9ff78d782dd29b14ba2946"
 
   url "https://download.documentfoundation.org/libreoffice/stable/#{version}/mac/#{folder}/LibreOffice_#{version}_MacOS_#{arch}.dmg"
+end
+```
+
+A cask that varies by both takes a `sha256` for each supported combination.
+Example (from [1password-cli.rb](https://github.com/Homebrew/homebrew-cask/blob/e04021c857906ba15366b622c8b35957b9aef13c/Casks/1/1password-cli.rb#L1-L11)):
+
+```ruby
+cask "1password-cli" do
+  arch arm: "arm64", intel: "amd64"
+  os macos: "darwin", linux: "linux"
+
+  version "2.39.0"
+  sha256 arm:          "05391d3388a0c0b4f602691bedc1ab368541c487b6f14d2e3399743b4682af67",
+         intel:        "753fbf56b00996426edbb8439d2f3c0be9227b9557cdff468fb144cd3621aa6e",
+         arm64_linux:  "829baeff1c07e055cfa132031b1d9f2282ccdf5076258e482caf2fda70aea5d0",
+         x86_64_linux: "6fba7f376b6c6dec49f41b06408930a43ad064cce103c6a2ce5b3d0413a86434"
+
+  url "https://cache.agilebits.com/dist/1P/op2/pkg/v#{version}/op_#{os}_#{arch}_v#{version}.zip"
 end
 ```
 
@@ -1526,7 +1562,8 @@ Details of software names and brands will inevitably be lost in the conversion t
 
 * If the result conflicts with the name of an existing cask or Homebrew/homebrew-core formula, make yours unique by prepending the name of the vendor or developer, followed by a hyphen. Example: [caffeine.rb](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/c/caffeine.rb) and [domzilla-caffeine.rb](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/d/domzilla-caffeine.rb).
 
-* If the result still conflicts with the name of an existing Homebrew/homebrew-core formula, adjust the name to better describe the difference by e.g. appending `-app`. Example: `appium` formula and `appium-desktop` cask, `angband` formula and `angband-app` cask.
+* If the result still conflicts with the name of an existing Homebrew/homebrew-core formula, adjust the name to better describe the difference by e.g. appending `-app`.
+  Example: `unison` formula and [`unison-app`](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/u/unison-app.rb) cask, `angband` formula and [`angband-app`](https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/a/angband-app.rb) cask.
 
 * Inevitably, there are a small number of exceptions not covered by the rules. Don’t hesitate to [use the forum](https://github.com/orgs/Homebrew/discussions) if you have a problem.
 

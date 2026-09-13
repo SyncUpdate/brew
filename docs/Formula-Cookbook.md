@@ -310,6 +310,9 @@ Add a valid test to the [`test do`](/rubydoc/Formula.html#test-class_method) blo
 
 The [`test do`](/rubydoc/Formula.html#test-class_method) block automatically creates and changes to a temporary directory which is deleted after run. You can access this [`Pathname`](/rubydoc/Pathname.html) with the [`testpath`](/rubydoc/Formula.html#testpath-instance_method) function. The environment variable `HOME` is set to [`testpath`](/rubydoc/Formula.html#testpath-instance_method) within the [`test do`](/rubydoc/Formula.html#test-class_method) block.
 
+On macOS, the test sandbox allows Unix socket connections within `testpath`, including its subdirectories, even when the formula disables network access for tests.
+Create sockets for test services in this directory; connections to sockets elsewhere are denied except for Homebrew's internal communication and, when network access is allowed, macOS DNS resolution.
+
 We want tests that don't require any user input and test the basic functionality of the application. For example `foo build-foo input.foo` is a good test and (despite their widespread use) `foo --version` and `foo --help` are bad tests. However, a bad test is better than no test at all.
 
 See the [`cmake`](https://github.com/Homebrew/homebrew-core/blob/HEAD/Formula/c/cmake.rb) formula for an example of a good test. It writes a basic `CMakeLists.txt` file into the test directory then calls CMake to generate Makefiles. This test checks that CMake doesn't e.g. segfault during basic operation.
@@ -799,7 +802,7 @@ Homebrew offers these anonymous download strategies.
 
 | `using:` value   | download strategy                | requirements |
 | ---------------- | -------------------------------- | ------------ |
-| `:bzr`           | fetch from Bazaar repository     | `breezy` installed |
+| `:bzr`           | fetch from Bazaar repository (deprecated) | migrate to `:git` or a stable archive URL |
 | `:curl`          | download using `curl` (default)  | |
 | `:cvs`           | fetch from CVS repository        | `cvs` installed |
 | `:fossil`        | fetch from Fossil repository     | `fossil` installed |
@@ -980,7 +983,7 @@ Note that in the context of Homebrew, [`libexec`](/rubydoc/Formula.html#libexec-
 
 ### File-level operations
 
-You can use the file utilities provided by Ruby's [`FileUtils`](https://ruby-doc.org/current/stdlibs/fileutils/FileUtils.html). These are included in the [`Formula` class](/rubydoc/Formula.html), so you do not need the `FileUtils.` prefix to use them.
+You can use the file utilities provided by Ruby's [`FileUtils`](https://ruby-doc.org/core/FileUtils.html). These are included in the [`Formula` class](/rubydoc/Formula.html), so you do not need the `FileUtils.` prefix to use them.
 
 When creating symlinks, take special care to ensure they are *relative* symlinks. This makes it easier to create a relocatable bottle. For example, to create a symlink in `bin` to an executable in `libexec`, use:
 
@@ -1067,9 +1070,9 @@ end
 
 ### Running commands after installation
 
-Formulae in official Homebrew taps must represent post-install work with [`post_install_steps`](/rubydoc/Formula.html#post_install_steps-class_method); new `post_install` methods are rejected. These steps can be re-run separately with `brew postinstall <formula>`, are stored in the JSON API and do not require downloading source formula Ruby. A `post_install_steps` block may only contain the supported step calls with literal arguments. It cannot call the wider formula DSL or arbitrary Ruby code. Homebrew executes the steps with the same post-install sandbox policy.
+Formulae in all taps must represent post-install work with [`post_install_steps`](/rubydoc/Formula.html#post_install_steps-class_method); new `post_install` methods are rejected. These steps can be re-run separately with `brew postinstall <formula>`, are stored in the JSON API and do not require downloading source formula Ruby. A `post_install_steps` block may only contain the supported step calls with literal arguments. It cannot call the wider formula DSL or arbitrary Ruby code. Homebrew executes the steps with the same post-install sandbox policy.
 
-The legacy `post_install` method remains available temporarily for third-party tap compatibility, but is not an authoring interface for official formulae. A formula cannot define both `post_install` and `post_install_steps`.
+The legacy `post_install` method remains temporarily loadable while third-party taps migrate, but is deprecated and rejected by formula audits. A formula cannot define both `post_install` and `post_install_steps`.
 
 ```ruby
 class Foo < Formula
@@ -1495,6 +1498,11 @@ brew search --fink foo
 `superenv` is our "super environment" that isolates builds by removing `/usr/local/bin` and all user `PATH`s that are not essential for the build. It does this because user `PATH`s are often full of stuff that breaks builds. `superenv` also removes bad flags from the commands passed to `clang`/`gcc` and injects others (for example all [`keg_only`](/rubydoc/Formula.html#keg_only-class_method) dependencies are added to the `-I` and `-L` flags).
 
 If in your local Homebrew build of your new formula, you see `Operation not permitted` errors, this will be because your new formula tried to write to the disk outside of your sandbox area. This is enforced on macOS by `sandbox-exec`.
+
+Each sandboxed command receives a private temporary directory under the configured `HOMEBREW_TEMP`, exposed through `TMPDIR`, `TEMP` and `TMP`.
+On macOS, the sandbox allows Unix socket connections within this directory, including when network access is disabled, so tools such as MSBuild can communicate with their task hosts.
+macOS limits Unix socket paths to 104 bytes; C clients that terminate the path get 103 bytes, and libassuan allows only 102 bytes.
+Connections to other Unix sockets remain restricted.
 
 ### Fortran
 

@@ -3,6 +3,7 @@
 
 require "abstract_command"
 require "test_bot"
+require "utils/bottles"
 
 module Homebrew
   module Cmd
@@ -25,7 +26,8 @@ module Homebrew
         switch "--build-from-source",
                description: "Build from source rather than building bottles."
         switch "--build-dependents-from-source",
-               description: "Build dependents from source rather than testing bottles."
+               description: "Build a limited set of dependents from source in addition to testing bottles. " \
+                            "Up to 10 per formula per shard, prioritising popular dependents in a sharded group."
         switch "--junit",
                description: "generate a JUnit XML test results file."
         switch "--keep-old",
@@ -68,7 +70,7 @@ module Homebrew
         switch "--[no-]skip-recursive-dependents",
                description: "Only test the direct dependents (default: enabled).",
                replacement: "the default behaviour",
-               odeprecated: true
+               odisabled:   true
         switch "--skip-checksum-only-audit",
                description: "Don't audit checksum-only changes."
         switch "--skip-stable-version-audit",
@@ -108,6 +110,9 @@ module Homebrew
                                  "formulae dependents step."
         comma_array "--tested-formulae=",
                     description: "Use these tested formulae from formulae steps for a formulae dependents step."
+        switch "--print-padded-prefix",
+               description: "Print the padded bottle prefix for the current platform.",
+               hidden:      true
         flag   "--formulae-dependents-shard=",
                description: "Only test the formulae dependents in the given <SHARD/TOTAL>.",
                hidden:      true
@@ -122,6 +127,15 @@ module Homebrew
 
       sig { override.void }
       def run
+        if args.print_padded_prefix?
+          tag = Utils::Bottles.tag
+          padded_prefix = tag.padded_prefix
+          odie "No padded bottle prefix is available for #{tag}." if padded_prefix.nil?
+
+          puts padded_prefix
+          return
+        end
+
         if GitHub::Actions.env_set?
           ENV["HOMEBREW_COLOR"] = "1"
           ENV["HOMEBREW_GITHUB_ACTIONS"] = "1"

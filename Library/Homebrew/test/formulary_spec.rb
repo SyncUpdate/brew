@@ -144,7 +144,7 @@ RSpec.describe Formulary do
       RUBY
       full_name = "#{tap.name}/sensitive-env"
 
-      with_env(HOMEBREW_REQUIRE_TAP_TRUST: "1", HOMEBREW_USER_CONFIG_HOME: mktmpdir) do
+      with_env(HOMEBREW_USER_CONFIG_HOME: mktmpdir) do
         expect { described_class.factory(formula_path) }
           .to raise_error(Homebrew::UntrustedTapError, /#{tap.name}/)
 
@@ -847,7 +847,7 @@ RSpec.describe Formulary do
 
       it "raises an error when given a bottle URL" do
         expect do
-          described_class.factory("https://brew.sh/foo-1.0.arm64_catalina.bottle.tar.gz")
+          described_class.factory("https://brew.sh/foo-1.0.arm64_big_sur.bottle.tar.gz")
         end.to raise_error(UnsupportedInstallationMethod)
       end
 
@@ -923,7 +923,7 @@ RSpec.describe Formulary do
       RUBY
       rack_path.mkpath
 
-      with_env(HOMEBREW_REQUIRE_TAP_TRUST: "1", HOMEBREW_USER_CONFIG_HOME: mktmpdir) do
+      with_env(HOMEBREW_USER_CONFIG_HOME: mktmpdir) do
         expect(described_class.to_rack("#{tap.name}/#{formula_name}")).to eq(rack_path)
         expect(eval_marker).not_to exist
       end
@@ -950,6 +950,14 @@ RSpec.describe Formulary do
   end
 
   describe "::loader_for" do
+    it "does not select formulae from the download cache by name" do
+      stub_const("HOMEBREW_CACHE_FORMULA", HOMEBREW_CACHE/"Formula")
+      HOMEBREW_CACHE_FORMULA.mkpath
+      (HOMEBREW_CACHE_FORMULA/"cached-only.rb").write("# cache data")
+
+      expect(described_class.loader_for("cached-only")).to be_a(described_class::NullLoader)
+    end
+
     context "when given a relative path with two slashes" do
       it "returns a `FromPathLoader`" do
         mktmpdir.cd do

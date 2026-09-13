@@ -29,11 +29,11 @@ module OS
 
         sig { returns(T::Array[String]) }
         def supported_configuration_checks
-          %w[
+          (super + %w[
             check_glibc_minimum_version
             check_kernel_minimum_version
             check_supported_architecture
-          ].freeze
+          ]).freeze
         end
 
         sig { returns(T.nilable(::Homebrew::Diagnostic::Finding)) }
@@ -54,46 +54,47 @@ module OS
 
         sig { returns(T.nilable(::Homebrew::Diagnostic::Finding)) }
         def check_tmpdir_executable
-          f = Tempfile.new(%w[homebrew_check_tmpdir_executable .sh], HOMEBREW_TEMP)
-          f.write "#!/bin/sh\n"
-          f.chmod 0700
-          f.close
-          return if system T.must(f.path)
+          executable = Tempfile.create(%w[homebrew_check_tmpdir_executable .sh], HOMEBREW_TEMP) do |f|
+            f.write "#!/bin/sh\n"
+            f.chmod 0700
+            f.close
+            system f.path
+          end
+          return if executable
 
+          commands = ["export HOMEBREW_TEMP=~/tmp",
+                      "echo 'export HOMEBREW_TEMP=~/tmp' >> #{Utils::Shell.profile}"]
           ::Homebrew::Diagnostic::Finding.new(
             <<~EOS,
               The directory #{HOMEBREW_TEMP} does not permit executing
               programs. It is likely mounted as "noexec".
             EOS
             remediation: ::Homebrew::Diagnostic::Finding::Remediation.new(
-              commands: ["export HOMEBREW_TEMP=~/tmp", "echo 'export HOMEBREW_TEMP=~/tmp' >> #{Utils::Shell.profile}"],
-              text:     <<~EOS,
+              text:     append_indented_list(commands, <<~EOS),
                 Please set `$HOMEBREW_TEMP`
                 in your #{Utils::Shell.profile} to a different directory, for example:
-                  export HOMEBREW_TEMP=~/tmp
-                  echo 'export HOMEBREW_TEMP=~/tmp' >> #{Utils::Shell.profile}
               EOS
+              commands:,
             ),
           )
-        ensure
-          f&.unlink
         end
 
         sig { returns(T.nilable(::Homebrew::Diagnostic::Finding)) }
         def check_umask_not_zero
           return unless File.umask.zero?
 
+          commands = ["echo 'umask 002' >> #{Utils::Shell.profile}"]
           ::Homebrew::Diagnostic::Finding.new(
             <<~EOS,
               umask is currently set to 000. Directories created by Homebrew cannot
               be world-writable.
             EOS
             remediation: ::Homebrew::Diagnostic::Finding::Remediation.new(
-              text:     <<~EOS,
+              text:     append_indented_list(commands, <<~EOS),
                 This issue can be resolved by adding "umask 002" to
                 your #{Utils::Shell.profile}:
               EOS
-              commands: ["echo 'umask 002' >> #{Utils::Shell.profile}"],
+              commands:,
             ),
           )
         end
@@ -201,19 +202,18 @@ module OS
           state = ::Sandbox.state
           return if state == :available
 
-          fix = if state == :missing_fiddle
-            "Run Homebrew with its vendored Ruby, which includes Fiddle."
-          else
-            "Homebrew's Linux sandbox requires a kernel with Landlock enabled."
-          end
-
           ::Homebrew::Diagnostic::Finding.new(
             ::Sandbox.failure_reason || "The Linux sandbox is not available.",
-            remediation: <<~EOS.chomp,
-              #{fix}
-              As a final workaround, disable the Linux sandbox:
-                export HOMEBREW_NO_SANDBOX_LINUX=1
-            EOS
+            remediation: (
+              if state == :missing_fiddle
+                "Run Homebrew with its vendored Ruby, which includes Fiddle."
+              else
+                <<~EOS.chomp
+                  Homebrew's Linux sandbox requires a kernel with Landlock enabled.
+                  Upgrade to a Linux kernel with Landlock enabled.
+                EOS
+              end
+            ),
           )
         end
 
@@ -300,15 +300,14 @@ module OS
 
           return if badly_linked.empty?
 
-          remediation = ::Homebrew::Diagnostic::Finding::Remediation.new(
-            commands: ["brew reinstall #{badly_linked.join(" ")}"],
-          )
           ::Homebrew::Diagnostic::Finding.new(
             <<~EOS,
               Formulae which link to GCC through a versioned path were found. These formulae
               are prone to breaking when GCC is updated.
             EOS
-            remediation:,
+            remediation: ::Homebrew::Diagnostic::Finding::Remediation.new(
+              commands: ["brew reinstall #{badly_linked.join(" ")}"],
+            ),
           )
         end
 

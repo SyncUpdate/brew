@@ -13,6 +13,7 @@ module Homebrew
       #
       # * Archive file URLs:
       #   * `https://ftp.gnu.org/gnu/example/example-1.2.3.tar.gz`
+      #   * `https://ftpmirror.gnu.org/example/example-1.2.3.tar.gz`
       #   * `https://ftp.gnu.org/gnu/example/1.2.3/example-1.2.3.tar.gz`
       # * Homepage URLs:
       #   * `https://www.gnu.org/software/example/`
@@ -37,6 +38,7 @@ module Homebrew
         URL_MATCH_REGEX = %r{
           ^https?://
           (?:(?:[^/]+?\.)*gnu\.org/(?:gnu|software)/(?<project_name>[^/]+)/
+          |ftpmirror\.gnu\.org/(?!non-gnu/)(?<project_name>[^/]+)/
           |(?<project_name>[^/]+)\.gnu\.org/?$)
         }ix
 
@@ -63,10 +65,13 @@ module Homebrew
           match = url.match(URL_MATCH_REGEX)
           return values if match.blank?
 
-          # The directory listing page for the project's files
-          values[:url] = "https://ftpmirror.gnu.org/gnu/#{match[:project_name]}/"
+          project_name = match[:project_name]
+          return values if project_name.blank?
 
-          regex_name = Regexp.escape(T.must(match[:project_name])).gsub("\\-", "-")
+          # The directory listing page for the project's files
+          values[:url] = "https://ftpmirror.gnu.org/#{project_name}/"
+
+          regex_name = Regexp.escape(project_name).gsub("\\-", "-")
 
           # The default regex consists of the following parts:
           # * `href=.*?`: restricts matching to URLs in `href` attributes

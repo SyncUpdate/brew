@@ -1,4 +1,4 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 RSpec.describe Cask::Cask, :cask do
@@ -69,10 +69,8 @@ RSpec.describe Cask::Cask, :cask do
       allow(Tap).to receive(:reject).and_return([tap])
       expect(Cask::CaskLoader).not_to receive(:load).with(cask_path)
 
-      with_env(HOMEBREW_REQUIRE_TAP_TRUST: "1") do
-        expect { expect(described_class.all(eval_all: true)).to eq([]) }
-          .to output(%r{Skipping thirdparty/foo because it is not trusted}).to_stderr
-      end
+      expect { expect(described_class.all).to eq([]) }
+        .to output(%r{Skipping thirdparty/foo because it is not trusted}).to_stderr
     ensure
       FileUtils.rm_rf HOMEBREW_TAP_DIRECTORY/"thirdparty"
     end
@@ -80,10 +78,9 @@ RSpec.describe Cask::Cask, :cask do
     it "allows all casks when trust is disabled" do
       allow(CoreCaskTap.instance).to receive(:cask_tokens).and_return([])
       allow(Tap).to receive(:reject).and_return([])
+      allow(Homebrew::EnvConfig).to receive(:no_require_tap_trust?).and_return(true)
 
-      with_env(HOMEBREW_NO_REQUIRE_TAP_TRUST: "1") do
-        expect(described_class.all).to eq([])
-      end
+      expect(described_class.all).to eq([])
     end
 
     it "skips invalid casks instead of aborting" do
@@ -102,11 +99,10 @@ RSpec.describe Cask::Cask, :cask do
 
       allow(CoreCaskTap.instance).to receive(:cask_tokens).and_return([])
       allow(Tap).to receive(:reject).and_return([tap])
+      allow(Homebrew::EnvConfig).to receive(:no_require_tap_trust?).and_return(true)
 
-      with_env(HOMEBREW_NO_REQUIRE_TAP_TRUST: "1") do
-        expect { expect(described_class.all).to eq([]) }
-          .to output(/Cask 'mismatch' definition is invalid/).to_stderr
-      end
+      expect { expect(described_class.all).to eq([]) }
+        .to output(/Cask 'mismatch' definition is invalid/).to_stderr
     ensure
       FileUtils.rm_rf HOMEBREW_TAP_DIRECTORY/"thirdparty"
     end
@@ -261,32 +257,26 @@ RSpec.describe Cask::Cask, :cask do
     end
 
     describe "versioned casks" do
-      subject { cask.outdated_version }
+      shared_examples "versioned casks" do |tap_version, installed_version, expected_output|
+        let(:cask) { described_class.new("basic-cask") }
 
-      let(:cask) { described_class.new("basic-cask") }
-
-      shared_examples "versioned casks" do |tap_version, expectations|
-        test_each(expectations) do |(installed_version, expected_output)|
-          context "when version #{installed_version.inspect} is installed and the tap version is #{tap_version}" do
-            it {
-              allow(cask).to receive_messages(installed_version:,
-                                              version:           Cask::DSL::Version.new(tap_version))
-              expect(cask).to receive(:outdated_version).and_call_original
-              expect(subject).to eq expected_output
-            }
-          end
+        context "when version #{installed_version.inspect} is installed and the tap version is #{tap_version}" do
+          it {
+            allow(cask).to receive_messages(installed_version:,
+                                            version:           Cask::DSL::Version.new(tap_version))
+            expect(cask).to receive(:outdated_version).and_call_original
+            expect(cask.outdated_version).to eq expected_output
+          }
         end
       end
 
       describe "installed version is equal to tap version => not outdated" do
-        include_examples "versioned casks", "1.2.3",
-                         "1.2.3" => nil
+        include_examples "versioned casks", "1.2.3", "1.2.3", nil
       end
 
       describe "installed version is different than tap version => outdated" do
-        include_examples "versioned casks", "1.2.4",
-                         "1.2.3" => "1.2.3",
-                         "1.2.4" => nil
+        include_examples "versioned casks", "1.2.4", "1.2.3", "1.2.3"
+        include_examples "versioned casks", "1.2.4", "1.2.4", nil
       end
     end
 
@@ -473,51 +463,38 @@ RSpec.describe Cask::Cask, :cask do
     end
 
     describe ":latest casks" do
-      let(:cask) { described_class.new("basic-cask") }
+      shared_examples ":latest cask" do |greedy, outdated_sha, tap_version, installed_version, expected_output|
+        let(:cask) { described_class.new("basic-cask") }
 
-      shared_examples ":latest cask" do |greedy, outdated_sha, tap_version, expectations|
-        test_each(expectations) do |(installed_version, expected_output)|
-          context "when versions #{installed_version} are installed and the " \
-                  "tap version is #{tap_version}, #{"not " unless greedy}greedy " \
-                  "and sha is #{"not " unless outdated_sha}outdated" do
-            subject { cask.outdated_version(greedy:) }
-
-            it {
-              allow(cask).to receive_messages(installed_version:,
-                                              version:                Cask::DSL::Version.new(tap_version),
-                                              outdated_download_sha?: outdated_sha)
-              expect(cask).to receive(:outdated_version).and_call_original
-              expect(subject).to eq expected_output
-            }
-          end
+        context "when versions #{installed_version} are installed and the " \
+                "tap version is #{tap_version}, #{"not " unless greedy}greedy " \
+                "and sha is #{"not " unless outdated_sha}outdated" do
+          it {
+            allow(cask).to receive_messages(installed_version:,
+                                            version:                Cask::DSL::Version.new(tap_version),
+                                            outdated_download_sha?: outdated_sha)
+            expect(cask).to receive(:outdated_version).and_call_original
+            expect(cask.outdated_version(greedy:)).to eq expected_output
+          }
         end
       end
 
       describe ":latest version installed, :latest version in tap" do
-        include_examples ":latest cask", false, false, "latest",
-                         "latest" => nil
-        include_examples ":latest cask", true, false, "latest",
-                         "latest" => nil
-        include_examples ":latest cask", true, true, "latest",
-                         "latest" => "latest"
+        include_examples ":latest cask", false, false, "latest", "latest", nil
+        include_examples ":latest cask", true, false, "latest", "latest", nil
+        include_examples ":latest cask", true, true, "latest", "latest", "latest"
       end
 
       describe "numbered version installed, :latest version in tap" do
-        include_examples ":latest cask", false, false, "latest",
-                         "1.2.3" => nil
-        include_examples ":latest cask", true, false, "latest",
-                         "1.2.3" => nil
-        include_examples ":latest cask", true, true, "latest",
-                         "1.2.3" => "1.2.3"
+        include_examples ":latest cask", false, false, "latest", "1.2.3", nil
+        include_examples ":latest cask", true, false, "latest", "1.2.3", nil
+        include_examples ":latest cask", true, true, "latest", "1.2.3", "1.2.3"
       end
 
       describe "latest version installed, numbered version in tap" do
-        include_examples ":latest cask", false, false, "1.2.3",
-                         "latest" => "latest"
-        include_examples ":latest cask", true, false, "1.2.3",
-                         "latest" => "latest"
-        include_examples ":latest cask", true, true, "1.2.3",
-                         "latest" => "latest"
+        include_examples ":latest cask", false, false, "1.2.3", "latest", "latest"
+        include_examples ":latest cask", true, false, "1.2.3", "latest", "latest"
+        include_examples ":latest cask", true, true, "1.2.3", "latest", "latest"
       end
     end
   end
@@ -532,34 +509,29 @@ RSpec.describe Cask::Cask, :cask do
 
     context "when it is from a non-core tap" do
       it "returns the fully-qualified name of the cask" do
-        c = with_env(HOMEBREW_NO_REQUIRE_TAP_TRUST: "1") do
-          Cask::CaskLoader.load("third-party/tap/third-party-cask")
-        end
+        allow(Homebrew::EnvConfig).to receive(:no_require_tap_trust?).and_return(true)
+        c = Cask::CaskLoader.load("third-party/tap/third-party-cask")
         expect(c.full_name).to eq("third-party/tap/third-party-cask")
       end
     end
 
     context "when it is from no known tap" do
       it "returns the cask token" do
-        file = Tempfile.new(%w[tapless-cask .rb])
+        path = mktmpdir/"tapless-cask.rb"
+        path.write "cask 'tapless-cask'"
 
-        begin
-          cask_name = File.basename(file.path, ".rb")
-          file.write "cask '#{cask_name}'"
-          file.close
-
-          c = Cask::CaskLoader.load(file.path)
-          expect(c.full_name).to eq(cask_name)
-        ensure
-          file.close
-          file.unlink
-        end
+        expect(Cask::CaskLoader.load(path).full_name).to eq("tapless-cask")
       end
     end
   end
 
   describe "#artifacts_list" do
     subject(:cask) { Cask::CaskLoader.load("many-artifacts") }
+
+    before do
+      ENV["HOMEBREW_DEVELOPER"] = nil
+      Homebrew.raise_deprecation_exceptions = false
+    end
 
     it "returns all artifacts when no options are given" do
       expected_artifacts = [
@@ -613,30 +585,21 @@ RSpec.describe Cask::Cask, :cask do
   end
 
   describe "#uninstall_flight_blocks?" do
+    before do
+      ENV["HOMEBREW_DEVELOPER"] = nil
+      Homebrew.raise_deprecation_exceptions = false
+    end
+
     matcher :have_uninstall_flight_blocks do
+      T.bind(self, T.class_of(RSpec::Matchers::DSL::Matcher))
       match do |actual|
         actual.uninstall_flight_blocks? == true
       end
     end
 
-    it "returns true when there are uninstall_preflight blocks" do
-      cask = Cask::CaskLoader.load("with-uninstall-preflight")
+    it "returns true when there are uninstall flight blocks" do
+      cask = Cask::CaskLoader.load("many-artifacts")
       expect(cask).to have_uninstall_flight_blocks
-    end
-
-    it "returns true when there are uninstall_postflight blocks" do
-      cask = Cask::CaskLoader.load("with-uninstall-postflight")
-      expect(cask).to have_uninstall_flight_blocks
-    end
-
-    it "returns false when there are only preflight blocks" do
-      cask = Cask::CaskLoader.load("with-preflight")
-      expect(cask).not_to have_uninstall_flight_blocks
-    end
-
-    it "returns false when there are only postflight blocks" do
-      cask = Cask::CaskLoader.load("with-postflight")
-      expect(cask).not_to have_uninstall_flight_blocks
     end
 
     it "returns false when there are no flight blocks" do
@@ -729,7 +692,7 @@ RSpec.describe Cask::Cask, :cask do
           version "1.2.3"
         end
         sha256 :no_check
-        url "https://brew.sh/foo-#{version.major_minor}.zip"
+        url "https://brew.sh/foo-#{version&.major_minor || raise(Cask::CaskInvalidError.new(cask, "version is only set on macOS"))}.zip"
       end
 
       tag = Utils::Bottles::Tag.new(system: :linux, arch: :arm)
@@ -769,11 +732,6 @@ RSpec.describe Cask::Cask, :cask do
             "url": "file://#{TEST_FIXTURE_DIR}/cask/caffeine/darwin-arm64/1.2.0/arm.zip",
             "version": "1.2.0",
             "sha256": "8c62a2b791cf5f0da6066a0a4b6e85f62949cd60975da062df44adf887f4370b"
-          },
-          "catalina": {
-            "url": "file://#{TEST_FIXTURE_DIR}/cask/caffeine/darwin/1.0.0/intel.zip",
-            "version": "1.0.0",
-            "sha256": "1866dfa833b123bb8fe7fa7185ebf24d28d300d0643d75798bc23730af734216"
           },
           "x86_64_linux": {
             "url": "file://#{TEST_FIXTURE_DIR}/cask/caffeine/darwin//intel.zip",
@@ -819,10 +777,6 @@ RSpec.describe Cask::Cask, :cask do
             "url": "file://#{TEST_FIXTURE_DIR}/cask/caffeine-intel.zip",
             "sha256": "8c62a2b791cf5f0da6066a0a4b6e85f62949cd60975da062df44adf887f4370b"
           },
-          "catalina": {
-            "url": "file://#{TEST_FIXTURE_DIR}/cask/caffeine-intel.zip",
-            "sha256": "8c62a2b791cf5f0da6066a0a4b6e85f62949cd60975da062df44adf887f4370b"
-          },
           "x86_64_linux": {
             "url": "file://#{TEST_FIXTURE_DIR}/cask/caffeine-intel.zip",
             "sha256": null
@@ -861,10 +815,6 @@ RSpec.describe Cask::Cask, :cask do
             "sha256": "8c62a2b791cf5f0da6066a0a4b6e85f62949cd60975da062df44adf887f4370b"
           },
           "big_sur": {
-            "url": "file://#{TEST_FIXTURE_DIR}/cask/caffeine-intel-darwin.zip",
-            "sha256": "8c62a2b791cf5f0da6066a0a4b6e85f62949cd60975da062df44adf887f4370b"
-          },
-          "catalina": {
             "url": "file://#{TEST_FIXTURE_DIR}/cask/caffeine-intel-darwin.zip",
             "sha256": "8c62a2b791cf5f0da6066a0a4b6e85f62949cd60975da062df44adf887f4370b"
           },
@@ -1003,12 +953,13 @@ RSpec.describe Cask::Cask, :cask do
           Utils::Bottles::Tag.new(system: :sonoma, arch: :arm),
           Utils::Bottles::Tag.new(system: :monterey, arch: :intel),
           Utils::Bottles::Tag.new(system: :monterey, arch: :arm),
-          Utils::Bottles::Tag.new(system: :catalina, arch: :intel),
+          Utils::Bottles::Tag.new(system: :big_sur, arch: :intel),
+          Utils::Bottles::Tag.new(system: :big_sur, arch: :arm),
           Utils::Bottles::Tag.new(system: :linux, arch: :intel),
           Utils::Bottles::Tag.new(system: :linux, arch: :arm),
         ]
       end
-      let(:macos_platforms) { [:sonoma, :arm64_sonoma, :monterey, :arm64_monterey, :catalina] }
+      let(:macos_platforms) { [:sonoma, :arm64_sonoma, :monterey, :arm64_monterey, :big_sur, :arm64_big_sur] }
 
       before do
         stub_const("OnSystem::VALID_OS_ARCH_TAGS", platform_tags)
@@ -1154,9 +1105,8 @@ RSpec.describe Cask::Cask, :cask do
       end
 
       it "serializes architecture-varying and universal casks with the same macOS requirement" do
-        tags = OnSystem::ALL_OS_ARCH_COMBINATIONS.filter_map do |os, arch|
-          tag = Utils::Bottles::Tag.new(system: os, arch:)
-          tag if tag.valid_combination?
+        tags = OnSystem::ALL_OS_ARCH_COMBINATIONS.map do |os, arch|
+          Utils::Bottles::Tag.new(system: os, arch:)
         end
         stub_const("OnSystem::VALID_OS_ARCH_TAGS", tags)
 
@@ -1182,9 +1132,7 @@ RSpec.describe Cask::Cask, :cask do
           universal.to_hash_with_variations["supported_platforms"]
         end
 
-        expected_platforms = tags.filter_map do |tag|
-          tag.to_sym if tag.macos? && tag.system != :catalina
-        end
+        expected_platforms = tags.filter_map { |tag| tag.to_sym if tag.macos? }
         expect(supported_platforms).to eq(expected_platforms)
       end
 

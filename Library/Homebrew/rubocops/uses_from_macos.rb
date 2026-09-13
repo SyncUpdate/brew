@@ -103,7 +103,7 @@ module RuboCop
 
           depends_on_linux = depends_on?(:linux)
 
-          find_method_with_args(body_node, :uses_from_macos, /^"(.+)"/).each do |method|
+          find_every_method_call_by_name(body_node, :uses_from_macos).each do |method|
             @offensive_node = method
             problem "`uses_from_macos` should not be used when Linux is required." if depends_on_linux
 
@@ -113,6 +113,8 @@ module RuboCop
             elsif first_argument.instance_of?(RuboCop::AST::HashNode)
               first_argument.keys.first
             end
+
+            next if dep.nil?
 
             dep_name = string_content(dep)
             next if ALLOWED_USES_FROM_MACOS_DEPS.include? dep_name

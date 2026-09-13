@@ -1,4 +1,4 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require "utils/git"
@@ -30,17 +30,17 @@ RSpec.describe Utils::Git do
       File.write("README.md", "README")
       system git, "add", HOMEBREW_CACHE/"README.md"
       system git, "commit", "-m", "File added"
-      @h1 = `git rev-parse HEAD`
+      @h1 = Utils.popen_read("git", "rev-parse", "HEAD", err: :err)
 
       File.write("README.md", "# README")
       system git, "add", HOMEBREW_CACHE/"README.md"
       system git, "commit", "-m", "written to File"
-      @h2 = `git rev-parse HEAD`
+      @h2 = Utils.popen_read("git", "rev-parse", "HEAD", err: :err)
 
       File.write("LICENSE.txt", "LICENCE")
       system git, "add", HOMEBREW_CACHE/"LICENSE.txt"
       system git, "commit", "-m", "File added"
-      @h3 = `git rev-parse HEAD`
+      @h3 = Utils.popen_read("git", "rev-parse", "HEAD", err: :err)
 
       File.write("LICENSE.txt", "LICENSE")
       system git, "add", HOMEBREW_CACHE/"LICENSE.txt"
@@ -49,7 +49,7 @@ RSpec.describe Utils::Git do
       File.write("LICENSE.txt", "test")
       system git, "add", HOMEBREW_CACHE/"LICENSE.txt"
       system git, "commit", "-m", "written to File"
-      @cherry_pick_commit = `git rev-parse HEAD`
+      @cherry_pick_commit = Utils.popen_read("git", "rev-parse", "HEAD", err: :err)
       system git, "reset", "--hard", "HEAD^"
     end
   end
@@ -203,20 +203,19 @@ RSpec.describe Utils::Git do
         expect { described_class.ensure_installed! }.to raise_error("Git is unavailable")
       end
 
-      unless ENV["HOMEBREW_TEST_GENERIC_OS"]
-        it "keeps using the git shim after the formula install helper" do
-          expect(described_class).to receive(:available?).and_return(false)
-          allow(CoreTap.instance).to receive(:installed?).and_return(true)
-          formula_double = instance_double(Formula)
-          allow(Formula).to receive(:[]).with("git").and_return(formula_double)
-          allow(formula_double).to receive(:ensure_installed!).with(executable: "git")
-                                                              .and_return(Pathname.new("/usr/bin/git"))
-          expect(described_class).to receive(:available?).and_return(true)
+      it "keeps using the git shim after the formula install helper",
+         unless: ENV.fetch("HOMEBREW_TEST_GENERIC_OS", nil) do
+        expect(described_class).to receive(:available?).and_return(false)
+        allow(CoreTap.instance).to receive(:installed?).and_return(true)
+        formula_double = instance_double(Formula)
+        allow(Formula).to receive(:[]).with("git").and_return(formula_double)
+        allow(formula_double).to receive(:ensure_installed!).with(executable: "git")
+                                                            .and_return(Pathname.new("/usr/bin/git"))
+        expect(described_class).to receive(:available?).and_return(true)
 
-          described_class.ensure_installed!
+        described_class.ensure_installed!
 
-          expect(described_class.git).to eq(HOMEBREW_SHIMS_PATH/"shared/git")
-        end
+        expect(described_class.git).to eq(HOMEBREW_SHIMS_PATH/"shared/git")
       end
     end
   end
@@ -229,7 +228,7 @@ RSpec.describe Utils::Git do
 
     context "when git is available" do
       it "terminates options before the URL" do
-        expect(described_class).to receive(:quiet_system)
+        expect(SystemCommand).to receive(:quiet_system)
           .with("git", "ls-remote", "--end-of-options", "-u:evil")
           .and_return(false)
 

@@ -10,4 +10,7 @@ class Homebrew::DevCmd::UpdatePortableRuby
   def args; end
 end
 
-class Homebrew::DevCmd::UpdatePortableRuby::Args < Homebrew::CLI::Args; end
+class Homebrew::DevCmd::UpdatePortableRuby::Args < Homebrew::CLI::Args
+  sig { returns(T::Boolean) }
+  def print_target_version?; end
+end

@@ -86,7 +86,9 @@ module OS
         end
 
         Homebrew::Diagnostic.checks(:fatal_setup_build_environment_checks)
-        sdk = T.must(sdk).path
+        raise "No macOS SDK found. Install Xcode or the Command Line Tools." if sdk.nil?
+
+        sdk = sdk.path
 
         # Extra setup to support Xcode 4.3+ without CLT.
         self["SDKROOT"] = sdk.to_s
@@ -103,9 +105,10 @@ module OS
       end
 
       # Some configure scripts won't find libxml2 without help.
-      # This is a no-op with macOS SDK 10.15.4 and later.
+      # This is a no-op with all supported macOS SDKs.
       sig { void }
       def libxml2
+        super
         sdk = self["SDKROOT"] || MacOS.sdk_path
         # Use the includes from the sdk
         append "CPPFLAGS", "-I#{sdk}/usr/include/libxml2" unless Pathname("#{sdk}/usr/include/libxml").directory?
@@ -113,15 +116,13 @@ module OS
 
       sig { void }
       def no_weak_imports
-        # This has little-to-no usage and doesn't make sense to have a special function for.
-        odeprecated "ENV.no_weak_imports"
+        odisabled "ENV.no_weak_imports", "passing `-Wl,-no_weak_imports` to the linker"
         append "LDFLAGS", "-Wl,-no_weak_imports" if no_weak_imports_support?
       end
 
       sig { void }
       def no_fixup_chains
-        # This has little-to-no usage and behaved inconsistently with the superenv equivalent.
-        odeprecated "ENV.no_fixup_chains"
+        odisabled "ENV.no_fixup_chains", "the default linker behaviour"
         append "LDFLAGS", "-Wl,-no_fixup_chains" if no_fixup_chains_support?
       end
     end

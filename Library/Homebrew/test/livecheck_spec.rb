@@ -179,15 +179,18 @@ RSpec.describe Livecheck do
         referer:       referer_url,
         user_agent:    :browser,
       )
-      livecheck_f.url(url_string, post_json: post_hash)
       expect(livecheck_f.options.compressed).to be(false)
       expect(livecheck_f.options.cookies).to eq(cookies)
       expect(livecheck_f.options.header).to eq(header_str)
       expect(livecheck_f.options.homebrew_curl).to be(true)
       expect(livecheck_f.options.post_form).to eq(post_hash)
-      expect(livecheck_f.options.post_json).to eq(post_hash)
       expect(livecheck_f.options.referer).to eq(referer_url)
       expect(livecheck_f.options.user_agent).to eq(:browser)
+
+      # `post_form` and `post_json` can't be set at the same time
+      livecheck_f.options.post_form = nil
+      livecheck_f.url(url_string, post_json: post_hash)
+      expect(livecheck_f.options.post_json).to eq(post_hash)
 
       header_array = ["Accept: */*", "X-Requested-With: XMLHttpRequest"]
       livecheck_f.url(url_string, header: header_array)
@@ -218,6 +221,20 @@ RSpec.describe Livecheck do
     it "raises an ArgumentError if both `post_form` and `post_json` arguments are provided" do
       expect do
         livecheck_f.url(:stable, post_form: post_hash, post_json: post_hash)
+      end.to raise_error ArgumentError
+    end
+
+    it "raises an ArgumentError if `@options.post_form` is set and `post_json` is provided" do
+      livecheck_f.url(url_string, post_form: post_hash)
+      expect do
+        livecheck_f.url(url_string, post_json: post_hash)
+      end.to raise_error ArgumentError
+    end
+
+    it "raises an ArgumentError if `@options.post_json` is set and `post_form` is provided" do
+      livecheck_f.url(url_string, post_json: post_hash)
+      expect do
+        livecheck_f.url(url_string, post_form: post_hash)
       end.to raise_error ArgumentError
     end
   end

@@ -23,13 +23,15 @@ RSpec.describe Homebrew::Bundle::Npm do
     end
 
     context "when npm is installed" do
+      let(:npm_list_args) { [Pathname("npm"), "list", "-g", "--depth=0", "--json"] }
+
       before do
         described_class.reset!
         allow(described_class).to receive(:package_manager_executable).and_return(Pathname.new("npm"))
       end
 
       it "returns package list" do
-        allow(described_class).to receive(:`).with("npm list -g --depth=0 --json 2>/dev/null").and_return(<<~JSON)
+        allow(Utils).to receive(:popen_read_text).with(*npm_list_args, err: File::NULL).and_return(<<~JSON)
           {
             "dependencies": {
               "npm": { "version": "11.11.0" },
@@ -48,7 +50,8 @@ RSpec.describe Homebrew::Bundle::Npm do
         npm.write("")
 
         allow(described_class).to receive(:package_manager_executable).and_return(npm)
-        expect(described_class).to receive(:`).with("#{npm} list -g --depth=0 --json 2>/dev/null") do
+        expect(Utils).to receive(:popen_read_text)
+          .with(npm, "list", "-g", "--depth=0", "--json", err: File::NULL) do
           expect(ENV.fetch("PATH", "")).to start_with("#{npm.dirname}:")
           '{"dependencies":{"eslint":{"version":"10.4.0"}}}'
         end
@@ -57,7 +60,7 @@ RSpec.describe Homebrew::Bundle::Npm do
       end
 
       it "excludes npm itself from the package list" do
-        allow(described_class).to receive(:`).with("npm list -g --depth=0 --json 2>/dev/null").and_return(<<~JSON)
+        allow(Utils).to receive(:popen_read_text).with(*npm_list_args, err: File::NULL).and_return(<<~JSON)
           {
             "dependencies": {
               "npm": { "version": "11.11.0" }
@@ -69,13 +72,13 @@ RSpec.describe Homebrew::Bundle::Npm do
       end
 
       it "handles invalid JSON" do
-        allow(described_class).to receive(:`).with("npm list -g --depth=0 --json 2>/dev/null").and_return("not json")
+        allow(Utils).to receive(:popen_read_text).with(*npm_list_args, err: File::NULL).and_return("not json")
 
         expect(dumper.packages).to be_empty
       end
 
       it "handles empty output" do
-        allow(described_class).to receive(:`).with("npm list -g --depth=0 --json 2>/dev/null").and_return("")
+        allow(Utils).to receive(:popen_read_text).with(*npm_list_args, err: File::NULL).and_return("")
 
         expect(dumper.packages).to be_empty
       end

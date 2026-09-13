@@ -1,4 +1,4 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 RSpec.describe Cask::Artifact::Binary, :cask do
@@ -11,11 +11,11 @@ RSpec.describe Cask::Artifact::Binary, :cask do
   let(:binarydir) { cask.config.binarydir }
   let(:expected_path) { binarydir.join("binary") }
 
-  around do |example|
+  before do
     binarydir.mkpath
+  end
 
-    example.run
-  ensure
+  after do
     FileUtils.rm_f expected_path
     FileUtils.rmdir binarydir
   end
@@ -99,7 +99,7 @@ RSpec.describe Cask::Artifact::Binary, :cask do
 
   it "raises a clean error when the target symlink cannot be resolved" do
     artifact = artifacts.first
-    expected_path.make_symlink(artifact.source)
+    expected_path.make_symlink(binarydir)
     allow(artifact.target).to receive(:realpath).and_raise(Errno::EACCES)
 
     expect do

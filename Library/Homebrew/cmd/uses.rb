@@ -39,7 +39,8 @@ module Homebrew
                description: "Evaluate all available formulae and casks, whether installed or not, to show " \
                             "their dependents.",
                env:         :eval_all,
-               odeprecated: true
+               replacement: "the default trusted-tap behaviour",
+               odisabled:   true
         switch "--include-implicit",
                description: "Include formulae that have <formula> as an implicit dependency for " \
                             "downloading and unpacking source files."
@@ -109,9 +110,11 @@ module Homebrew
           # We can only get here if `used_formulae_missing` is false, thus there are no UnavailableFormula.
           used_formulae = T.cast(used_formulae, T::Array[Formula])
           if show_formulae_and_casks || args.formula?
-            deps += T.must(used_formulae.map(&:runtime_installed_formula_dependents)
-                     .reduce(&:&))
-                     .select(&:any_version_installed?)
+            all_dependents = used_formulae.map(&:runtime_installed_formula_dependents)
+            common_dependents = all_dependents.drop(1).reduce(all_dependents.fetch(0)) do |common, dependents|
+              common & dependents
+            end
+            deps += common_dependents.select(&:any_version_installed?)
           end
           if show_formulae_and_casks || args.cask?
             deps += select_used_dependents(
@@ -122,20 +125,11 @@ module Homebrew
 
           deps
         else
-          eval_all = args.eval_all?
-          eval_all ||= Homebrew::EnvConfig.tap_trust_configured?
-
-          if !args.installed? && !eval_all
-            raise UsageError,
-                  "`brew uses` needs `--installed`, `HOMEBREW_REQUIRE_TAP_TRUST=1` or " \
-                  "`HOMEBREW_NO_REQUIRE_TAP_TRUST=1` set!"
-          end
-
           if show_formulae_and_casks || args.formula?
-            deps += args.installed? ? Formula.installed : Formula.all(eval_all:)
+            deps.concat(args.installed? ? Formula.installed : Formula.all)
           end
           if show_formulae_and_casks || args.cask?
-            deps += args.installed? ? Cask::Caskroom.casks : Cask::Cask.all(eval_all:)
+            deps.concat(args.installed? ? Cask::Caskroom.casks : Cask::Cask.all)
           end
 
           if args.missing?

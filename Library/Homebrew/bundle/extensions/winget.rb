@@ -109,7 +109,7 @@ module Homebrew
           cmd = which("cmd.exe", ORIGINAL_PATHS) || Pathname.new("/mnt/c/Windows/System32/cmd.exe")
           return unless cmd.executable?
 
-          `"#{cmd}" /d /c echo %LOCALAPPDATA% 2>/dev/null`.strip.presence
+          Utils.popen_read_text(cmd, "/d", "/c", "echo", "%LOCALAPPDATA%", err: File::NULL).strip.presence
         end
 
         sig { params(path: String).returns(T.nilable(Pathname)) }

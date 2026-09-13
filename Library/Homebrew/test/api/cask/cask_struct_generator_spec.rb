@@ -102,4 +102,9 @@ RSpec.describe Homebrew::API::Cask::CaskStructGenerator do
     output = described_class.process_url_specs(input)
     expect(output).to eq expected_output
   end
+
+  it "drops the deprecated verified URL spec from existing metadata" do
+    output = described_class.process_url_specs({ verified: "cdn.example.com/", bar: "baz" })
+    expect(output).to eq({ bar: "baz" })
+  end
 end

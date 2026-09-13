@@ -100,11 +100,13 @@ module Homebrew
       short_version = self.short_version
       version = self.version
 
-      return [T.must(short_version)] if short_version == version
+      return [short_version] if short_version && short_version == version
 
       if short_version && version
         return [version] if version.match?(/\A\d+(\.\d+)+\Z/) && version.start_with?("#{short_version}.")
-        return [short_version] if short_version.match?(/\A\d+(\.\d+)+\Z/) && short_version.start_with?("#{version}.")
+        if short_version.match?(/\A\d+(\.\d+)+\Z/) && short_version.start_with?("#{version}.")
+          return [short_version]
+        end
 
         if short_version.match?(/\A\d+(\.\d+)*\Z/) && version.match?(/\A\d+\Z/)
           return [short_version] if short_version.start_with?("#{version}.") || short_version.end_with?(".#{version}")

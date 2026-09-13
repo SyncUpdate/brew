@@ -49,7 +49,7 @@ RSpec.shared_examples "a documented command" do |command, shell: false|
 
   it "shows its help", :integration_test,
      documented_command: T.cast(command, String), documented_command_shell: T.cast(shell, T::Boolean) do
-    T.bind(self, RSpec::Core::ExampleGroup)
+    T.bind(self, T.all(RSpec::Core::ExampleGroup, Test::Helper::IntegrationTest))
     example = RSpec.current_example
     raise "Current RSpec example is unavailable" if example.nil?
 
@@ -58,9 +58,9 @@ RSpec.shared_examples "a documented command" do |command, shell: false|
 
     expect do
       if documented_command_shell
-        T.unsafe(self).brew_sh("help", documented_command)
+        brew_sh("help", documented_command)
       else
-        T.unsafe(self).brew("help", documented_command)
+        brew("help", documented_command)
       end
     end.to be_a_success
   end
@@ -123,7 +123,7 @@ module Test
           end
           ruby_args << "-r#{HOMEBREW_LIBRARY_PATH}/test/support/helper/integration_mocks"
           ruby_args << "-e" << "$0 = ARGV.shift; load($0)"
-          ruby_args << (HOMEBREW_LIBRARY_PATH/"brew.rb").resolved_path.to_s
+          ruby_args << Utils::Path.resolved_path(HOMEBREW_LIBRARY_PATH/"brew.rb").to_s
         end
 
         Bundler.with_unbundled_env do
@@ -132,6 +132,18 @@ module Test
           $stderr.print stderr
           status
         end
+      end
+
+      # A copy, not a symlink: `bin/brew` resolves a symlinked entry point back
+      # to the real repository.
+      sig { returns(String) }
+      def test_prefix_brew_sh
+        test_prefix_library = HOMEBREW_PREFIX/"Library"
+        test_prefix_library.mkpath
+        FileUtils.ln_sf HOMEBREW_LIBRARY_PATH, test_prefix_library/"Homebrew"
+        # `cp` would keep the touched file's non-executable mode.
+        FileUtils.install HOMEBREW_BREW_FILE, HOMEBREW_PREFIX/"bin/brew", mode: 0755
+        (HOMEBREW_PREFIX/"bin/brew").to_s
       end
 
       sig { params(args: T.untyped).returns(Process::Status) }
@@ -143,7 +155,13 @@ module Test
           "HOMEBREW_INTEGRATION_TEST"   => command_id,
         }.merge(env)
         Bundler.with_unbundled_env do
-          brew_sh_path = env.delete("HOMEBREW_BREW_SH") || "#{ENV.fetch("HOMEBREW_PREFIX")}/bin/brew"
+          brew_sh_path = env.delete("HOMEBREW_BREW_SH")
+          # Other specs assert the real prefix, which the test one is not.
+          brew_sh_path ||= if RSpec.current_example.metadata[:test_prefix_taps]
+            test_prefix_brew_sh
+          else
+            "#{ENV.fetch("HOMEBREW_PREFIX")}/bin/brew"
+          end
           stdout, stderr, status = Open3.capture3(
             env,
             brew_sh_path,
@@ -298,7 +316,7 @@ RSpec.shared_context "integration test" do # rubocop:disable RSpec/ContextWordin
 
     example.run
   ensure
-    FileUtils.rm_rf HOMEBREW_PREFIX/"bin"
+    FileUtils.rm_rf [HOMEBREW_PREFIX/"bin", HOMEBREW_PREFIX/"Library/Homebrew"]
     ENV.delete("HOMEBREW_INTEGRATION_TEST")
   end
 end

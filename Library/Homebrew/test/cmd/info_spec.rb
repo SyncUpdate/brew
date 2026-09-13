@@ -83,11 +83,10 @@ RSpec.describe Homebrew::Cmd::Info do
     expect(json["casks"]).to be_empty
   end
 
-  it "does not include eval-all casks in formula JSON" do
+  it "does not include casks in formula JSON for all packages" do
     formula = installed_info_formula
 
     allow(Formula).to receive(:all).and_return([formula])
-    allow(Homebrew::EnvConfig).to receive(:tap_trust_configured?).and_return(true)
     expect(Cask::Cask).not_to receive(:all)
 
     output = +""
@@ -1030,6 +1029,75 @@ RSpec.describe Homebrew::Cmd::Info do
     expect { info.info_formula(formula) }
       .to output(/Requirements\nRequired: .*Linux/).to_stdout
       .and not_to_output(/supports Linux/).to_stdout
+      .and not_to_output.to_stderr
+  end
+
+  it "marks an unsatisfied architecture requirement on an uninstalled formula" do
+    allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
+
+    info = described_class.new([])
+    formula = formula("testball") do
+      T.bind(self, T.class_of(Formula))
+      url "https://brew.sh/testball-0.1.tar.gz"
+      homepage "https://brew.sh/testball"
+      desc "Some test"
+    end
+    requirement = ArchRequirement.new([:arm64])
+    allow(requirement).to receive(:satisfied?).and_return(false)
+    allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
+    allow(formula).to receive_messages(
+      core_formula?: false,
+      requirements:  Requirements.new(requirement),
+    )
+
+    expect { info.info_formula(formula) }
+      .to output(/Required: .*arm64 architecture.*✘/).to_stdout
+      .and not_to_output.to_stderr
+  end
+
+  it "marks an unsatisfied OS requirement on an uninstalled formula" do
+    allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
+
+    info = described_class.new([])
+    formula = formula("testball") do
+      T.bind(self, T.class_of(Formula))
+      url "https://brew.sh/testball-0.1.tar.gz"
+      homepage "https://brew.sh/testball"
+      desc "Some test"
+    end
+    other_os_requirement = OS.mac? ? LinuxRequirement.new : MacOSRequirement.new
+    other_os = OS.mac? ? "Linux" : "macOS"
+    allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
+    allow(formula).to receive_messages(
+      core_formula?: false,
+      requirements:  Requirements.new(other_os_requirement),
+    )
+
+    expect { info.info_formula(formula) }
+      .to output(/Required: .*#{other_os}.*✘/).to_stdout
+      .and not_to_output.to_stderr
+  end
+
+  it "keeps a satisfied requirement marked on an uninstalled formula" do
+    allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
+
+    info = described_class.new([])
+    formula = formula("testball") do
+      T.bind(self, T.class_of(Formula))
+      url "https://brew.sh/testball-0.1.tar.gz"
+      homepage "https://brew.sh/testball"
+      desc "Some test"
+    end
+    requirement = ArchRequirement.new([:arm64])
+    allow(requirement).to receive(:satisfied?).and_return(true)
+    allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
+    allow(formula).to receive_messages(
+      core_formula?: false,
+      requirements:  Requirements.new(requirement),
+    )
+
+    expect { info.info_formula(formula) }
+      .to output(/Required: .*arm64 architecture.*✔/).to_stdout
       .and not_to_output.to_stderr
   end
 

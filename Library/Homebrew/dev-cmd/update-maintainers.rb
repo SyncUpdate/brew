@@ -1,6 +1,8 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "utils/text"
+
 require "abstract_command"
 require "utils/github"
 require "manpages"
@@ -34,15 +36,17 @@ module Homebrew
         sentences = {}
         members.each do |group, hash|
           hash.each { |login, name| hash[login] = "[#{name}](https://github.com/#{login})" }
-          sentences[group] = hash.values.sort_by { |s| s.unicode_normalize(:nfd).gsub(/\P{L}+/, "") }.to_sentence
+          sentences[group] = Utils::Text.to_sentence(
+            hash.values.sort_by { |s| s.unicode_normalize(:nfd).gsub(/\P{L}+/, "") },
+          )
         end
 
         readme = HOMEBREW_REPOSITORY/"README.md"
 
         content = readme.read
-        content.gsub!(/(Homebrew's \[Lead Maintainers.* (are|is)) .*\./,
+        content.gsub!(/(Homebrew's \[Lead Maintainers.* (?:are|is)) .*\./,
                       "\\1 #{sentences[:lead_maintainers]}.")
-        content.gsub!(/(Homebrew's other Maintainers (are|is)) .*\./,
+        content.gsub!(/(Homebrew's other Maintainers (?:are|is)) .*\./,
                       "\\1 #{sentences[:maintainers]}.")
 
         File.write(readme, content)

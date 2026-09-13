@@ -101,15 +101,16 @@ RSpec.describe Homebrew::InstallSteps do
     expect((root/"stage/linked-target").readlink).to eq(Pathname("move-target"))
   end
 
-  specify "allows directory creation through parent sandbox paths" do
+  specify "limits directory creation to targets whose parent exists" do
+    (root/"prefix").mkpath
     steps = Homebrew::InstallSteps::DSL.build(default_base: :prefix) do
-      mkdir "one"
+      mkdir_p "one"
       mkdir_p "two/three"
     end
 
     paths = Homebrew::InstallSteps::Runner.new(context:).sandbox_write_paths(steps)
 
-    expect(paths).to contain_exactly(root/"prefix", root/"prefix/two")
+    expect(paths).to contain_exactly(root/"prefix/one", root/"prefix/two")
   end
 
   specify "resolves formula configuration paths without loading formula source" do
@@ -158,17 +159,14 @@ RSpec.describe Homebrew::InstallSteps do
   end
 
   specify "runs mkdir without creating parent directories" do
-    steps = Homebrew::InstallSteps::DSL.build(default_base: :var) do
-      mkdir "missing-parent/example"
-    end
-
-    expect(steps).to include(
+    steps = [{
       "type" => "mkdir",
       "path" => {
         "base" => "var",
         "path" => "missing-parent/example",
       },
-    )
+    }]
+
     expect { Homebrew::InstallSteps::Runner.new(context:).run(steps) }.to raise_error(Errno::ENOENT)
   end
 
@@ -272,6 +270,7 @@ RSpec.describe Homebrew::InstallSteps do
   end
 
   specify "keeps shipped step names serialisable for compatibility" do
+    allow(Utils::Output).to receive(:odeprecated)
     steps = Homebrew::InstallSteps::DSL.build do
       mkdir "directory"
       mv "source", "target"
@@ -325,11 +324,43 @@ RSpec.describe Homebrew::InstallSteps do
     expect(written).to include("literal = {{unknown}} {single}")
   end
 
+  specify "expands the cask arch token" do
+    context.define_singleton_method(:arch) { "-m1" }
+    steps = Homebrew::InstallSteps::DSL.build(default_base: :var) do
+      write_file "arch", "example#{arch}.app", append_newline: true
+    end
+
+    Homebrew::InstallSteps::Runner.new(context:).run(steps)
+
+    expect((root/"var/arch").read).to eq("example-m1.app\n")
+  end
+
+  specify "expands the cask arch token to an empty string without a matching value" do
+    context.define_singleton_method(:arch) { nil }
+    steps = Homebrew::InstallSteps::DSL.build(default_base: :var) do
+      write_file "arch", "example{{arch}}.app", append_newline: true
+    end
+
+    Homebrew::InstallSteps::Runner.new(context:).run(steps)
+
+    expect((root/"var/arch").read).to eq("example.app\n")
+  end
+
+  specify "leaves the arch token verbatim for a context without an arch" do
+    steps = Homebrew::InstallSteps::DSL.build(default_base: :var) do
+      write_file "arch", "example{{arch}}.app", append_newline: true
+    end
+
+    Homebrew::InstallSteps::Runner.new(context:).run(steps)
+
+    expect((root/"var/arch").read).to eq("example{{arch}}.app\n")
+  end
+
   specify "expands formula and cask identity tokens" do
     context.define_singleton_method(:name) { "example-formula" }
     context.define_singleton_method(:token) { "example-cask" }
     steps = Homebrew::InstallSteps::DSL.build(default_base: :var) do
-      write "identity", "#{formula_name}:#{token}"
+      write_file "identity", "#{formula_name}:#{token}", append_newline: true
     end
 
     Homebrew::InstallSteps::Runner.new(context:).run(steps)
@@ -376,7 +407,7 @@ RSpec.describe Homebrew::InstallSteps do
     command = class_double(SystemCommand)
     expect(command).to receive(:run)
       .with("helper", args: [""], sudo: false, env: { "EMPTY" => "" }, input: [], must_succeed: true,
-                      print_stdout: false, print_stderr: true, reset_uid: true, chdir: nil)
+                      print_stdout: false, print_stderr: true, chdir: nil)
 
     Homebrew::InstallSteps::Runner.new(context:, command:).run(steps)
 
@@ -389,7 +420,7 @@ RSpec.describe Homebrew::InstallSteps do
                                               default_target_base: :staged_path) do
       copy "source", "target"
       symlink "source", "target"
-      write "config", "content"
+      write_file "config", "content", overwrite: false, append_newline: true
       set_ownership "Example.app"
       terminate_process "Example"
     end
@@ -401,9 +432,9 @@ RSpec.describe Homebrew::InstallSteps do
 
   specify "writes a default config file and preserves existing ones", :aggregate_failures do
     steps = Homebrew::InstallSteps::DSL.build(default_base: :var) do
-      write "config/new.conf", "fresh"
-      write "config/kept.conf", "default"
-      write "config/replaced.conf", "default", overwrite: true
+      write_file "config/new.conf", "fresh", overwrite: false, append_newline: true
+      write_file "config/kept.conf", "default", overwrite: false, append_newline: true
+      write_file "config/replaced.conf", "default", append_newline: true
     end
 
     (root/"var/config").mkpath
@@ -594,11 +625,11 @@ RSpec.describe Homebrew::InstallSteps do
     expect(root/"var/obsolete-dir").not_to exist
   end
 
-  specify "filters removals and accepts the legacy path base", :aggregate_failures do
+  specify "filters removals and expands search paths", :aggregate_failures do
     ENV["PATH"] = (root/"path-bin").to_s
     steps = Homebrew::InstallSteps::DSL.build do
       remove "links/*", base: :staged_path, symlink_target_contains: "wanted"
-      remove "launcher", base: :path, content_contains: "owned marker"
+      remove "launcher", base: :search_path, content_contains: "owned marker"
     end
 
     (root/"stage/links").mkpath
@@ -669,7 +700,7 @@ RSpec.describe Homebrew::InstallSteps do
       .with(root/"prefix/libexec/helper", args: ["--path=#{root}/var"], sudo: false,
                                            env: { "EXAMPLE" => "#{root}/var/value" }, input: [],
                                            must_succeed: true, print_stdout: false,
-                                           print_stderr: true, reset_uid: true, chdir: nil)
+                                           print_stderr: true, chdir: nil)
 
     Homebrew::InstallSteps::Runner.new(context:, command:).run(steps)
   end
@@ -700,7 +731,7 @@ RSpec.describe Homebrew::InstallSteps do
     command = class_double(SystemCommand)
     expect(command).to receive(:run)
       .with(root/"prefix/bin/filter", args: [], sudo: false, env: {}, input: "input", must_succeed: true,
-                                      print_stdout: false, print_stderr: true, reset_uid: true,
+                                      print_stdout: false, print_stderr: true,
                                       chdir: root/"var/work")
       .and_return(result)
 
@@ -719,7 +750,7 @@ RSpec.describe Homebrew::InstallSteps do
     command = class_double(SystemCommand)
     expect(command).to receive(:run)
       .with(root/"prefix/libexec/helper", args: [], sudo: false, env: {}, input: [], must_succeed: false,
-                                           print_stdout: false, print_stderr: true, reset_uid: true, chdir: nil)
+                                           print_stdout: false, print_stderr: true, chdir: nil)
 
     Homebrew::InstallSteps::Runner.new(context:, command:).run(steps)
   end
@@ -754,7 +785,7 @@ RSpec.describe Homebrew::InstallSteps do
     expect(runner).to receive(:opoo).with("Unable to close Example")
     expect(command).to receive(:run!)
       .with("/usr/bin/pkill", args: ["-f", "/Applications/Example.app"], sudo: false,
-                              print_stdout: true, print_stderr: true, reset_uid: true)
+                              print_stdout: true, print_stderr: true)
       .exactly(3).times
       .and_raise(ErrorDuringExecution.new([], status: 1))
 
@@ -785,15 +816,15 @@ RSpec.describe Homebrew::InstallSteps do
     command = class_double(SystemCommand)
     expect(command).to receive(:run!)
       .with("/usr/bin/killall", args: ["Example"], sudo: false,
-                                print_stdout: true, print_stderr: true, reset_uid: true)
+                                print_stdout: true, print_stderr: true)
 
     Homebrew::InstallSteps::Runner.new(context:, command:).run(steps)
   end
 
   specify "appends a trailing newline unless already present", :aggregate_failures do
     steps = Homebrew::InstallSteps::DSL.build(default_base: :var) do
-      write "missing-newline", "value"
-      write "has-newline", "value\n"
+      write_file "missing-newline", "value", append_newline: true
+      write_file "has-newline", "value\n", append_newline: true
     end
 
     Homebrew::InstallSteps::Runner.new(context:).run(steps)
@@ -1542,19 +1573,6 @@ RSpec.describe Homebrew::InstallSteps do
     )
   end
 
-  specify "moves a directory's children without moving the new target directory" do
-    steps = Homebrew::InstallSteps::DSL.build(default_source_base: :staged_path, default_target_base: :staged_path) do
-      move_children ".", "Nested"
-    end
-
-    (root/"stage").mkpath
-    (root/"stage/source-file").write "source"
-
-    Homebrew::InstallSteps::Runner.new(context:).run(steps)
-
-    expect(root/"stage/Nested/source-file").to exist
-  end
-
   specify "moves a directory's contents" do
     steps = Homebrew::InstallSteps::DSL.build(default_source_base: :staged_path, default_target_base: :staged_path) do
       move_contents ".", "Nested"
@@ -1604,7 +1622,7 @@ RSpec.describe Homebrew::InstallSteps do
 
   specify "preserves symlinks with unexpected targets on uninstall" do
     steps = Homebrew::InstallSteps::DSL.build(default_target_base: :staged_path) do
-      symlink "target", "linked-target", source_base: :relative, uninstall: true
+      symlink "target", "linked-target", source_base: :relative, remove_on_uninstall: true
     end
     (root/"stage").mkpath
     File.symlink "different-target", root/"stage/linked-target"
@@ -1616,7 +1634,8 @@ RSpec.describe Homebrew::InstallSteps do
 
   specify "uses elevated removal for matching symlinks when needed" do
     steps = Homebrew::InstallSteps::DSL.build(default_target_base: :staged_path) do
-      symlink "target", "protected/linked-target", source_base: :relative, uninstall: true, sudo: :if_needed
+      symlink "target", "protected/linked-target", source_base: :relative,
+                                                    remove_on_uninstall: true, sudo: :if_needed
     end
     protected_dir = root/"stage/protected"
     protected_dir.mkpath

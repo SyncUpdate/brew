@@ -22,7 +22,7 @@ module UnpackStrategy
       ]
     end
 
-    sig { override.params(path: Pathname).returns(T::Boolean) }
+    sig { override.params(path: Path).returns(T::Boolean) }
     def self.can_extract?(path)
       return true if path.magic_number.match?(/\A.{257}ustar/n)
 
@@ -37,7 +37,7 @@ module UnpackStrategy
 
     sig { override.params(unpack_dir: Pathname, basename: Pathname, verbose: T::Boolean).void }
     def extract_to_dir(unpack_dir, basename:, verbose:)
-      Dir.mktmpdir("homebrew-tar", HOMEBREW_TEMP) do |tmpdir|
+      Dir.mktmpdir("homebrew-tar", temporary_directory.to_s) do |tmpdir|
         tar_path = if DependencyCollector.tar_needs_xz_dependency? && Xz.can_extract?(path)
           subextract(Xz, Pathname(tmpdir), verbose)
         elsif DependencyCollector.tar_needs_bzip2_dependency? && Bzip2.can_extract?(path)

@@ -27,7 +27,7 @@ module Homebrew
 
         # Can set these because they will be overwritten by freeze_named_args!
         # (whereas other values below will only be overwritten if passed).
-        @named = T.let(NamedArgs.new(parent: self), T.nilable(NamedArgs))
+        @named = T.let(NamedArgs.new(parent: self), NamedArgs)
         @remaining = T.let([], T::Array[String])
       end
 
@@ -36,17 +36,14 @@ module Homebrew
 
       sig { params(named_args: T::Array[String], cask_options: T::Boolean, without_api: T::Boolean).void }
       def freeze_named_args!(named_args, cask_options:, without_api:)
-        @named = T.let(
-          NamedArgs.new(
-            *named_args.freeze,
-            cask_options:,
-            flags:         flags_only,
-            force_bottle:  @table[:force_bottle?] || false,
-            override_spec: @table[:HEAD?] ? :head : nil,
-            parent:        self,
-            without_api:,
-          ),
-          T.nilable(NamedArgs),
+        @named = NamedArgs.new(
+          *named_args.freeze,
+          cask_options:,
+          flags:         flags_only,
+          force_bottle:  @table[:force_bottle?] || false,
+          override_spec: @table[:HEAD?] ? :head : nil,
+          parent:        self,
+          without_api:,
         )
       end
 
@@ -77,7 +74,7 @@ module Homebrew
       sig { returns(NamedArgs) }
       def named
         require "formula"
-        T.must(@named)
+        @named
       end
 
       sig { returns(T::Boolean) }
@@ -126,8 +123,6 @@ module Homebrew
 
       sig { returns(T::Array[[Symbol, Symbol]]) }
       def os_arch_combinations
-        skip_invalid_combinations = false
-
         # `--all-platforms` is equivalent to `--os=all --arch=all`.
         all_platforms = @table[:all_platforms?]
 
@@ -136,8 +131,6 @@ module Homebrew
         when nil
           [SimulateSystem.current_os]
         when :all
-          skip_invalid_combinations = true
-
           OnSystem::ALL_OS_OPTIONS
         else
           [os_sym]
@@ -148,20 +141,12 @@ module Homebrew
         when nil
           [SimulateSystem.current_arch]
         when :all
-          skip_invalid_combinations = true
           OnSystem::ARCH_OPTIONS
         else
           [arch_sym]
         end
 
-        oses.product(arches).select do |os, arch|
-          if skip_invalid_combinations
-            bottle_tag = Utils::Bottles::Tag.new(system: os, arch:)
-            bottle_tag.valid_combination?
-          else
-            true
-          end
-        end
+        oses.product(arches)
       end
 
       private
@@ -175,7 +160,9 @@ module Homebrew
       sig { returns(T::Array[String]) }
       def cli_args
         @cli_args ||= @processed_options.filter_map do |short, long|
-          option = T.must(long || short)
+          option = long || short
+          next if option.nil?
+
           switch = :"#{option_to_name(option)}?"
           flag = option_to_name(option).to_sym
           if @table[switch] == true || @table[flag] == true

@@ -236,6 +236,15 @@ module Homebrew
         args << "--config" << (HOMEBREW_REPOSITORY/"docs/docs_rubocop_style.yml")
       elsif files.any? { |f| f.to_s.start_with? HOMEBREW_LIBRARY_PATH }
         base_dir = HOMEBREW_LIBRARY_PATH
+      elsif (tap = single_tap(files))
+        # RuboCop roots its project index at the working directory for this
+        # config (see `tap_rubocop_style.yml`). A tap has to be indexed on its
+        # own: rooted at `Library`, the index spans every installed tap and the
+        # cross-file cops pair one tap's constants and methods with another's as
+        # reassignments and duplicates. The paths stay as given, so the shared
+        # config's `Taps/...` exclusions keep matching a symlinked tap.
+        args << "--config" << (HOMEBREW_LIBRARY/"tap_rubocop_style.yml")
+        base_dir = tap.path
       else
         args << "--config" << (HOMEBREW_LIBRARY/".rubocop.yml")
         base_dir = HOMEBREW_LIBRARY if files.any? { |f| f.to_s.start_with? HOMEBREW_LIBRARY }
@@ -280,6 +289,15 @@ module Homebrew
           file["path"] = File.absolute_path(file["path"], base_dir)
         end
       end
+    end
+
+    sig { params(files: T::Array[Pathname]).returns(T.nilable(Tap)) }
+    def self.single_tap(files)
+      taps = files.filter_map { |file| Tap.from_path(file) }
+      return if taps.empty? || taps.length != files.length
+      return unless taps.map(&:name).uniq.one?
+
+      taps.first
     end
 
     sig {
@@ -487,7 +505,7 @@ module Homebrew
     sig { returns(T::Array[Pathname]) }
     def self.shell_scripts
       [
-        HOMEBREW_ORIGINAL_BREW_FILE.realpath,
+        HOMEBREW_BREW_FILE.realpath,
         HOMEBREW_REPOSITORY/"completions/bash/brew",
         HOMEBREW_REPOSITORY/"Dockerfile",
         *HOMEBREW_REPOSITORY.glob(".devcontainer/**/*.sh"),

@@ -39,6 +39,14 @@ RSpec.describe Keg do
     expect(described_class.all).to eq([keg])
   end
 
+  it "checks existing Python site-packages directories without running Python" do
+    site_packages = HOMEBREW_PREFIX/"lib/python3.14/site-packages"
+    site_packages.mkpath
+    allow(Language::Python).to receive(:major_minor_version).and_raise("must not run Python")
+
+    expect(Class.new(described_class).must_be_writable_directories).to include(site_packages)
+  end
+
   specify "#empty_installation?" do
     %w[.DS_Store INSTALL_RECEIPT.json LICENSE.txt].each do |file|
       touch keg/file
@@ -126,10 +134,11 @@ RSpec.describe Keg do
       end
     end
 
-    it "fails when already linked" do
+    it "fails when already linked without unlinking" do
       keg.link
 
       expect { keg.link }.to raise_error(Keg::AlreadyLinkedError)
+      expect(keg).to be_linked
     end
 
     it "fails when files exist" do
@@ -143,6 +152,70 @@ RSpec.describe Keg do
       dst.make_symlink(nonexistent)
       keg.link
       expect(dst.readlink).to eq(src.relative_path_from(dst.dirname))
+    end
+
+    context "when a cask's binary artifact targets a file" do
+      let(:cask_binary) { HOMEBREW_PREFIX/"lib/helloworld" }
+
+      before do
+        touch cask_binary
+        source = cask_binary
+        allow(Cask::Caskroom).to receive(:casks).and_return([Cask::Cask.new("dotnet-sdk") { binary source }])
+      end
+
+      it "overwrites the cask's symlink with a trailing warning" do
+        dst.make_symlink(cask_binary)
+
+        expect { keg.link }.to output(<<~EOS).to_stderr
+          Warning: Overwrote symlinks from the dotnet-sdk cask:
+            #{dst}
+          To restore them, run:
+            brew unlink --formula foo && brew link --cask dotnet-sdk
+        EOS
+        expect(dst.readlink).to eq((keg/"bin/helloworld").relative_path_from(dst.dirname))
+      end
+
+      it "warns about the cask's symlink when overwriting and forgets it afterwards" do
+        dst.make_symlink(cask_binary)
+
+        expect { keg.link(overwrite: true) }.to output(/Overwrote symlinks from the dotnet-sdk cask/).to_stderr
+        keg.unlink
+        expect { keg.link }.not_to output.to_stderr
+      end
+
+      it "restores the cask's symlink in a pruned directory when a later file conflicts" do
+        completion = HOMEBREW_PREFIX/"share/fish/vendor_completions.d/helloworld.fish"
+        (keg/"share/fish/vendor_completions.d").mkpath
+        touch keg/"share/fish/vendor_completions.d/helloworld.fish"
+        touch keg/"share/zzz"
+        completion.dirname.mkpath
+        completion.make_symlink(cask_binary)
+        touch HOMEBREW_PREFIX/"share/zzz"
+        source = cask_binary
+        allow(Cask::Caskroom).to receive(:casks)
+          .and_return([Cask::Cask.new("dotnet-sdk") { binary source, target: completion }])
+
+        expect { keg.link }.to raise_error(Keg::ConflictError)
+        expect(completion.readlink).to eq(cask_binary)
+        expect { keg.link(dry_run: true, overwrite: true) }.not_to output.to_stderr
+      end
+
+      it "restores the cask's symlink when linking fails with any error" do
+        dst.make_symlink(cask_binary)
+        (keg/"share/info").mkpath
+        touch keg/"share/info/helloworld.info"
+        allow(Utils::Path).to receive(:install_info).and_raise("boom")
+
+        expect { keg.link }.to raise_error(RuntimeError, "boom")
+        expect(dst.readlink).to eq(cask_binary)
+      end
+
+      it "does not overwrite a symlink that doesn't resolve to the cask's binary" do
+        touch HOMEBREW_PREFIX/"lib/other"
+        dst.make_symlink(HOMEBREW_PREFIX/"lib/other")
+
+        expect { keg.link }.to raise_error(Keg::ConflictError)
+      end
     end
 
     context "with overwrite set to true" do
@@ -224,7 +297,7 @@ RSpec.describe Keg do
       (keg/"lib"/"pkgconfig").make_symlink "example"
       keg.link
 
-      expect(link.resolved_path).to be_a_symlink
+      expect(Utils::Path.resolved_path(link)).to be_a_symlink
       expect(link.lstat).to be_a_symlink
     end
 
@@ -242,14 +315,14 @@ RSpec.describe Keg do
       it "ignores symlinks that have same relative path" do
         (keg/"lib"/filename).make_relative_symlink other_keg.opt_record/"lib"/filename
         keg.link
-        expect((HOMEBREW_PREFIX/"lib"/filename).resolved_path).to eq file
+        expect(Utils::Path.resolved_path(HOMEBREW_PREFIX/"lib"/filename)).to eq file
       end
 
       it "links symlinks that have different relative path" do
         filename2 = "libtest2.dylib"
         (keg/"lib"/filename2).make_relative_symlink other_keg.opt_record/"lib"/filename
         keg.link
-        expect((HOMEBREW_PREFIX/"lib"/filename2).resolved_path).to eq keg/"lib"/filename2
+        expect(Utils::Path.resolved_path(HOMEBREW_PREFIX/"lib"/filename2)).to eq keg/"lib"/filename2
       end
 
       it "fails linking symlinks that use Cellar path" do
@@ -305,7 +378,7 @@ RSpec.describe Keg do
 
     it "preverves broken symlinks pointing into the Keg" do
       keg.link
-      dst.resolved_path.delete
+      Utils::Path.resolved_path(dst).delete
       keg.unlink
       expect(dst).to be_a_symlink
     end
@@ -393,7 +466,7 @@ RSpec.describe Keg do
       (keg_record/"bin").mkpath
       keg = described_class.new(keg_record)
       keg.optlink
-      expect(keg_record).to eq(oldname_opt_record.resolved_path)
+      expect(keg_record).to eq(Utils::Path.resolved_path(oldname_opt_record))
       keg.uninstall
       expect(oldname_opt_record).not_to be_a_symlink
     end
@@ -455,6 +528,9 @@ RSpec.describe Keg do
       touch build_dir/"leveldb.a"
       (keg_path/"libexec/lib/node_modules/foo/lib").mkpath
       touch keg_path/"libexec/lib/node_modules/foo/lib/shipped.a"
+      touch keg_path/"libexec/lib/node_modules/foo/lib/shipped.o"
+      (keg_path/"libexec/lib/node_modules/foo/test/obj.target").mkpath
+      touch keg_path/"libexec/lib/node_modules/foo/test/obj.target/fixture.txt"
       (keg_path/"lib").mkpath
       touch keg_path/"lib/crt1.o"
 
@@ -465,7 +541,19 @@ RSpec.describe Keg do
       expect(build_dir/"leveldb.a").not_to exist
       expect(build_dir/"addon.node").to exist
       expect(keg_path/"libexec/lib/node_modules/foo/lib/shipped.a").to exist
+      expect(keg_path/"libexec/lib/node_modules/foo/lib/shipped.o").to exist
+      expect(keg_path/"libexec/lib/node_modules/foo/test/obj.target").to exist
       expect(keg_path/"lib/crt1.o").to exist
+    end
+
+    it "keeps directories that share an intermediate object's extension" do
+      fixture = HOMEBREW_CELLAR/"foo/1.0/libexec/lib/node_modules/foo/build/Release/name.d"
+      fixture.mkpath
+      touch fixture/"name.txt"
+
+      keg.delete_node_gyp_debris!
+
+      expect(fixture).to exist
     end
   end
 
@@ -479,7 +567,7 @@ RSpec.describe Keg do
     end
 
     it "replaces addons under node_modules when strip succeeds" do
-      allow(keg).to receive(:quiet_system) do |*command|
+      allow(SystemCommand).to receive(:quiet_system) do |*command|
         File.write(command.fetch(3), "stripped")
         true
       end
@@ -490,7 +578,7 @@ RSpec.describe Keg do
     end
 
     it "leaves addons untouched when strip fails" do
-      allow(keg).to receive(:quiet_system).and_return(false)
+      allow(SystemCommand).to receive(:quiet_system).and_return(false)
 
       keg.strip_node_gyp_addons!
 
@@ -498,7 +586,7 @@ RSpec.describe Keg do
     end
 
     it "re-signs addons that were stripped" do
-      allow(keg).to receive(:quiet_system) do |*command|
+      allow(SystemCommand).to receive(:quiet_system) do |*command|
         File.write(command.fetch(3), "stripped")
         true
       end
@@ -509,7 +597,7 @@ RSpec.describe Keg do
     end
 
     it "does not re-sign addons when strip fails" do
-      allow(keg).to receive(:quiet_system).and_return(false)
+      allow(SystemCommand).to receive(:quiet_system).and_return(false)
 
       expect(keg).to receive(:codesign_patched_binaries).with([])
 
@@ -537,6 +625,12 @@ RSpec.describe Keg do
       expect(keg.homebrew_created_file?(timer_file)).to be true
       expect(keg.homebrew_created_file?(regular_file)).to be false
       expect(keg.homebrew_created_file?(non_homebrew_plist)).to be false
+    end
+
+    it "identifies canonical Homebrew service files" do
+      service_files = %w[sh.brew.foo.plist sh.brew.foo.service sh.brew.foo.timer].map { |file| Pathname(file) }
+
+      expect(service_files.map { |file| keg.homebrew_created_file?(file) }).to all(be(true))
     end
   end
 

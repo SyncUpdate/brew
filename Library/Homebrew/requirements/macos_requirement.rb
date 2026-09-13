@@ -18,9 +18,10 @@ class MacOSRequirement < Requirement
   sig { returns(T.nilable(T.any(MacOSVersion, T::Array[MacOSVersion]))) }
   attr_reader :version
 
-  # Keep these around as empty arrays so we can keep the deprecation/disabling code the same.
+  # Keep both arrays so we can keep the deprecation/disabling code the same.
   # Treat these like odeprecated/odisabled in terms of deprecation/disabling.
   DISABLED_MACOS_VERSIONS = [
+    :catalina,
     :mojave,
     :high_sierra,
     :sierra,
@@ -37,19 +38,24 @@ class MacOSRequirement < Requirement
       new
     elsif args.count > 1
       new([args], comparator: "==")
-    elsif first_arg.is_a?(Symbol) && MacOSVersion::SYMBOLS.key?(first_arg)
+    elsif first_arg.is_a?(Symbol) &&
+          (MacOSVersion::SYMBOLS.key?(first_arg) ||
+           DISABLED_MACOS_VERSIONS.include?(first_arg) ||
+           DEPRECATED_MACOS_VERSIONS.include?(first_arg))
       new([first_arg], comparator:)
-    elsif (md = /^\s*(?<comparator><|>|[=<>]=)\s*:(?<version>\S+)\s*$/.match(first_arg_s))
-      replacement = if md[:comparator] == "<="
-        "`depends_on maximum_macos: :#{md[:version]}`"
-      elsif md[:comparator] == ">="
-        "`depends_on macos: :#{md[:version]}`"
+    elsif (md = /^\s*(?<comparator><|>|[=<>]=)\s*:(?<version>\S+)\s*$/.match(first_arg_s)) &&
+          (comparator = md[:comparator]) && (version = md[:version])
+      replacement = if comparator == "<="
+        "`depends_on maximum_macos: :#{version}`"
+      elsif comparator == ">="
+        "`depends_on macos: :#{version}`"
       end
       odeprecated "string comparison format for `depends_on macos:`", replacement
-      new([T.must(md[:version]).to_sym], comparator: T.must(md[:comparator]))
-    elsif (md = /^\s*(?<comparator><|>|[=<>]=)\s*(?<version>\S+)\s*$/.match(first_arg_s))
+      new([version.to_sym], comparator:)
+    elsif (md = /^\s*(?<comparator><|>|[=<>]=)\s*(?<version>\S+)\s*$/.match(first_arg_s)) &&
+          (comparator = md[:comparator])
       odeprecated "string comparison format for `depends_on macos:`"
-      new([md[:version]], comparator: T.must(md[:comparator]))
+      new([md[:version]], comparator:)
     else
       odeprecated "strict symbol format for `depends_on macos:`"
       new([first_arg], comparator: "==")
@@ -105,17 +111,21 @@ class MacOSRequirement < Requirement
   sig { returns(T.nilable(MacOSVersion)) }
   def minimum_version
     return MacOSVersion.new(HOMEBREW_MACOS_OLDEST_ALLOWED) if @comparator == "<=" || !version_specified?
-    return T.unsafe(@version).min if @version.respond_to?(:to_ary) || @version.is_a?(Array)
 
-    @version
+    version = @version
+    return version.min if version.is_a?(Array)
+
+    version
   end
 
   sig { returns(T.nilable(MacOSVersion)) }
   def maximum_version
     return MacOSVersion.new(HOMEBREW_MACOS_NEWEST_UNSUPPORTED) if @comparator == ">=" || !version_specified?
-    return T.unsafe(@version).max if @version.respond_to?(:to_ary) || @version.is_a?(Array)
 
-    @version
+    version = @version
+    return version.max if version.is_a?(Array)
+
+    version
   end
 
   sig { params(other: MacOSVersion).returns(T::Boolean) }
@@ -127,7 +137,7 @@ class MacOSRequirement < Requirement
     when ">=" then other >= T.cast(version, MacOSVersion)
     when "<=" then other <= T.cast(version, MacOSVersion)
     else
-      return T.unsafe(version).include?(other) if version.respond_to?(:to_ary) || version.is_a?(Array)
+      return version.include?(other) if version.is_a?(Array)
 
       version == other
     end
@@ -158,11 +168,9 @@ class MacOSRequirement < Requirement
   sig { returns(String) }
   def display_s
     if version_specified?
-      if @version.respond_to?(:to_ary) || @version.is_a?(Array)
-        "macOS #{@comparator} #{T.unsafe(@version).join(" / ")}"
-      else
-        "macOS #{@comparator} #{@version}"
-      end
+      version = @version
+      version = version.join(" / ") if version.is_a?(Array)
+      "macOS #{@comparator} #{version}"
     else
       "macOS"
     end

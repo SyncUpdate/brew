@@ -1,6 +1,8 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "system_command"
+
 require "services/formula_wrapper"
 require "fileutils"
 require "utils/output"
@@ -39,7 +41,7 @@ module Homebrew
                                        "--no-pager",
                                        "--no-legend")
         end.chomp.split("\n").filter_map do |svc|
-          svc[/(?:homebrew(?>\.mxcl)?|sh\.brew)\.([\w+-.@]+)/]&.delete_suffix(".service")
+          svc[/(?:homebrew(?>\.mxcl)?|sh\.brew)\.[\w+-.@]+/]&.delete_suffix(".service")
         end
       end
 
@@ -61,7 +63,7 @@ module Homebrew
         end
 
         if loaded_name.present? && loaded_name != service.service_name
-          if System.launchctl? && service.service_file_generated? && service.service_names.include?(loaded_name)
+          if service.service_file_generated? && service.service_names.include?(loaded_name)
             puts "Service `#{service.name}` is already loaded as `#{loaded_name}`; " \
                  "a service label migration is pending. Use `#{bin} restart #{service.name}` " \
                  "to migrate to `#{service.service_name}`."
@@ -107,8 +109,10 @@ module Homebrew
         running_services = running
         System.path.glob("{homebrew.*,sh.brew.*}.{plist,service,timer}").each do |file|
           label = FormulaWrapper.service_file_label(file) if file.extname.casecmp?(".plist")
-          service_name = label || File.basename(file).sub(/\.(plist|service|timer)$/i, "")
+          service_name = label || File.basename(file).sub(/\.(?:plist|service|timer)$/i, "")
           next if running_services.include?(service_name)
+          next if System.systemctl? && !file.extname.casecmp?(".plist") &&
+                  System::Systemctl.quiet_run("status", "#{service_name}.timer")
           next if label && System.launchctl? && System.launchctl_service_running?(label)
 
           puts "Removing unused service file: #{file}"
@@ -218,7 +222,7 @@ module Homebrew
           targets:  T::Array[Services::FormulaWrapper],
           verbose:  T::Boolean,
           no_wait:  T::Boolean,
-          max_wait: T.nilable(T.any(Integer, Float)),
+          max_wait: T.any(Integer, Float),
           keep:     T::Boolean,
         ).void
       }
@@ -234,7 +238,7 @@ module Homebrew
                   #{"sudo " unless System.root?}#{bin} stop #{service.name}
               EOS
             elsif System.launchctl? && (stopped_name = service.service_names.find do |name|
-              quiet_system(System.launchctl, "bootout", "#{System.domain_target}/#{name}")
+              SystemCommand.quiet_system(System.launchctl, "bootout", "#{System.domain_target}/#{name}")
             end)
               ohai "Successfully stopped `#{service.name}` (label: #{stopped_name})"
             else
@@ -280,6 +284,9 @@ module Homebrew
               end
             end
           elsif System.launchctl?
+            launchctl = System.launchctl
+            raise "launchctl is unavailable" if launchctl.nil?
+
             dont_wait_statuses = [
               Errno::ESRCH::Errno,
               System::LAUNCHCTL_DOMAIN_ACTION_NOT_SUPPORTED,
@@ -288,23 +295,34 @@ module Homebrew
               System.candidate_domain_targets.each do |domain_target|
                 break unless System.launchctl_service_running?(service_name)
 
-                quiet_system System.launchctl, "bootout", "#{domain_target}/#{service_name}"
-                unless no_wait
+                if no_wait
+                  SystemCommand.quiet_system launchctl, "bootout", "#{domain_target}/#{service_name}"
+                else
                   time_slept = 0
                   sleep_time = 1
-                  max_wait = T.must(max_wait)
-                  exit_status = $CHILD_STATUS.exitstatus
+                  exit_status = SystemCommand.run(
+                    launchctl,
+                    args:         ["bootout", "#{domain_target}/#{service_name}"],
+                    print_stderr: false,
+                    debug:        false,
+                    verbose:      false,
+                  ).exit_status
                   while dont_wait_statuses.exclude?(exit_status) &&
                         (exit_status == Errno::EINPROGRESS::Errno ||
                          System.launchctl_service_running?(service_name)) &&
                         (max_wait.zero? || time_slept < max_wait)
                     sleep(sleep_time)
                     time_slept += sleep_time
-                    quiet_system System.launchctl, "bootout", "#{domain_target}/#{service_name}"
-                    exit_status = $CHILD_STATUS.exitstatus
+                    exit_status = SystemCommand.run(
+                      launchctl,
+                      args:         ["bootout", "#{domain_target}/#{service_name}"],
+                      print_stderr: false,
+                      debug:        false,
+                      verbose:      false,
+                    ).exit_status
                   end
                 end
-                quiet_system System.launchctl, "stop", service_name if
+                SystemCommand.quiet_system launchctl, "stop", service_name if
                   System.launchctl_service_running?(service_name)
               end
             end
@@ -352,7 +370,7 @@ module Homebrew
               killed_service_names.each { |service_name| System::Systemctl.quiet_run("stop", service_name) }
             elsif System.launchctl?
               killed_service_names.each do |service_name|
-                quiet_system System.launchctl, "stop", service_name
+                SystemCommand.quiet_system System.launchctl, "stop", service_name
               end
             end
             service.reset_cache!
@@ -443,8 +461,11 @@ module Homebrew
       }
       def self.launchctl_load(service, file:, enable:)
         service_name = FormulaWrapper.service_file_label(file) || service.service_name
-        safe_system System.launchctl, "enable", "#{System.domain_target}/#{service_name}" if enable
-        safe_system System.launchctl, "bootstrap", System.domain_target, file
+        if enable
+          SystemCommand.safe_system System.launchctl, "enable",
+                                    "#{System.domain_target}/#{service_name}"
+        end
+        SystemCommand.safe_system System.launchctl, "bootstrap", System.domain_target, file
         service_name
       end
 
@@ -474,9 +495,18 @@ module Homebrew
 
         loaded_service_name = service.service_name
         if System.launchctl?
-          file ||= enable ? service.dest : service.source_service_file
           service.path_dirs.each(&:mkpath)
-          loaded_service_name = launchctl_load(service, file:, enable:)
+          if file.nil? && !enable && service.service_file_generated? &&
+             (contents = service.service_contents) != service.source_service_file.read
+            Tempfile.create([service.service_name, ".plist"]) do |tempfile|
+              tempfile.write(contents)
+              tempfile.flush
+              loaded_service_name = launchctl_load(service, file: Pathname(tempfile.path), enable:)
+            end
+          else
+            file ||= enable ? service.dest : service.source_service_file
+            loaded_service_name = launchctl_load(service, file:, enable:)
+          end
         elsif System.systemctl?
           # Systemctl loads based upon location so only install service
           # file when it is not installed. Used with the `run` command.
@@ -519,7 +549,10 @@ module Homebrew
 
         remove_service_files(service)
         service.dest_dir.mkpath unless service.dest_dir.directory?
-        cp T.must(temp.path), service.dest
+        temp_path = temp.path
+        raise "Could not create a temporary service file for `#{service.name}`." if temp_path.nil?
+
+        cp temp_path, service.dest
 
         # Clear tempfile.
         temp.close

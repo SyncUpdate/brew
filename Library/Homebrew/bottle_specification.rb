@@ -37,8 +37,8 @@ class BottleSpecification
     @root_url = T.let(nil, T.nilable(String))
   end
 
-  sig { params(val: Integer).returns(Integer) }
-  def rebuild(val = T.unsafe(nil))
+  sig { params(val: T.nilable(Integer)).returns(Integer) }
+  def rebuild(val = nil)
     val.nil? ? @rebuild : @rebuild = val
   end
 
@@ -64,7 +64,7 @@ class BottleSpecification
   sig { override.params(other: BasicObject).returns(T::Boolean) }
   def ==(other)
     case other
-    when self.class
+    when BottleSpecification
       rebuild == other.rebuild && collector == other.collector &&
         root_url == other.root_url && root_url_specs == other.root_url_specs && tap == other.tap
     else false
@@ -127,7 +127,7 @@ class BottleSpecification
   # Example bottle block syntax:
   # bottle do
   #  sha256 cellar: :any_skip_relocation, big_sur: "69489ae397e4645..."
-  #  sha256 cellar: :any, catalina: "449de5ea35d0e94..."
+  #  sha256 cellar: :any, monterey: "449de5ea35d0e94..."
   # end
   sig { params(hash: T::Hash[T.any(Symbol, String), T.any(String, Symbol)]).void }
   def sha256(hash)

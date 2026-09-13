@@ -252,14 +252,23 @@ module Homebrew
         end
         return false if tap_dependencies(entry, entries:, installed_taps:).present?
 
-        if entry.cls == Brew
+        package = if entry.cls == Brew
           require "formula"
           Formula[entry.full_name]
         else
           require "cask/cask_loader"
-          entry.install_name = ::Cask::CaskLoader.load(entry.full_name).full_name
+          ::Cask::CaskLoader.load(entry.full_name)
         end
-        true
+        return false unless (tap = package.tap)
+
+        entry.install_name = ::Utils.fully_qualified_name(package)
+        return true if tap.core_tap? || tap.core_cask_tap?
+
+        if entry.cls == Brew
+          tap.cask_tokens.exclude?(entry.install_name)
+        else
+          tap.formula_names.exclude?(entry.install_name) && tap.aliases.exclude?(entry.install_name)
+        end
       rescue
         false
       end
@@ -331,7 +340,7 @@ module Homebrew
         ).returns([Integer, Integer])
       }
       def self.batch_install_package_type!(entries, no_upgrade:, verbose:, force:, quiet:)
-        cls = T.must(entries.first).cls
+        cls = entries.fetch(0).cls
         actionable = entries.select do |entry|
           if cls.preinstall!(entry.name, **entry.options, no_upgrade:, verbose:)
             puts Formatter.success("#{entry.verb} #{entry.name}")

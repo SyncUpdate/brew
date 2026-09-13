@@ -439,7 +439,9 @@ module RuboCop
 
         send_node = T.cast(node, RuboCop::AST::SendNode)
         return false if send_node.arguments.present?
-        return [:formula_name, :name, :token, :version].include?(send_node.method_name) if send_node.receiver.nil?
+        if send_node.receiver.nil?
+          return [:arch, :formula_name, :name, :token, :version].include?(send_node.method_name)
+        end
 
         return false unless (receiver = send_node.receiver)&.send_type?
 
@@ -749,9 +751,9 @@ module RuboCop
             source << content.dump.delete_prefix('"').delete_suffix('"')
             true
           elsif child.begin_type? && allowed_step_template_node?(child)
-            interpolation = "\#{#{child.source}}"
-            path << interpolation
-            source << interpolation
+            # `child.source` already carries the `#{}` delimiters.
+            path << child.source
+            source << child.source
             true
           else
             false

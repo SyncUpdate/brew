@@ -101,7 +101,7 @@ class Keg
   }
   def relocate_dynamic_linkage(_relocation, with_placeholders: false, files: nil) = []
 
-  JAVA_REGEX = %r{#{HOMEBREW_PREFIX}/opt/openjdk(@\d+(\.\d+)*)?/libexec(/openjdk\.jdk/Contents/Home)?}
+  JAVA_REGEX = %r{#{HOMEBREW_PREFIX}/opt/openjdk(?:@\d+(?:\.\d+)*)?/libexec(?:/openjdk\.jdk/Contents/Home)?}
 
   sig { returns(T::Hash[Symbol, T::Hash[Symbol, String]]) }
   def new_usr_local_replacement_pairs
@@ -225,7 +225,7 @@ class Keg
 
   sig { params(file: Pathname).returns(T::Boolean) }
   def homebrew_created_file?(file)
-    return false unless file.basename.to_s.start_with?("homebrew.")
+    return false unless file.basename.to_s.start_with?("homebrew.", "sh.brew.")
 
     %w[.plist .service .timer].include?(file.extname)
   end
@@ -235,8 +235,9 @@ class Keg
     files ||= text_files | libtool_files
 
     changed_files = T.let([], T::Array[Pathname])
-    keg_files(files).group_by { |f| f.stat.ino }.each_value do |first, *rest|
-      first = T.must(first)
+    keg_files(files).group_by { |f| f.stat.ino }.each_value do |hardlinks|
+      first = hardlinks.fetch(0)
+      rest = hardlinks.drop(1)
       s = first.open("rb", &:read)
 
       # Use full prefix replacement for Homebrew-created files when using selective relocation
@@ -247,12 +248,12 @@ class Keg
       end
       next unless file_relocation.replace_text!(s)
 
-      changed_files += [first, *rest].map { |file| file.relative_path_from(path) }
+      changed_files += hardlinks.map { |file| file.relative_path_from(path) }
 
       begin
         first.atomic_write(s)
       rescue SystemCallError
-        first.ensure_writable do
+        Utils::Path.ensure_writable(first) do
           first.open("wb") { |f| f.write(s) }
         end
       else
@@ -261,6 +262,20 @@ class Keg
     end
     changed_files
   end
+
+  # Serialised data such as the V8 startup snapshot in `node`'s library
+  # stores strings with a length, so the bytes after a prefix there belong
+  # to the next field and shifting them or NUL padding the tail corrupts
+  # it. Only a chunk that could be a NUL-terminated text string is patched:
+  # valid UTF-8 with no control characters other than whitespace and no
+  # longer than this bound. The bound is empirical, not a language limit:
+  # the longest C string found carrying a prefix, php's configure line, is
+  # 3740 bytes at a 13-byte prefix and would be 6.7 KiB at a 64-byte padded
+  # one, whereas `node`'s embedded `config.gypi` JSON, which is read by
+  # length, exceeds 21 KiB.
+  MAX_C_STRING_BYTESIZE = 16_384
+  C_STRING_REGEX = /\A[\t\n\r\P{Cc}]*\z/
+  private_constant :MAX_C_STRING_BYTESIZE, :C_STRING_REGEX
 
   # Returns the patched files relative to the keg.
   sig {
@@ -304,14 +319,21 @@ class Keg
       next unless keg.binary_file?(file)
 
       # Skip sharballs, which appear to break if patched.
-      next if file.text_executable?
+      next if Utils::Path.text_executable?(file)
 
       # Split binary by null characters into array and substitute new prefix for old prefix.
       # Null padding is added if the new string is too short.
-      file.ensure_writable do
+      Utils::Path.ensure_writable(file) do
         binary = File.binread file
         binary_strings = binary.split(/#{NULL_BYTE}/o, -1)
-        match_indices = binary_strings.each_index.select { |i| binary_strings.fetch(i).include?(old_prefix) }
+        match_indices = binary_strings.each_index.select do |i|
+          binary_string = binary_strings.fetch(i)
+          next false unless binary_string.include?(old_prefix)
+          next false if binary_string.bytesize > MAX_C_STRING_BYTESIZE
+
+          text = String.new(binary_string, encoding: Encoding::UTF_8)
+          text.valid_encoding? && text.match?(C_STRING_REGEX)
+        end
 
         # Bottle metadata records files pinned by any prefix, cellar or
         # repository reference, so a recorded file may not contain this
@@ -499,7 +521,7 @@ class Keg
       require "metafiles"
       next true if Metafiles::EXTENSIONS.include?(pn.extname)
 
-      if pn.text_executable?
+      if Utils::Path.text_executable?(pn)
         text_files << pn
         next true
       end

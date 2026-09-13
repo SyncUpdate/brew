@@ -1,6 +1,8 @@
 # typed: true
 # frozen_string_literal: true
 
+require "system_command"
+
 require "git_repository"
 
 RSpec.describe GitRepository do
@@ -14,27 +16,28 @@ RSpec.describe GitRepository do
   let(:clone_path) { repo_root/"clone" }
 
   before do
-    safe_system Utils::Git.git, "-c", "init.defaultBranch=#{branch_name}", "init", "--bare", remote_path
+    SystemCommand.safe_system Utils::Git.git, "-c", "init.defaultBranch=#{branch_name}", "init", "--bare", remote_path
 
     work_path.mkpath
     work_path.cd do
-      safe_system Utils::Git.git, "-c", "init.defaultBranch=#{branch_name}", "init"
+      SystemCommand.safe_system Utils::Git.git, "-c", "init.defaultBranch=#{branch_name}", "init"
       Pathname("README.md").write("README")
-      safe_system Utils::Git.git, "add", "README.md"
-      safe_system Utils::Git.git, "commit", "-m", "init"
-      safe_system Utils::Git.git, "remote", "add", "origin", remote_path
-      safe_system Utils::Git.git, "push", "-u", "origin", "refs/heads/#{branch_name}:refs/heads/#{branch_name}"
-      safe_system Utils::Git.git, "tag", tag_name
-      safe_system Utils::Git.git, "push", "origin", "refs/tags/#{tag_name}"
+      SystemCommand.safe_system Utils::Git.git, "add", "README.md"
+      SystemCommand.safe_system Utils::Git.git, "commit", "-m", "init"
+      SystemCommand.safe_system Utils::Git.git, "remote", "add", "origin", remote_path
+      SystemCommand.safe_system Utils::Git.git, "push", "-u", "origin",
+                                "refs/heads/#{branch_name}:refs/heads/#{branch_name}"
+      SystemCommand.safe_system Utils::Git.git, "tag", tag_name
+      SystemCommand.safe_system Utils::Git.git, "push", "origin", "refs/tags/#{tag_name}"
     end
 
     remote_path.cd do
-      safe_system Utils::Git.git, "symbolic-ref", "HEAD", "refs/heads/#{branch_name}"
+      SystemCommand.safe_system Utils::Git.git, "symbolic-ref", "HEAD", "refs/heads/#{branch_name}"
     end
 
-    safe_system Utils::Git.git, "clone", remote_path, clone_path
+    SystemCommand.safe_system Utils::Git.git, "clone", remote_path, clone_path
     clone_path.cd do
-      safe_system Utils::Git.git, "remote", "set-head", "origin", "--auto"
+      SystemCommand.safe_system Utils::Git.git, "remote", "set-head", "origin", "--auto"
     end
   end
 
@@ -44,6 +47,24 @@ RSpec.describe GitRepository do
 
     with_env(GIT_CONFIG_GLOBAL: global_config.to_s) do
       expect(git_repo.origin_url).to eq(remote_path.to_s)
+    end
+  end
+
+  describe "#shallow?" do
+    let(:shallow_path) { repo_root/"shallow" }
+    let(:worktree_path) { repo_root/"shallow-worktree" }
+
+    before do
+      SystemCommand.safe_system Utils::Git.git, "clone", "--depth", "1", "file://#{remote_path}", shallow_path
+      SystemCommand.safe_system Utils::Git.git, "-C", shallow_path, "worktree", "add", "--detach", worktree_path
+    end
+
+    it "detects a shallow clone through its linked worktree but not a full clone" do
+      expect([
+        described_class.new(shallow_path).shallow?,
+        described_class.new(worktree_path).shallow?,
+        git_repo.shallow?,
+      ]).to eq [true, true, false]
     end
   end
 
@@ -66,7 +87,7 @@ RSpec.describe GitRepository do
       expect(git_repo.head_info).to eq([git_repo.head_ref, git_repo.last_committed, branch_name])
 
       clone_path.cd do
-        safe_system Utils::Git.git, "checkout", "--quiet", "--detach"
+        SystemCommand.safe_system Utils::Git.git, "checkout", "--quiet", "--detach"
       end
       expect(git_repo.head_info[2]).to eq("HEAD")
 
@@ -81,7 +102,7 @@ RSpec.describe GitRepository do
       expect(git_repo.default_origin_branch?).to be true
 
       clone_path.cd do
-        safe_system Utils::Git.git, "checkout", "-b", "feature"
+        SystemCommand.safe_system Utils::Git.git, "checkout", "-b", "feature"
       end
 
       expect(git_repo.default_origin_branch?).to be false
@@ -89,7 +110,7 @@ RSpec.describe GitRepository do
 
     it "returns HEAD when detached at a tag" do
       clone_path.cd do
-        safe_system Utils::Git.git, "checkout", "refs/tags/#{tag_name}"
+        SystemCommand.safe_system Utils::Git.git, "checkout", "refs/tags/#{tag_name}"
       end
 
       expect(git_repo.branch_name).to eq("HEAD")
@@ -97,9 +118,9 @@ RSpec.describe GitRepository do
 
     it "disambiguates branch_name when refs/stash exists" do
       clone_path.cd do
-        safe_system Utils::Git.git, "checkout", "-b", "stash"
+        SystemCommand.safe_system Utils::Git.git, "checkout", "-b", "stash"
         Pathname("README.md").write("README stash")
-        safe_system Utils::Git.git, "stash", "--include-untracked"
+        SystemCommand.safe_system Utils::Git.git, "stash", "--include-untracked"
       end
 
       expect(git_repo.branch_name).to eq("stash")
@@ -107,7 +128,7 @@ RSpec.describe GitRepository do
 
     it "preserves branch names starting with heads/" do
       clone_path.cd do
-        safe_system Utils::Git.git, "checkout", "-b", "heads/feature"
+        SystemCommand.safe_system Utils::Git.git, "checkout", "-b", "heads/feature"
       end
 
       expect(git_repo.branch_name).to eq("heads/feature")

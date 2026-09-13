@@ -23,6 +23,9 @@ module Cask
     sig { returns(String) }
     attr_reader :token
 
+    sig { returns(T.nilable(String)) }
+    attr_reader :arch
+
     sig { returns(String) }
     attr_reader :version
 
@@ -42,6 +45,7 @@ module Cask
     def initialize(context)
       @name = T.let(context.fetch("name"), T.any(String, T::Array[String]))
       @token = T.let(context.fetch("token"), String)
+      @arch = T.let(context["arch"], T.nilable(String))
       @version = T.let(context.fetch("version"), String)
       @staged_path = T.let(Pathname(context.fetch("staged_path")), Pathname)
       @caskroom_path = T.let(Pathname(context.fetch("caskroom_path")), Pathname)

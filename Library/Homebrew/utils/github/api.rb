@@ -54,9 +54,9 @@ module GitHub
     class Error < RuntimeError
       include Utils::Output::Mixin
 
-      sig { params(message: T.nilable(String), github_message: String).void }
-      def initialize(message = nil, github_message = T.unsafe(nil))
-        @github_message = T.let(github_message, T.nilable(String))
+      sig { params(message: T.nilable(String), github_message: T.nilable(String)).void }
+      def initialize(message = nil, github_message = nil)
+        @github_message = github_message
         super(message)
       end
     end
@@ -102,7 +102,7 @@ module GitHub
 
     GITHUB_IP_ALLOWLIST_ERROR = Regexp.new(
       "Although you appear to have the correct authorization credentials, " \
-      "the `(.+)` organization has an IP allow list enabled, " \
+      "the `.+` organization has an IP allow list enabled, " \
       "and your IP address is not permitted to access this resource",
     ).freeze
 
@@ -180,14 +180,11 @@ module GitHub
     # Gets the token from the GitHub CLI for github.com.
     sig { returns(T.nilable(String)) }
     def self.github_cli_token
-      require "utils/uid"
       # Avoid `Formula["gh"].opt_bin` so this method works even with `HOMEBREW_DISABLE_LOAD_FORMULA`.
-      env = Utils::Path.formula_opt_bin_env("gh").merge("HOME" => Utils::UID.uid_home).compact
       gh_out, _, result = system_command("gh",
-                                         args:            ["auth", "token", "--hostname", "github.com"],
-                                         env:,
-                                         print_stderr:    false,
-                                         run_as_real_uid: true).to_a
+                                         args:         ["auth", "token", "--hostname", "github.com"],
+                                         env:          Utils::Path.formula_opt_bin_env("gh"),
+                                         print_stderr: false).to_a
       return unless result.success?
 
       gh_out.chomp.presence
@@ -197,13 +194,10 @@ module GitHub
     # but only if that password looks like a GitHub access token.
     sig { returns(T.nilable(String)) }
     def self.keychain_username_password
-      require "utils/uid"
       git_credential_out, _, result = system_command("git",
-                                                     args:            ["credential-osxkeychain", "get"],
-                                                     input:           ["protocol=https\n", "host=github.com\n"],
-                                                     env:             { "HOME" => Utils::UID.uid_home }.compact,
-                                                     print_stderr:    false,
-                                                     run_as_real_uid: true).to_a
+                                                     args:         ["credential-osxkeychain", "get"],
+                                                     input:        ["protocol=https\n", "host=github.com\n"],
+                                                     print_stderr: false).to_a
       return unless result.success?
 
       git_credential_out.force_encoding("ASCII-8BIT")
@@ -278,15 +272,15 @@ module GitHub
     T::Sig::WithoutRuntime.sig {
       params(
         url:              T.any(String, URI::Generic),
-        data:             T::Hash[Symbol, T.untyped],
-        data_binary_path: String,
-        request_method:   Symbol,
+        data:             T.nilable(T::Hash[Symbol, T.untyped]),
+        data_binary_path: T.nilable(String),
+        request_method:   T.nilable(Symbol),
         scopes:           T::Array[String],
         parse_json:       T::Boolean,
         _block:           T.nilable(T.proc.params(data: T::Hash[String, T.untyped]).returns(T.untyped)),
       ).returns(T.untyped)
     }
-    def self.open_rest(url, data: T.unsafe(nil), data_binary_path: T.unsafe(nil), request_method: T.unsafe(nil),
+    def self.open_rest(url, data: nil, data_binary_path: nil, request_method: nil,
                        scopes: [].freeze, parse_json: true, &_block)
       # This is a no-op if the user is opting out of using the GitHub API.
       return block_given? ? yield({}) : {} if Homebrew::EnvConfig.no_github_api?
@@ -316,7 +310,7 @@ module GitHub
         args += ["--header", "Content-Type: application/gzip"]
       end
 
-      headers_tmpfile = Tempfile.new("github_api_headers", HOMEBREW_TEMP)
+      headers_tmpfile = Tempfile.create("github_api_headers", HOMEBREW_TEMP)
       begin
         if data_tmpfile
           data_tmpfile.write data
@@ -326,7 +320,7 @@ module GitHub
           args += ["--request", request_method.to_s] if request_method
         end
 
-        args += ["--dump-header", T.must(headers_tmpfile.path)]
+        args += ["--dump-header", headers_tmpfile.path]
 
         require "utils/curl"
         result = Utils::Curl.curl_output("--location", url.to_s, *args, secrets: token ? [token] : [])
@@ -339,12 +333,12 @@ module GitHub
           data_tmpfile.unlink
         end
         headers_tmpfile.close
-        headers_tmpfile.unlink
+        File.unlink(headers_tmpfile.path)
       end
 
       begin
         if !http_code.start_with?("2") || !result.status.success?
-          raise_error(output, result.stderr, http_code, headers || "", scopes)
+          raise_error(output, result.stderr, http_code, headers, scopes)
         end
 
         return if http_code == "204" # No Content
@@ -368,7 +362,7 @@ module GitHub
     T::Sig::WithoutRuntime.sig {
       params(
         url:                     T.any(String, URI::Generic),
-        additional_query_params: String,
+        additional_query_params: T.nilable(String),
         per_page:                Integer,
         scopes:                  T::Array[String],
         _block:                  T.proc
@@ -376,7 +370,7 @@ module GitHub
                                   .returns(T.untyped),
       ).void
     }
-    def self.paginate_rest(url, additional_query_params: T.unsafe(nil), per_page: 100, scopes: [].freeze, &_block)
+    def self.paginate_rest(url, additional_query_params: nil, per_page: 100, scopes: [].freeze, &_block)
       (1..API_MAX_PAGES).each do |page|
         retry_count = 1
         result = begin

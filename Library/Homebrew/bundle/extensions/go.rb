@@ -35,8 +35,8 @@ module Homebrew
           @packages = if (go = package_manager_executable)
             ENV["GOBIN"] = ENV.fetch("HOMEBREW_GOBIN", nil)
             ENV["GOPATH"] = ENV.fetch("HOMEBREW_GOPATH", nil)
-            gobin = `#{go} env GOBIN`.chomp
-            gopath = `#{go} env GOPATH`.chomp
+            gobin = Utils.popen_read(go, "env", "GOBIN", err: :err).chomp
+            gopath = Utils.popen_read(go, "env", "GOPATH", err: :err).chomp
             bin_dir = gobin.empty? ? "#{gopath}/bin" : gobin
             if File.directory?(bin_dir)
               binaries = Dir.glob("#{bin_dir}/*").select do |file|
@@ -44,7 +44,7 @@ module Homebrew
               end
 
               binaries.filter_map do |binary|
-                output = `#{go} version -m "#{binary}" 2>/dev/null`
+                output = Utils.popen_read(go, "version", "-m", binary, err: File::NULL)
                 next if output.empty?
 
                 lines = output.split("\n")
@@ -100,8 +100,8 @@ module Homebrew
           go = package_manager_executable
           return if go.nil?
 
-          gobin = `#{go} env GOBIN`.chomp
-          gopath = `#{go} env GOPATH`.chomp
+          gobin = Utils.popen_read(go, "env", "GOBIN", err: :err).chomp
+          gopath = Utils.popen_read(go, "env", "GOPATH", err: :err).chomp
           bin_dir = gobin.empty? ? "#{gopath}/bin" : gobin
           return unless File.directory?(bin_dir)
 
@@ -109,7 +109,7 @@ module Homebrew
           Dir.glob("#{bin_dir}/*").each do |binary|
             next if !File.executable?(binary) || File.directory?(binary) || File.symlink?(binary)
 
-            output = `#{go} version -m "#{binary}" 2>/dev/null`
+            output = Utils.popen_read(go, "version", "-m", binary, err: File::NULL)
             next if output.empty?
 
             path_line = output.split("\n").find { |line| line.strip.start_with?("path\t") }

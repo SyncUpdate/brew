@@ -108,7 +108,7 @@ disable! date: "2020-01-01", because: "invalid licence"
 - `:repo_removed`: upstream repository removed with no usable replacement
 - `:unmaintained`: project abandoned (no commits for a year and unresolved critical bugs or CVEs; note that some software is "done", so inactivity alone does not imply removal)
 - `:unreachable`: no longer reliably reachable upstream
-- `:unsupported`: compilation not supported by upstream (e.g. only supports macOS older than 10.15)
+- `:unsupported`: compilation not supported by upstream (e.g. only supports macOS older than 11)
 - `:deprecated_upstream`: deprecated upstream with no usable replacement
 - `:versioned_formula`: versioned formula that no longer [meets the requirements](Versions.md)
 - `:checksum_mismatch`: source checksum changed since bottles were built with no reputable justification
@@ -210,14 +210,24 @@ When `odeprecated: true`, the flag is hidden from `--help` and completions and p
 
 ### Environment variables
 
-Environment variables follow the same four-stage lifecycle. Include migration logic to copy the old value during the transition:
+Environment variables follow the same four-stage lifecycle.
+Define deprecations in `Homebrew::EnvConfig::ENVS` in `Library/Homebrew/env_config.rb`:
 
 ```ruby
-if (old_value = ENV["HOMEBREW_OLD_VAR"].presence)
-  opoo "`HOMEBREW_OLD_VAR` is deprecated. Use `HOMEBREW_NEW_VAR` instead."
-  # odeprecated "HOMEBREW_OLD_VAR", "HOMEBREW_NEW_VAR"
-  ENV["HOMEBREW_NEW_VAR"] = old_value
-end
+{
+  HOMEBREW_OLD_VAR: {
+    description: "Use this value for the old setting.",
+    replacement: :HOMEBREW_NEW_VAR,
+    # odeprecated: true,
+  },
+}
 ```
 
-The `# odeprecated` comment is then uncommented, changed to `odisabled` and finally removed following the standard lifecycle.
+The `# odeprecated: true` comment is then uncommented, changed to `odisabled: true` and finally removed with the variable definition following the standard lifecycle.
+A symbol `replacement:` copies the old value to the replacement variable if that variable is unset; a string provides migration guidance without copying the value.
+
+Ruby accessors report deprecations when variables are read.
+For deprecated variables previously consumed only by Bash, add their accessors to `Homebrew::EnvConfig.check_deprecated_bash_variables` so Ruby commands still report their deprecations.
+This check runs before a recognised command is executed.
+Each variable's warning is printed at most once per Ruby process.
+Help and unknown commands do not run this check, and shell-only commands do not load Ruby for it.

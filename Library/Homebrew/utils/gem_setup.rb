@@ -223,7 +223,7 @@ module Utils
 
       if @bundle_installed_groups != groups
         bundle = File.join(find_in_path("bundle"), "bundle")
-        bundle_check_output = `#{bundle} check 2>&1`
+        bundle_check_output = IO.popen([bundle, "check"], err: [:child, :out], &:read)
         bundle_check_failed = !$CHILD_STATUS.success?
 
         # for some reason sometimes the exit code lies so check the output too.
@@ -270,12 +270,7 @@ module Utils
         end
 
         bundle_installed = if bundle_install_required
-          Process.wait(fork do
-            # Native build scripts fail if EUID != UID
-            Process::UID.change_privilege(Process.euid) if Process.euid != Process.uid
-            exec bundle, "install", out: :err
-          end)
-          if $CHILD_STATUS.success?
+          if system bundle, "install", out: :err
             true
           else
             message = <<~EOS

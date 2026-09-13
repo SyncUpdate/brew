@@ -1,4 +1,4 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require "formula"
@@ -1256,7 +1256,7 @@ RSpec.describe Homebrew::Service do
         WantedBy=timers.target
 
         [Timer]
-        Unit=homebrew.formula_name.service
+        Unit=sh.brew.formula_name.service
         OnUnitActiveSec=5
       SYSTEMD
       expect(unit).to eq(unit_expect)
@@ -1280,7 +1280,7 @@ RSpec.describe Homebrew::Service do
         WantedBy=timers.target
 
         [Timer]
-        Unit=homebrew.formula_name.service
+        Unit=sh.brew.formula_name.service
 
       SYSTEMD
       expect(unit).to eq(unit_expect)
@@ -1331,7 +1331,7 @@ RSpec.describe Homebrew::Service do
           WantedBy=timers.target
 
           [Timer]
-          Unit=homebrew.formula_name.service
+          Unit=sh.brew.formula_name.service
           Persistent=true
           OnCalendar=#{calendar}
         SYSTEMD
@@ -1643,6 +1643,7 @@ RSpec.describe Homebrew::Service do
   describe "#effective_environment_variables" do
     it "returns formula vars when no env override file exists" do
       f = stub_formula do
+        T.bind(self, T.class_of(Formula))
         service do
           run opt_bin/"beanstalkd"
           environment_variables FOO: "BAR"
@@ -1655,6 +1656,7 @@ RSpec.describe Homebrew::Service do
 
     it "merges user env overrides with formula vars" do
       f = stub_formula do
+        T.bind(self, T.class_of(Formula))
         service do
           run opt_bin/"beanstalkd"
           environment_variables FOO: "BAR"
@@ -1676,6 +1678,7 @@ RSpec.describe Homebrew::Service do
 
     it "user env overrides take precedence over formula vars" do
       f = stub_formula do
+        T.bind(self, T.class_of(Formula))
         service do
           run opt_bin/"beanstalkd"
           environment_variables FOO: "BAR"
@@ -1697,6 +1700,7 @@ RSpec.describe Homebrew::Service do
 
     it "ignores comments and blank lines in env file" do
       f = stub_formula do
+        T.bind(self, T.class_of(Formula))
         service do
           run opt_bin/"beanstalkd"
           environment_variables FOO: "BAR"
@@ -1722,6 +1726,7 @@ RSpec.describe Homebrew::Service do
 
     it "skips lines without = and strips whitespace around =" do
       f = stub_formula do
+        T.bind(self, T.class_of(Formula))
         service do
           run opt_bin/"beanstalkd"
         end
@@ -1752,6 +1757,7 @@ RSpec.describe Homebrew::Service do
 
     it "includes user env overrides in to_plist" do
       f = stub_formula do
+        T.bind(self, T.class_of(Formula))
         service do
           run [opt_bin/"beanstalkd", "test"]
           environment_variables FOO: "BAR"
@@ -1776,6 +1782,7 @@ RSpec.describe Homebrew::Service do
 
     it "includes user env overrides in to_systemd_unit" do
       f = stub_formula do
+        T.bind(self, T.class_of(Formula))
         service do
           run opt_bin/"beanstalkd"
           environment_variables FOO: "BAR"
@@ -1798,6 +1805,7 @@ RSpec.describe Homebrew::Service do
 
     it "skips world-writable env files" do
       f = stub_formula do
+        T.bind(self, T.class_of(Formula))
         service do
           run opt_bin/"beanstalkd"
           environment_variables FOO: "BAR"
@@ -1809,7 +1817,7 @@ RSpec.describe Homebrew::Service do
         services_dir.mkpath
         env_file = services_dir / "formula_name.env"
         env_file.write "OLLAMA_HOST=0.0.0.0"
-        File.chmod 0666, env_file
+        File.chmod 0666, env_file.to_s
 
         expect { f.service.effective_environment_variables }.to output(/world-writable/).to_stderr
         vars = f.service.effective_environment_variables
@@ -1819,6 +1827,7 @@ RSpec.describe Homebrew::Service do
 
     it "skips group-writable env files" do
       f = stub_formula do
+        T.bind(self, T.class_of(Formula))
         service do
           run opt_bin/"beanstalkd"
           environment_variables FOO: "BAR"
@@ -1830,7 +1839,7 @@ RSpec.describe Homebrew::Service do
         services_dir.mkpath
         env_file = services_dir / "formula_name.env"
         env_file.write "OLLAMA_HOST=0.0.0.0"
-        File.chmod 0664, env_file
+        File.chmod 0664, env_file.to_s
 
         expect { f.service.effective_environment_variables }.to output(/group-writable/).to_stderr
         vars = f.service.effective_environment_variables
@@ -1840,6 +1849,7 @@ RSpec.describe Homebrew::Service do
 
     it "follows symlinks to a safe target" do
       f = stub_formula do
+        T.bind(self, T.class_of(Formula))
         service do
           run opt_bin/"beanstalkd"
           environment_variables FOO: "BAR"
@@ -1851,7 +1861,7 @@ RSpec.describe Homebrew::Service do
         services_dir.mkpath
         target = services_dir / "actual.env"
         target.write "OLLAMA_HOST=0.0.0.0"
-        File.chmod 0644, target
+        File.chmod 0644, target.to_s
 
         symlink = services_dir / "formula_name.env"
         File.symlink(target, symlink)
