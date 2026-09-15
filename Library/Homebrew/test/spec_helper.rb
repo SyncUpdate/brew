@@ -36,7 +36,7 @@ require "timeout"
 
 $LOAD_PATH.unshift(File.expand_path("#{ENV.fetch("HOMEBREW_LIBRARY")}/Homebrew/test/support/lib"))
 
-require_relative "support/extend/cachable"
+require_relative "support/extend/cacheable"
 
 require_relative "../global"
 
@@ -307,7 +307,7 @@ RSpec.configure do |config|
     Homebrew.raise_deprecation_exceptions = true
 
     Tap.installed.each(&:clear_cache)
-    Cachable::Registry.clear_all_caches
+    Cacheable::Registry.clear_all_caches
     FormulaInstaller.attempted.clear
     FormulaInstaller.installed.clear
     FormulaInstaller.fetched.clear
@@ -402,7 +402,7 @@ RSpec.configure do |config|
       @__stdin.close
 
       Tap.all.each(&:clear_cache)
-      Cachable::Registry.clear_all_caches
+      Cacheable::Registry.clear_all_caches
 
       # Refuse to clean a config home outside the sandboxed `HOME`, else this deletes the user's
       # real `~/.homebrew/trust.json`; canonicalise first so `..`/symlinks can't slip past.
@@ -421,6 +421,7 @@ RSpec.configure do |config|
         HOMEBREW_PINNED_CASKS,
         user_config_home/"trust.json",
         HOMEBREW_PREFIX/"Caskroom",
+        HOMEBREW_PREFIX/"var/homebrew/sandbox",
         HOMEBREW_PREFIX/"Frameworks",
         HOMEBREW_LIBRARY/"Taps/homebrew/homebrew-cask",
         HOMEBREW_LIBRARY/"Taps/homebrew/homebrew-bar",
