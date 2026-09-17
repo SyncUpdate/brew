@@ -1,5 +1,5 @@
 ---
-last_review_date: "2026-09-10"
+last_review_date: "2026-09-14"
 ---
 
 # Advisory Matching
@@ -17,8 +17,14 @@ An `introduced: "0"` boundary asserts that every earlier version is affected; it
 Automatic matching deliberately favours range accuracy over coverage.
 Unreadable or uncomparable history, disjoint affected intervals and affected and unaffected builds sharing a `pkg_version` can prevent a new record from being emitted.
 The command warns and counts these as history-unavailable skips instead of inventing a boundary.
+This includes a historical subject whose prerelease suffix changes its `SEMVER` range state compared with its release version.
 A skip does not mean the formula is unaffected, so an ingest run can omit a currently affected formula and is not evidence of complete vulnerability coverage.
 Reviewers must establish the ranges and matching provenance together from upstream evidence and formula build history, then contribute the record manually.
+
+Current-version prerelease ambiguity produces an uncomparable review lead with no `range_state`, reduced confidence and `database_specific.review_reason: "prerelease_boundary"`.
+Ingest drops these leads and lists their IDs by reason in its run summary.
+An explicit `range_state` override for the formula and advisory resolves the current-state ambiguity; an `upstream_fixed_in` override alone does not.
+Without a reviewed state override, existing reviewed records stay unchanged.
 
 A reviewed state override does not establish historical boundaries.
 When its state disagrees with comparable upstream evidence, or the upstream evidence cannot be checked, a new range needs manual review.
@@ -30,3 +36,26 @@ Existing reviewed ranges are preserved rather than replaced with guessed introdu
 `--json` without `--output` has no existing reviewed records to reuse, so history checks still apply to new comparable candidates.
 `--no-history` explicitly uses unverified zero/current-version boundaries for new ranges and cannot be combined with `--new-history`.
 It is an unchecked authoring mode, not a way to validate a skipped candidate.
+
+## Reconciling existing ranges
+
+`--reconcile-history --output advisories --overrides data/overrides.yml` explicitly revisits existing `source: matched`, bump-fixed records with one terminal interval.
+It requires complete formula history and matching provenance, with the same result on the latest supported macOS and Linux for both ARM and Intel.
+These simulations check declared formula and resource versions; they do not rebuild historical bottles or verify installation steps.
+It can narrow an affected interval or delete a record proven never affected; it preserves other fields and updates `modified` only for a range change.
+Generated records, patch fixes, open or multiple intervals and records no longer rediscovered by current matching are left unchanged.
+When a prerelease suffix changes a subject’s `SEMVER` range state compared with its release version, `prerelease_boundary` holds the record for review.
+The command reports skip reasons and the number of matched records it did not revisit; success does not establish complete coverage.
+
+Before running this mode, protect hand-reviewed Homebrew boundaries with `preserve_homebrew_ranges: true` under the formula and advisory in `overrides.yml`.
+The pin applies across advisory aliases and is separate from `upstream_fixed_in`, which describes the upstream fix.
+Unavailable history or upstream records, changed subjects, conflicting platform results and advisory-specific patches require review.
+A failed upstream lookup holds every record for that formula with `upstream_unavailable`; a failed batch query holds its entire formula batch.
+A confirmed HTTP 404 while following an upstream link is cached as a missing target; a record with no resolved targets keeps its original evidence.
+A 404 for an ID returned directly by a query still holds the formula, as do other request failures.
+Reconciliation continues with the remaining formulae, so a successful command can include these holds.
+Complete history includes earlier lifetimes of deleted and re-added formulae, skipping revisions where Git proves the formula path was absent.
+A rename into the current formula name starts that name’s history; the old formula name’s builds are excluded.
+Historical loading ignores obsolete `devel` blocks and uses the stable build.
+Unattributed patches and `inreplace` alone do not block reconciliation.
+This mode cannot be combined with `--new-history`, `--no-history`, `--json` or `--index` and does not enable reconciliation in ordinary ingest runs.

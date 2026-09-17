@@ -586,6 +586,37 @@ RSpec.describe Homebrew::Vulns::Match do
       expect(hits.map { |h| h.vulnerability.id }).to eq ["ALBA-2022:1788"]
     end
 
+    it "caches a missing upstream target while retaining the unresolved distro record" do
+      strict = described_class.new(repology:, cpan_sec:, strict_upstream: true)
+      allow(Homebrew::Vulns::OSV).to receive(:vulnerability).with("DSA-1")
+                                                            .and_return({ "id"       => "DSA-1",
+                                                                          "upstream" => ["CVE-2024-0404"] })
+      expect(Homebrew::Vulns::OSV).to receive(:vulnerability).with("CVE-2024-0404").once
+                                                             .and_raise(Homebrew::Vulns::OSV::NotFoundError, "404")
+      hits = Array.new(2) { strict.resolve_upstream({ "DSA-1" => [ev(:distro)] }, identity) }
+
+      expect(hits.map { |rows| rows.map { |hit| [hit.vulnerability.id, hit.evidence.map(&:strategy)] } })
+        .to eq [[["DSA-1", [:distro]]], [["DSA-1", [:distro]]]]
+      expect { strict.resolve_upstream({ "CVE-2024-0404" => [ev(:git)] }, identity) }
+        .to raise_error(Homebrew::Vulns::OSV::NotFoundError)
+    end
+
+    it "continues resolving other upstream targets after a missing link" do
+      strict = described_class.new(repology:, cpan_sec:, strict_upstream: true)
+      allow(Homebrew::Vulns::OSV).to receive(:vulnerability).with("DSA-1")
+                                                            .and_return({ "id"       => "DSA-1",
+                                                                          "upstream" => ["CVE-2024-0404",
+                                                                                         "CVE-2024-0001"] })
+      allow(Homebrew::Vulns::OSV).to receive(:vulnerability).with("CVE-2024-0404")
+                                                            .and_raise(Homebrew::Vulns::OSV::NotFoundError, "404")
+      allow(Homebrew::Vulns::OSV).to receive(:vulnerability).with("CVE-2024-0001")
+                                                            .and_return({ "id" => "CVE-2024-0001" })
+
+      hits = strict.resolve_upstream({ "DSA-1" => [ev(:distro)] }, identity)
+
+      expect(hits.map { |hit| hit.vulnerability.id }).to eq ["CVE-2024-0001"]
+    end
+
     it "keeps a record as-is when its upstream CVE cannot be fetched" do
       allow(matcher).to receive(:fetch_vulnerability).with("DSA-1").and_return(
         vuln("id" => "DSA-1", "upstream" => ["CVE-2024-0404"]),
@@ -597,6 +628,78 @@ RSpec.describe Homebrew::Vulns::Match do
   end
 
   describe "#each_advisory_batch" do
+    context "when isolating upstream failures" do
+      let(:requests) do
+        formula("requests") do
+          T.bind(self, T.class_of(Formula))
+          url "https://github.com/psf/requests/archive/refs/tags/v2.31.0.tar.gz"
+        end
+      end
+      let(:bulk) { described_class.new(repology:, cpan_sec:, bulk: true, strict_upstream: true) }
+      let(:other) do
+        formula("other") do
+          T.bind(self, T.class_of(Formula))
+          url "https://github.com/owner/other/archive/refs/tags/v1.0.tar.gz"
+        end
+      end
+
+      before do
+        allow(Homebrew::Vulns::OSV).to receive(:query_batch) do |queries|
+          queries.map { |query| [{ "id" => query[:name].include?("other") ? "CVE-2024-0002" : "DSA-1" }] }
+        end
+        allow(Homebrew::Vulns::OSV).to receive(:vulnerability).with("CVE-2024-0002")
+                                                              .and_return({ "id" => "CVE-2024-0002" })
+      end
+
+      it "holds only dependent formulae when a prefetched record fails" do
+        expect(Homebrew::Vulns::OSV).to receive(:vulnerability).with("DSA-1").once
+                                                               .and_raise(Homebrew::Vulns::OSV::NotFoundError, "404")
+        held = []
+        yielded = []
+        bulk.each_advisory_batch([requests, other, requests], on_error: lambda { |f, e|
+          held << [f.name, e.message]
+        }) do |f, hits|
+          yielded << [f.name, hits.map(&:canonical_id)]
+        end
+
+        expect([held, yielded]).to eq [
+          [["requests", "404"], ["requests", "404"]], [["other", ["CVE-2024-0002"]]]
+        ]
+      end
+
+      it "holds a formula when an upstream link fails after other hits were resolved" do
+        allow(Homebrew::Vulns::OSV).to receive(:vulnerability).with("DSA-1")
+                                                              .and_return({ "id"       => "DSA-1",
+                                                                            "upstream" => ["CVE-2024-0002",
+                                                                                           "CVE-2024-0003"] })
+        allow(Homebrew::Vulns::OSV).to receive(:vulnerability).with("CVE-2024-0003")
+                                                              .and_raise(Homebrew::Vulns::OSV::ApiError, "503")
+        held = []
+        yielded = []
+        bulk.each_advisory_batch([requests, other], on_error: ->(f, _e) { held << f.name }) do |f, hits|
+          yielded << [f.name, hits.map(&:canonical_id)]
+        end
+
+        expect([held, yielded]).to eq [["requests"], [["other", ["CVE-2024-0002"]]]]
+      end
+
+      it "holds a failed query chunk and continues the next chunk" do
+        stub_const("Homebrew::Vulns::Match::BULK_CHUNK", 1)
+        allow(Homebrew::Vulns::OSV).to receive(:query_batch) do |queries|
+          raise Homebrew::Vulns::OSV::ApiError, "503" unless queries.fetch(0)[:name].include?("other")
+
+          [[{ "id" => "CVE-2024-0002" }]]
+        end
+        held = []
+        yielded = []
+        bulk.each_advisory_batch([requests, other], on_error: ->(f, _e) { held << f.name }) do |f, hits|
+          yielded << [f.name, hits.map(&:canonical_id)]
+        end
+
+        expect([held, yielded]).to eq [["requests"], [["other", ["CVE-2024-0002"]]]]
+      end
+    end
+
     it "sends every formula's queries through one OSV.query_batch and yields per-formula hits" do
       a = formula("aa") do
         T.bind(self, T.class_of(Formula))
@@ -891,6 +994,258 @@ RSpec.describe Homebrew::Vulns::Match do
     end
   end
 
+  describe "CPANSA prerelease subjects" do
+    let(:matcher) do
+      overrides = Homebrew::Vulns::AdvisoryOverrides.new({
+        "cpan-example" => { "registry_package" => { "ecosystem" => "CPAN", "name" => "Example" } },
+      })
+      described_class.new(repology:, cpan_sec:, overrides:)
+    end
+    let(:cpan_formula) do
+      formula("cpan-example") do
+        T.bind(self, T.class_of(Formula))
+        url "https://example.test/example-1.2.3-1.tar.gz"
+        version "1.2.3-1"
+      end
+    end
+    let(:hit) do
+      advisory = Homebrew::Vulns::CPANSec::Advisory.new(
+        id: "CPANSA-Example", cves: ["CVE-2026-1234"],
+        affected_versions: ["<2.0"], fixed_versions: [">=2.0"]
+      )
+      make_hit(
+        vuln("id" => "CVE-2026-1234", "affected" => [
+          { "package" => { "ecosystem" => "CPAN", "name" => "Example" },
+            "ranges"  => [{ "type"   => "SEMVER",
+                            "events" => [{ "introduced" => "1.2.3" }, { "fixed" => "2.0" }] }] },
+        ]),
+        ev(:cpansa, ecosystem: "CPAN", name: "Example", subject_version: "1.2.3-1", advisory:),
+      )
+    end
+
+    it "uses CPANSA constraints for a current subject at an OSV prerelease boundary" do
+      expect(matcher.range_status(hit)&.first).to have_attributes(state: :affected, fixed_in: "2.0")
+    end
+
+    it "keeps CPANSA history comparable at an OSV prerelease boundary" do
+      expect(matcher.aggregate_state_at(cpan_formula, hit)).to eq :affected
+    end
+
+    it "still holds independently ambiguous OSV evidence alongside CPANSA" do
+      mixed = make_hit(hit.vulnerability, *hit.evidence,
+                       ev(:distro, ecosystem: "CPAN", name: "Example", subject_version: "1.2.3-1"))
+
+      expect([matcher.range_status(mixed), matcher.aggregate_state_at(cpan_formula, mixed)]).to eq [nil, nil]
+    end
+
+    it "keeps CPANSA reconciliation comparable at an OSV prerelease boundary" do
+      expect(matcher.reconciliation_observation(cpan_formula, hit)).to have_attributes(state: :affected, reasons: [])
+    end
+  end
+
+  describe "prerelease reconciliation" do
+    def prerelease_formula(version)
+      formula("openclaw-cli") do
+        T.bind(self, T.class_of(Formula))
+        url "https://registry.npmjs.org/openclaw/-/openclaw-#{version}.tgz"
+        resource "dependency" do
+          url "https://registry.npmjs.org/dependency/-/dependency-#{version}.tgz"
+        end
+      end
+    end
+
+    def prerelease_hit(introduced: "2026.2.22", fixed: "2026.2.23", resource: nil, type: "SEMVER",
+                       subject_version: "2026.2.23")
+      name = resource || "openclaw"
+      make_hit(
+        vuln("id" => "CVE-2026-22217", "affected" => [
+          { "package" => { "ecosystem" => "npm", "name" => name },
+            "ranges"  => [{ "type" => type, "events" => [
+              { "introduced" => introduced }, { "fixed" => fixed }
+            ] }] },
+        ]),
+        ev(:registry, ecosystem: "npm", name:, subject_version:, resource:),
+      )
+    end
+
+    it "emits a review lead for an ambiguous current primary version" do
+      current = prerelease_formula("2026.2.22-2")
+      hit = prerelease_hit(subject_version: "2026.2.22-2")
+      record = matcher.to_brew_record(current, hit)
+
+      expect([record.dig(:affected, 0, :ecosystem_specific),
+              record.dig(:affected, 0, :ranges, 0, :events),
+              record.dig(:database_specific, :confidence), record.dig(:database_specific, :review_reason)])
+        .to eq [{ fix: nil }, [{ introduced: "0" }], "medium", "prerelease_boundary"]
+    end
+
+    it "holds an ambiguous current resource even when another subject is affected" do
+      affected = prerelease_hit(introduced: "0", subject_version: "2026.2.22")
+      ambiguous = prerelease_hit(resource: "dependency", subject_version: "2026.2.22-2")
+      hit = make_hit(affected.vulnerability, *(affected.evidence + ambiguous.evidence))
+
+      expect(matcher.range_status(hit)).to be_nil
+    end
+
+    it "checks an ambiguous current version against its own alias source record" do
+      fixed = prerelease_hit(introduced: "0", fixed: "2026.2.21", subject_version: "2026.2.22-2")
+      ambiguous = prerelease_hit(subject_version: "2026.2.22-2")
+      hit = make_hit(fixed.vulnerability, *(fixed.evidence + ambiguous.evidence))
+
+      expect(matcher.range_status(hit)).to be_nil
+    end
+
+    it "uses a reviewed state to resolve an ambiguous current version" do
+      overrides = Homebrew::Vulns::AdvisoryOverrides.new({
+        "openclaw-cli" => { "advisories" => { "CVE-2026-22217" => { "range_state" => "fixed" } } },
+      })
+      overridden = described_class.new(repology:, cpan_sec:, overrides:)
+
+      record = overridden.to_brew_record(prerelease_formula("2026.2.22-2"),
+                                         prerelease_hit(subject_version: "2026.2.22-2"))
+      expect([record.dig(:affected, 0, :ecosystem_specific, :range_state),
+              record.dig(:database_specific, :review_reason)]).to eq ["fixed", nil]
+    end
+
+    it "resolves current resource ambiguity through an alias state override" do
+      hit = prerelease_hit(resource: "dependency", subject_version: "2026.2.22-2")
+      allow(hit).to receive(:identifiers).and_return(["CVE-2026-22217", "GHSA-reviewed"])
+      overrides = Homebrew::Vulns::AdvisoryOverrides.new({
+        "openclaw-cli" => { "advisories" => { "GHSA-reviewed" => { "range_state" => "affected" } } },
+      })
+      overridden = described_class.new(repology:, cpan_sec:, overrides:)
+
+      expect(overridden.range_status(hit, formula_name: "openclaw-cli")&.first&.state).to eq :affected
+    end
+
+    it "keeps a threshold-only override from resolving current prerelease ambiguity" do
+      overrides = Homebrew::Vulns::AdvisoryOverrides.new({
+        "openclaw-cli" => { "advisories" => { "CVE-2026-22217" => { "upstream_fixed_in" => "2026.2.23" } } },
+      })
+      overridden = described_class.new(repology:, cpan_sec:, overrides:)
+
+      expect(overridden.range_status(prerelease_hit(subject_version: "2026.2.22-2"), formula_name: "openclaw-cli"))
+        .to be_nil
+    end
+
+    it "keeps a current prerelease below the introduced version not applicable" do
+      expect(matcher.range_status(prerelease_hit(subject_version: "2026.2.21-2"))&.first&.state)
+        .to eq :not_applicable
+    end
+
+    it "keeps a current prerelease affected when both interpretations agree" do
+      expect(matcher.range_status(prerelease_hit(subject_version: "2026.2.22-2", introduced: "0"))&.first&.state)
+        .to eq :affected
+    end
+
+    it "does not treat current build metadata as a prerelease" do
+      expect(matcher.range_status(prerelease_hit(subject_version: "2026.2.22+build-2"))&.first&.state)
+        .to eq :affected
+    end
+
+    it "keeps the current ecosystem-specific decision" do
+      expect(matcher.range_status(prerelease_hit(subject_version: "2026.2.22-2", type: "ECOSYSTEM"))&.first&.state)
+        .to eq :affected
+    end
+
+    it "does not declare never affected when a rebuild suffix crosses the introduction" do
+      current = prerelease_formula("2026.2.23")
+      older = [prerelease_formula("2026.2.22-2"), prerelease_formula("2026.2.21-2")]
+      history = instance_double(Homebrew::Vulns::History)
+      allow(Homebrew::Vulns::History).to receive(:new).and_return(history)
+      allow(history).to receive(:walk).with(current, complete: true) do |&block|
+        older.each { |old| block.call(old) }
+        nil
+      end
+
+      expect(matcher.reconcile_history(current, prerelease_hit))
+        .to have_attributes(state: :unresolved, introduced: nil, fixed: nil, reasons: [:prerelease_boundary])
+    end
+
+    it "holds daily fixed-history walks at an ambiguous introduction" do
+      current = prerelease_formula("2026.2.23")
+      history = instance_double(Homebrew::Vulns::History)
+      allow(Homebrew::Vulns::History).to receive(:new).and_return(history)
+      allow(history).to receive(:walk).with(current).and_yield(prerelease_formula("2026.2.22-2"))
+
+      expect(matcher.first_fixed_version(current, prerelease_hit)).to eq :history_unavailable
+    end
+
+    it "holds daily reintroduction history at an ambiguous introduction" do
+      current = prerelease_formula("2026.2.22")
+      history = instance_double(Homebrew::Vulns::History)
+      allow(Homebrew::Vulns::History).to receive(:new).and_return(history)
+      allow(history).to receive(:walk).with(current).and_yield(prerelease_formula("2026.2.22-2"))
+
+      expect(matcher.first_reintroduced_version(current, prerelease_hit(subject_version: "2026.2.22")))
+        .to eq :history_unavailable
+    end
+
+    it "holds daily resource history at an ambiguous fix" do
+      current = prerelease_formula("2026.2.23")
+      history = instance_double(Homebrew::Vulns::History)
+      allow(Homebrew::Vulns::History).to receive(:new).and_return(history)
+      allow(history).to receive(:walk).with(current).and_yield(prerelease_formula("2026.2.22-2"))
+
+      expect(matcher.first_fixed_version(current, prerelease_hit(introduced: "0", fixed: "2026.2.22",
+                                                                 resource: "dependency")))
+        .to eq :history_unavailable
+    end
+
+    it "holds ambiguous current subjects even when another subject is affected" do
+      current = prerelease_formula("2026.2.22-2")
+      ambiguous = prerelease_hit
+      affected = prerelease_hit(introduced: "0", resource: "dependency")
+      hit = make_hit(ambiguous.vulnerability, *(ambiguous.evidence + affected.evidence))
+
+      expect(matcher.aggregate_state_at(current, hit)).to be_nil
+    end
+
+    it "holds a suffix that changes the state at a fixed boundary" do
+      hit = prerelease_hit(introduced: "0", fixed: "2026.2.22")
+      expect(matcher.reconciliation_observation(prerelease_formula("2026.2.22-2"), hit))
+        .to have_attributes(state: :unknown, reasons: [:prerelease_boundary])
+    end
+
+    it "checks resource versions as well as primary packages" do
+      expect(matcher.reconciliation_observation(prerelease_formula("2026.2.22-2"),
+                                                prerelease_hit(resource: "dependency")))
+        .to have_attributes(state: :unknown, reasons: [:prerelease_boundary])
+    end
+
+    it "also holds alphabetic prereleases at a boundary" do
+      expect(matcher.reconciliation_observation(prerelease_formula("2026.2.22-rc.1"), prerelease_hit))
+        .to have_attributes(state: :unknown, reasons: [:prerelease_boundary])
+    end
+
+    it "allows a prerelease when both interpretations are affected" do
+      hit = prerelease_hit(introduced: "0")
+      expect(matcher.reconciliation_observation(prerelease_formula("2026.2.22-2"), hit))
+        .to have_attributes(state: :affected, reasons: [])
+    end
+
+    it "allows a prerelease when both interpretations precede the introduction" do
+      expect(matcher.reconciliation_observation(prerelease_formula("2026.2.21-2"), prerelease_hit))
+        .to have_attributes(state: :not_applicable, reasons: [])
+    end
+
+    it "does not mistake a hyphen in build metadata for a prerelease" do
+      expect(matcher.reconciliation_observation(prerelease_formula("2026.2.22+build-2"), prerelease_hit))
+        .to have_attributes(state: :affected, reasons: [])
+    end
+
+    it "does not apply semver assumptions to ecosystem ranges" do
+      hit = prerelease_hit(type: "ECOSYSTEM", introduced: "0", fixed: "2026.2.22")
+      expect(matcher.reconciliation_observation(prerelease_formula("2026.2.22-2"), hit).reasons).to eq []
+    end
+
+    it "checks only semver ranges belonging to the matched package" do
+      hit = prerelease_hit(type: "ECOSYSTEM", introduced: "0", fixed: "2026.2.22")
+      hit.vulnerability.affected << prerelease_hit(resource: "other").vulnerability.affected.fetch(0)
+      expect(matcher.reconciliation_observation(prerelease_formula("2026.2.22-2"), hit).reasons).to eq []
+    end
+  end
+
   describe "historical boundary walks" do
     let(:requests) do
       formula("requests") do
@@ -901,6 +1256,8 @@ RSpec.describe Homebrew::Vulns::Match do
 
     def stub_history(versions_newest_first)
       fv = instance_double(FormulaVersions)
+      allow(fv).to receive(:path_absent_at_revision?).and_return(false)
+      formulae = []
       revs = versions_newest_first.each_with_index.map { |_, i| ["r#{i}", "Formula/r/requests.rb"] }
       allow(fv).to receive(:rev_list) { |_, &b| revs.each { |rev, entry| b.call(rev, entry) } }
       versions_newest_first.each_with_index do |entry, i|
@@ -919,8 +1276,10 @@ RSpec.describe Homebrew::Vulns::Match do
         allow(fv).to receive(:formula_at_revision).with("r#{i}", anything) do |&b|
           old && b.call(old)
         end
+        formulae << old if old
       end
       allow(FormulaVersions).to receive(:new).and_return(fv)
+      formulae
     end
 
     def hit_with_range(*events)
@@ -935,6 +1294,255 @@ RSpec.describe Homebrew::Vulns::Match do
 
     def hit_fixed_at(fixed)
       hit_with_range({ "introduced" => "0" }, { "fixed" => fixed })
+    end
+
+    describe "#reconcile_history" do
+      before do
+        allow(Utils).to receive(:popen_read).with(
+          "git", "-C", anything, "diff-tree", "--root", "--no-commit-id", "--name-only",
+          "--find-renames", "--diff-filter=AR", "-r", anything, safe: true
+        ).and_return("Formula/r/requests.rb\n")
+      end
+
+      def resource_hit
+        make_hit(
+          vuln("id" => "CVE-1", "affected" => [
+            { "package" => { "ecosystem" => "PyPI", "name" => "certifi" },
+              "ranges"  => [{ "type" => "ECOSYSTEM", "events" => [
+                { "introduced" => "0" }, { "fixed" => "1.2" }
+              ] }] },
+          ]),
+          ev(:registry, ecosystem: "PyPI", name: "certifi", subject_version: "1.2", resource: "certifi"),
+        )
+      end
+
+      it "finds both boundaries independently of the ingestion version" do
+        stub_history(["2.31.0", "2.30.0", "2.28.1", "2.28.0", "2.27.0"])
+
+        expect(matcher.reconcile_history(requests, hit_fixed_at("2.28.1")))
+          .to have_attributes(state: :range, introduced: "2.27.0", fixed: "2.28.1", reasons: [])
+      end
+
+      it "establishes never affected only after a complete history walk" do
+        stub_history(["2.31.0", "2.30.0", "2.29.0"])
+
+        expect(matcher.reconcile_history(requests, hit_fixed_at("2.28.1")))
+          .to have_attributes(state: :never_affected, introduced: nil, fixed: nil, reasons: [])
+      end
+
+      it "continues through below-introduced versions to find older affected builds" do
+        stub_history(["2.31.0", "2.27.0", "2.29.0"])
+        hit = hit_with_range({ "introduced" => "2.28.0" }, { "fixed" => "2.30.0" })
+
+        expect(matcher.reconcile_history(requests, hit))
+          .to have_attributes(state: :range, introduced: "2.29.0", fixed: "2.31.0", reasons: [])
+      end
+
+      it "leaves unreadable history unresolved even after finding a fix" do
+        stub_history(["2.31.0", "2.28.1", "2.28.0", nil])
+
+        expect(matcher.reconcile_history(requests, hit_fixed_at("2.28.1")))
+          .to have_attributes(state: :unresolved, introduced: nil, fixed: nil, reasons: [:history_unavailable])
+      end
+
+      it "rejects a range covering an unaffected gap" do
+        stub_history([["2.31.0", "1.2"], ["2.30.0", "1.0"], ["2.29.0", "1.2"], ["2.28.0", "1.0"]])
+
+        expect(matcher.reconcile_history(requests, resource_hit))
+          .to have_attributes(state: :unresolved, reasons: [:unrepresentable_interval])
+      end
+
+      it "rejects affected and unaffected builds sharing a package version" do
+        stub_history([["2.31.0", "1.2"], ["2.30.0", "1.2"], ["2.30.0", "1.0"]])
+
+        expect(matcher.reconcile_history(requests, resource_hit))
+          .to have_attributes(state: :unresolved, reasons: [:unrepresentable_interval])
+      end
+
+      it "does not hide disagreement between upstream aliases" do
+        stub_history(["2.31.0", "2.29.0", "2.27.0"])
+        first = hit_fixed_at("2.28.1")
+        other = vuln("id" => "GHSA-1", "aliases" => ["CVE-1"], "affected" => [
+          { "package" => { "ecosystem" => "PyPI", "name" => "requests" },
+            "ranges"  => [{ "type" => "ECOSYSTEM", "events" => [
+              { "introduced" => "0" }, { "fixed" => "2.30.0" }
+            ] }] },
+        ])
+        hit = make_hit(
+          first.vulnerability, *first.evidence,
+          ev(:registry, ecosystem: "PyPI", name: "requests", subject_version: "2.31.0").with_source(other)
+        )
+
+        expect(matcher.reconcile_history(requests, hit))
+          .to have_attributes(state: :unresolved, reasons: [:conflicting_upstream])
+      end
+
+      it "does not let an affected subject hide an uncomparable subject" do
+        stub_history(["2.31.0", "2.30.0"])
+        first = hit_fixed_at("2.32.0")
+        hit = make_hit(first.vulnerability, *first.evidence,
+                       ev(:git, ecosystem: "GIT", name: "https://example.com/unknown", subject_version: nil))
+
+        expect(matcher.reconcile_history(requests, hit))
+          .to have_attributes(state: :unresolved, reasons: [:uncomparable_source])
+      end
+
+      it "requires review for an advisory-specific patch at the fix boundary" do
+        formulae = stub_history(["2.31.0", "2.28.1", "2.28.0"])
+        allow(formulae.fetch(1)).to receive(:serialized_patches)
+          .and_return([{ "resolves" => [{ "type" => "security", "id" => "CVE-1" }] }])
+
+        expect(matcher.reconcile_history(requests, hit_fixed_at("2.28.1")))
+          .to have_attributes(state: :unresolved, reasons: [:advisory_patch_requires_review])
+      end
+
+      it "does not block on patches after the affected interval and fix boundary" do
+        formulae = stub_history(["2.31.0", "2.28.1", "2.28.0"])
+        allow(formulae.fetch(0)).to receive(:serialized_patches)
+          .and_return([{ "resolves" => [{ "type" => "security", "id" => "CVE-1" }] }])
+
+        expect(matcher.reconcile_history(requests, hit_fixed_at("2.28.1")))
+          .to have_attributes(state: :range, fixed: "2.28.1", reasons: [])
+      end
+
+      it "does not block on unattributed or unrelated patches" do
+        formulae = stub_history(["2.31.0", "2.28.1", "2.28.0"])
+        allow(formulae.fetch(2)).to receive(:serialized_patches).and_return([
+          { "url" => "https://example.com/build.patch" },
+          { "resolves" => [{ "type" => "security", "id" => "CVE-2" }] },
+        ])
+
+        expect(matcher.reconcile_history(requests, hit_fixed_at("2.28.1")))
+          .to have_attributes(state: :range, fixed: "2.28.1", reasons: [])
+      end
+
+      it "checks patches throughout history before declaring never affected" do
+        formulae = stub_history(["2.31.0", "2.30.0", "2.29.0"])
+        allow(formulae.fetch(2)).to receive(:serialized_patches)
+          .and_return([{ "resolves" => [{ "type" => "security", "id" => "CVE-1" }] }])
+
+        expect(matcher.reconcile_history(requests, hit_fixed_at("2.28.1")))
+          .to have_attributes(state: :unresolved, reasons: [:advisory_patch_requires_review])
+      end
+
+      it "collects patch and interval problems independently" do
+        formulae = stub_history([["2.31.0", "1.2"], ["2.30.0", "1.2"], ["2.30.0", "1.0"]])
+        allow(formulae.fetch(2)).to receive(:serialized_patches)
+          .and_return([{ "resolves" => [{ "type" => "security", "id" => "CVE-1" }] }])
+
+        expect(matcher.reconcile_history(requests, resource_hit).reasons)
+          .to contain_exactly(:unrepresentable_interval, :advisory_patch_requires_review)
+      end
+
+      it "preserves a reviewed range without walking history" do
+        overrides = Homebrew::Vulns::AdvisoryOverrides.new({
+          "requests" => { "advisories" => { "CVE-1" => { "preserve_homebrew_ranges" => true } } },
+        })
+        overridden = described_class.new(repology:, cpan_sec:, overrides:)
+        allow(FormulaVersions).to receive(:new).and_raise("Protected history must not be walked")
+
+        expect(overridden.reconcile_history(requests, hit_fixed_at("2.28.1")))
+          .to have_attributes(state: :preserved, introduced: nil, fixed: nil, reasons: [])
+      end
+
+      it "does not apply an upstream version override to Homebrew history" do
+        stub_history(["2.31.0", "2.28.1", "2.28.0"])
+        overrides = Homebrew::Vulns::AdvisoryOverrides.new({
+          "requests" => { "advisories" => { "CVE-1" => { "upstream_fixed_in" => "2.27.0" } } },
+        })
+        overridden = described_class.new(repology:, cpan_sec:, overrides:)
+
+        expect(overridden.reconcile_history(requests, hit_fixed_at("2.28.1")))
+          .to have_attributes(state: :unresolved, reasons: [:upstream_override_requires_review])
+      end
+
+      it "can establish an open affected interval" do
+        stub_history(["2.31.0", "2.30.0"])
+
+        expect(matcher.reconcile_history(requests, hit_fixed_at("2.32.0")))
+          .to have_attributes(state: :range, introduced: "2.30.0", fixed: nil, reasons: [])
+      end
+
+      it "requires review when an affected build sorts after the current fixed build" do
+        stub_history([["2.31.0", "1.2"], ["3.0.0", "1.0"]])
+
+        expect(matcher.reconcile_history(requests, resource_hit))
+          .to have_attributes(state: :unresolved, reasons: [:unrepresentable_interval])
+      end
+
+      it "recognises a resource patch referencing an advisory alias through its URL" do
+        patched = formula("requests") do
+          T.bind(self, T.class_of(Formula))
+          url "https://files.pythonhosted.org/packages/aa/bb/cc/requests-2.31.0.tar.gz"
+          resource "certifi" do
+            url "https://files.pythonhosted.org/packages/11/22/33/certifi-1.0.tar.gz"
+            patch do
+              url "https://example.com/CVE-2026-12345.patch"
+              sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            end
+          end
+        end
+        first = resource_hit
+        alias_record = vuln("id" => "CVE-2026-12345", "aliases" => ["CVE-1"])
+        hit = make_hit(alias_record, *first.evidence)
+
+        expect(matcher.reconciliation_observation(patched, hit)).to have_attributes(patched: true)
+      end
+
+      it "does not require review merely because a formula uses inreplace" do
+        rewritten = formula("requests") do
+          T.bind(self, T.class_of(Formula))
+          url "https://files.pythonhosted.org/packages/aa/bb/cc/requests-2.31.0.tar.gz"
+          def install
+            T.bind(self, Formula)
+            inreplace "script.py", "/usr/bin/python3", "python3"
+          end
+        end
+        stub_history(["2.31.0", "2.28.1", "2.28.0"])
+
+        expect(matcher.reconcile_history(rewritten, hit_fixed_at("2.28.1")))
+          .to have_attributes(state: :range, fixed: "2.28.1", reasons: [])
+      end
+
+      it "leaves a renamed primary package unresolved" do
+        formulae = stub_history(["2.31.0", "2.30.0"])
+        stable = formulae.fetch(1).stable
+        raise "Expected a stable formula" unless stable
+
+        allow(stable).to receive(:url)
+          .and_return("https://files.pythonhosted.org/packages/aa/bb/cc/old-requests-2.30.0.tar.gz")
+
+        expect(matcher.reconcile_history(requests, hit_fixed_at("2.28.1")))
+          .to have_attributes(state: :unresolved, introduced: nil, fixed: nil, reasons: [:subject_changed])
+      end
+
+      it "leaves a changed primary ecosystem unresolved" do
+        formulae = stub_history(["2.31.0", "2.30.0"])
+        stable = formulae.fetch(1).stable
+        raise "Expected a stable formula" unless stable
+
+        allow(stable).to receive(:url).and_return("https://registry.npmjs.org/requests/-/requests-2.30.0.tgz")
+
+        expect(matcher.reconcile_history(requests, hit_fixed_at("2.28.1")))
+          .to have_attributes(state: :unresolved, introduced: nil, fixed: nil, reasons: [:subject_changed])
+      end
+
+      it "still treats an absent resource as unaffected" do
+        stub_history(["2.31.0", "2.30.0"])
+
+        expect(matcher.reconcile_history(requests, resource_hit))
+          .to have_attributes(state: :never_affected, reasons: [])
+      end
+
+      it "does not add an irrelevant patch reason to an unrepresentable interval" do
+        formulae = stub_history([
+          ["2.31.0", "1.2"], ["2.30.0", "1.2"], ["2.29.0", "1.0"], ["2.28.0", "1.2"], ["2.27.0", "1.0"]
+        ])
+        allow(formulae.fetch(0)).to receive(:serialized_patches)
+          .and_return([{ "resolves" => [{ "type" => "security", "id" => "CVE-1" }] }])
+
+        expect(matcher.reconcile_history(requests, resource_hit).reasons).to eq [:unrepresentable_interval]
+      end
     end
 
     it "returns the pkg_version at the oldest revision still at or past upstream fixed_in" do
@@ -1133,7 +1741,7 @@ RSpec.describe Homebrew::Vulns::Match do
       stub_history(["2.31.0", "2.30.0"])
       allow(matcher).to receive(:aggregate_state_at).and_return(:affected, :fixed)
 
-      expect(matcher.first_reintroduced_version(requests, hit_fixed_at("2.32.0"))).to eq :not_reintroduced
+      expect(matcher.first_reintroduced_version(requests, hit_fixed_at("2.32.0"))).to eq :history_unavailable
     end
 
     it "returns :history_unavailable when the formula has no git history" do
@@ -1179,7 +1787,7 @@ RSpec.describe Homebrew::Vulns::Match do
       expect([
         matcher.first_fixed_version(current, git_hit.call("1.1")),
         matcher.first_reintroduced_version(current, git_hit.call("3.0")),
-      ]).to eq [:history_unavailable, :not_reintroduced]
+      ]).to eq [:history_unavailable, :history_unavailable]
     end
 
     it "returns :never_affected when a fixed resource was absent from earlier formula revisions" do
@@ -1481,7 +2089,7 @@ RSpec.describe Homebrew::Vulns::Match do
       allow(fv).to receive(:formula_at_revision).with("r0", anything).and_yield(previous)
       allow(FormulaVersions).to receive(:new).and_return(fv)
 
-      expect(matcher.first_reintroduced_version(requests, hit_fixed_at("2.32.0"))).to eq :not_reintroduced
+      expect(matcher.first_reintroduced_version(requests, hit_fixed_at("2.32.0"))).to eq :history_unavailable
       expect(matcher.first_fixed_version(requests, hit_fixed_at("2.28.1"))).to eq :history_unavailable
     end
 
@@ -1508,13 +2116,13 @@ RSpec.describe Homebrew::Vulns::Match do
 
     it "does not invent a boundary when a historical revision cannot be loaded" do
       stub_history([nil])
-      expect(matcher.first_reintroduced_version(requests, hit_fixed_at("2.32.0"))).to eq :not_reintroduced
+      expect(matcher.first_reintroduced_version(requests, hit_fixed_at("2.32.0"))).to eq :history_unavailable
     end
 
     it "does not invent a boundary when a historical revision cannot be compared" do
       stub_history(["2.30.0"])
       allow(matcher).to receive(:aggregate_state_at).and_return(nil)
-      expect(matcher.first_reintroduced_version(requests, hit_fixed_at("2.32.0"))).to eq :not_reintroduced
+      expect(matcher.first_reintroduced_version(requests, hit_fixed_at("2.32.0"))).to eq :history_unavailable
     end
 
     it "does not invent a reintroduction when every historical revision is affected" do
