@@ -1,5 +1,5 @@
 ---
-last_review_date: "2026-09-13"
+last_review_date: "2026-09-17"
 ---
 
 # Support Tiers
@@ -32,7 +32,7 @@ To qualify as Tier 1, a macOS configuration must meet all of the following:
 - Installed in the default prefix (`/opt/homebrew`) or a [compatible custom prefix](#custom-prefixes)
 - Not building official packages from source (i.e. using bottles)
 - Installed on the Mac’s internal storage (not external or removable drives)
-- Running with `sudo` access available
+- Running with `sudo` access available for initial installation and cask installations that require elevated privileges
 - Xcode Command Line Tools installed and up to date
 
 ### Linux
@@ -40,14 +40,14 @@ To qualify as Tier 1, a macOS configuration must meet all of the following:
 To qualify as Tier 1, a Linux configuration must meet all of the following:
 
 - Running on:
-  - Ubuntu within its [standard support window](https://ubuntu.com/about/release-cycle) or
+  - Ubuntu within its [standard support window](https://ubuntu.com/project/docs/release-team/list-of-releases/) or
   - a Homebrew-provided Docker image
 - Using a system `glibc` version ≥ 2.39
 - Using a Linux kernel version ≥ 3.2
 - Installed in the default prefix (`/home/linuxbrew/.linuxbrew`) or a [compatible custom prefix](#custom-prefixes)
 - Using a supported architecture (ARM64/AArch64 or Intel x86_64 with SSSE3 support)
 - Not building official packages from source (i.e. using bottles)
-- Running with `sudo` access available
+- Running with `sudo` access available for initial installation
 
 ### Custom prefixes
 
