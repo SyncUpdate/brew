@@ -87,6 +87,67 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
         .to raise_error(UsageError, /explicit.*--overrides/)
     end
 
+    it "reports distinct failed revisions separately from platform loads and held records" do
+      failures = [:arm, :intel].map do |arch|
+        Homebrew::Vulns::History::LoadFailure.new(
+          formula: "requests", revision: "abc123", path: "Formula/r/requests.rb",
+          platform: "linux/#{arch}", error_class: "NoMethodError", message: "missing DSL"
+        )
+      end
+      allow(matcher).to receive(:history_load_failures).and_return(failures)
+      command = cmd_for("--verbose")
+
+      expect { command.report_history_load_failures(matcher) }.to output(
+        "  History loads: 1 failed formula revisions across 1 formulae (2 platform loads)\n    " \
+        "requests: abc123:Formula/r/requests.rb [linux/arm] NoMethodError: missing DSL\n    " \
+        "requests: abc123:Formula/r/requests.rb [linux/intel] NoMethodError: missing DSL\n",
+      ).to_stdout
+    end
+
+    it "keeps failed-load details out of non-verbose summaries" do
+      allow(matcher).to receive(:history_load_failures).and_return([
+        Homebrew::Vulns::History::LoadFailure.new(
+          formula: "requests", revision: "abc123", path: "Formula/r/requests.rb",
+          platform: "linux/arm", error_class: "NoMethodError", message: "missing DSL"
+        ),
+      ])
+
+      expect { cmd_for.report_history_load_failures(matcher) }
+        .to output("  History loads: 1 failed formula revisions across 1 formulae (1 platform loads)\n").to_stdout
+    end
+
+    it "reconciles a CPANSA fallback without an upstream hold after a supplemental 404" do
+      perl = formula("perl-example") do
+        T.bind(self, T.class_of(Formula))
+        url "https://cpan.metacpan.org/authors/id/X/XY/XYZ/Example-2.0.tar.gz"
+      end
+      allow(Homebrew::Vulns::CPANSec).to receive(:load).and_return(
+        Homebrew::Vulns::CPANSec.new({ "meta" => {}, "dists" => {
+          "Example" => { "advisories" => [{ "id" => "CPANSA-Example-1", "cves" => ["CVE-2022-4988"],
+            "affected_versions" => ["<1.0"], "fixed_versions" => [">=1.0"] }] },
+        } }),
+      )
+      allow(Homebrew::Vulns::OSV).to receive(:query_batch).and_return([[]])
+      allow(Homebrew::Vulns::OSV).to receive(:vulnerability)
+        .and_raise(Homebrew::Vulns::OSV::NotFoundError, "404")
+      allow(Formulary).to receive(:factory).with(perl.path).and_return(perl)
+      hit = matcher.advisories_for(perl).fetch(0)
+      record = matcher.to_brew_record(perl, hit, now: Time.utc(2020))
+      allow(matcher).to receive(:reconcile_history).and_return(result.with(state: :never_affected))
+
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "#{record.fetch(:id)}.json")
+        File.write(path, JSON.generate(record))
+        overrides = File.join(dir, "overrides.yml")
+        File.write(overrides, "{}\n")
+        expect do
+          cmd_for("perl-example", "--output", dir, "--overrides", overrides,
+                  "--reconcile-history", formulae: [perl]).run
+        end.to output(/Reconciliation: 1 deleted; 0 matched records not revisited\n\z/).to_stdout
+        expect([File.exist?(path), Homebrew.failed?]).to eq [false, false]
+      end
+    end
+
     it "loads a real preservation override before any history walk" do
       stored
       allow(Homebrew::Vulns::Match).to receive(:new).and_call_original
@@ -1873,13 +1934,13 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
       allow(Homebrew::Vulns::OSV).to receive(:query_batch).and_return([[], []])
     end
 
-    def run_formula_list(contents, *extra_args)
+    def run_formula_list(contents, *extra_args, mode: "--reconcile-history")
       Dir.mktmpdir do |dir|
         list = File.join(dir, "formulae.txt")
         overrides = File.join(dir, "overrides.yml")
         File.write(list, contents)
         File.write(overrides, "{}\n")
-        described_class.new(["--formula-list", list, "--reconcile-history", "--output", dir,
+        described_class.new(["--formula-list", list, mode, "--output", dir,
                              "--overrides", overrides, *extra_args]).run
       end
     end
@@ -1905,13 +1966,48 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
       expect { run_formula_list("requests\n", "requests") }.to raise_error(UsageError, /does not take named/)
     end
 
-    it "requires reconciliation mode" do
-      expect { described_class.new(["--formula-list", "/unused"]) }
+    it "requires a history mode" do
+      expect { described_class.new(["--formula-list", "/unused"]).run }
         .to raise_error(UsageError, /--formula-list.*--reconcile-history/)
     end
 
     it "rejects combining a list with --all" do
       expect { run_formula_list("requests\n", "--all") }.to raise_error(UsageError, /mutually exclusive/)
+    end
+
+    context "with --new-history" do
+      it "writes only the selected formula without overrides" do
+        stub_osv_hit("CVE-2024-1234", fixed: "2.28.1")
+        matcher = Homebrew::Vulns::Match.new(bulk: true)
+        allow(matcher).to receive_messages(first_fixed_version: "2.28.1", first_introduced_version: "2.20.0")
+        expect(Homebrew::Vulns::Match).to receive(:new)
+          .with(repology: nil, overrides: nil, bulk: true, strict_upstream: false).and_return(matcher)
+        expect(Formulary).to receive(:factory).with("requests").once.and_return(requests)
+        expect(Formulary).not_to receive(:factory).with("unselected")
+        expect(Homebrew::Vulns::Repology).not_to receive(:lookup)
+
+        Dir.mktmpdir do |dir|
+          list = File.join(dir, "formulae.txt")
+          File.write(list, "requests\nrequests\n")
+          unselected = File.join(dir, "BREW-unselected-CVE-2024-1234.json")
+          original = JSON.generate({
+            "id" => "BREW-unselected-CVE-2024-1234", "upstream" => ["CVE-2024-1234"],
+            "affected" => [{ "package" => { "ecosystem" => "Homebrew", "name" => "unselected" } }]
+          })
+          File.write(unselected, original)
+
+          described_class.new(["--formula-list", list, "--new-history", "--output", dir]).run
+
+          selected = JSON.parse(File.read(File.join(dir, "BREW-requests-CVE-2024-1234.json")))
+          expect([selected.dig("affected", 0, "ranges", 0, "events"), File.read(unselected)])
+            .to eq [[{ "introduced" => "2.20.0" }, { "fixed" => "2.28.1" }], original]
+        end
+      end
+
+      it "does not expand an empty daily list to the whole tap" do
+        expect(Homebrew::Vulns::OSV).not_to receive(:query_batch)
+        run_formula_list("", mode: "--new-history")
+      end
     end
   end
 

@@ -3300,7 +3300,7 @@ RSpec.describe Formula do
 
           FileUtils.chmod "+x", bin/"foo"
 
-          generate_completions_from_executable(bin/"foo", "test")
+          generate_completions_from_executable(bin/"foo", "test", shells: [:bash, :zsh, :fish, :pwsh])
         end
       end.new
     end
@@ -3310,6 +3310,7 @@ RSpec.describe Formula do
       expect(f.bash_completion/"foo").to be_a_file
       expect(f.zsh_completion/"_foo").to be_a_file
       expect(f.fish_completion/"foo.fish").to be_a_file
+      expect(f.pwsh_completion/"_foo.ps1").to be_a_file
     end
   end
 
@@ -3630,6 +3631,16 @@ RSpec.describe Formula do
         allow(Hardware::CPU).to receive(:arm?).and_return(false)
         expect(f.std_cabal_v2_args).not_to include("--ghc-option=-pie")
       end
+    end
+  end
+
+  describe "#std_cargo_fetch_args" do
+    it "returns the standard dependency fetch arguments" do
+      f = formula do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+      end
+      expect(f.std_cargo_fetch_args).to eq(["--locked", "--target", "host-tuple"])
     end
   end
 

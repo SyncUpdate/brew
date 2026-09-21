@@ -169,7 +169,10 @@ A `Symbol` (e.g. `:xcode`) specifies a [`Requirement`](/rubydoc/Requirement.html
 * Top-level `depends_on maximum_macos: :ventura` marks a formula as macOS-only and declares the newest compatible macOS release.
 * Top-level `depends_on :linux` marks a formula as Linux-only.
 
+Use `depends_on :macos` when the minimum is no newer than the oldest macOS release Homebrew can run on (currently Big Sur). An explicit minimum at or below that release is redundant.
+
 For a formula that supports both macOS and Linux but needs a specific macOS version, put the macOS version requirement inside `on_macos`.
+Remove minimum requirements at or below Homebrew's runtime floor from `on_macos` blocks; replacing them with `depends_on :macos` adds no restriction.
 
 A `Hash` (e.g. `=>`) adds information to a dependency. Given a string or symbol, the value can be one or more of the following values:
 
@@ -949,10 +952,10 @@ Generally we'd rather you were specific about which files or directories need to
 | **`opt_frameworks`**  | `#{opt_prefix}/Frameworks`                     | `/opt/homebrew/opt/foo/Frameworks` |
 | **`kext_prefix`**     | `#{prefix}/Library/Extensions`                 | `/opt/homebrew/Cellar/foo/0.1/Library/Extensions` |
 | **`bash_completion`** | `#{prefix}/etc/bash_completion.d`              | `/opt/homebrew/Cellar/foo/0.1/etc/bash_completion.d` |
-| **`fish_completion`** | `#{prefix}/share/fish/vendor_completions.d`    | `/opt/homebrew/Cellar/foo/0.1/share/fish/vendor_completions.d` |
-| **`fish_function`**   | `#{prefix}/share/fish/vendor_functions.d`      | `/opt/homebrew/Cellar/foo/0.1/share/fish/vendor_functions.d` |
 | **`zsh_completion`**  | `#{prefix}/share/zsh/site-functions`           | `/opt/homebrew/Cellar/foo/0.1/share/zsh/site-functions` |
 | **`zsh_function`**    | `#{prefix}/share/zsh/site-functions`           | `/opt/homebrew/Cellar/foo/0.1/share/zsh/site-functions` |
+| **`fish_completion`** | `#{prefix}/share/fish/vendor_completions.d`    | `/opt/homebrew/Cellar/foo/0.1/share/fish/vendor_completions.d` |
+| **`fish_function`**   | `#{prefix}/share/fish/vendor_functions.d`      | `/opt/homebrew/Cellar/foo/0.1/share/fish/vendor_functions.d` |
 | **`pwsh_completion`** | `#{prefix}/share/pwsh/completions`             | `/opt/homebrew/Cellar/foo/0.1/share/pwsh/completions` |
 | **`buildpath`**       | temporary working directory during builds      | `/private/tmp/foo-20250205-69197-po5981/foo-0.1` |
 | **`testpath`**        | temporary working directory during tests       | `/private/tmp/foo-test-20250205-84567-4hfs9m` |
@@ -1232,7 +1235,7 @@ Package managers such as Cargo, Go modules, npm and Bundler download dependencie
 class Foo < Formula
   # ...
   def fetch
-    system "cargo", "fetch", "--locked", "--target", "host-tuple"
+    system "cargo", "fetch", *std_cargo_fetch_args
   end
 
   def install

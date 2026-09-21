@@ -84,8 +84,9 @@ When multiple `depends_on` stanzas are present, order them alphabetically by dep
     command_wrapper
     manpage
     bash_completion
-    fish_completion
     zsh_completion
+    fish_completion
+    pwsh_completion
     generate_completions_from_executable
     colorpicker
     dictionary
@@ -158,14 +159,15 @@ Cross-platform casks should scope OS-specific artifact stanzas inside `on_macos`
 | [`app`](#stanza-app)                                                                   |              yes              | Relative path to an `.app` that should be moved into the `/Applications` folder on installation.                                                                                                                                                                                                                                                                           |
 | `app_image`                                                                            |              yes              | Relative path to an AppImage that should be linked into the configured AppImage directory on installation.                                                                                                                                                                                                                                                                 |
 | [`pkg`](#stanza-pkg)                                                                   |              yes              | Relative path to a `.pkg` file containing the distribution.                                                                                                                                                                                                                                                                                                                |
-| [`generated_script`](#stanza-generated_script)                                         |              yes              | Generates a script for another artifact or install step to use.                                                                                                                                                                                                                                                                                                       |
+| [`generated_script`](#stanza-generated_script)                                         |              yes              | Generates a script for another artifact or install step to use.                                                                                                                                                                                                                                                                                                            |
 | [`installer`](#stanza-installer)                                                       |              yes              | Describes an executable which must be run to complete the installation.                                                                                                                                                                                                                                                                                                    |
 | [`binary`](#stanza-binary)                                                             |              yes              | Relative path to a Binary that should be linked into the `$(brew --prefix)/bin` folder on installation.                                                                                                                                                                                                                                                                    |
 | [`command_wrapper`](#stanza-command_wrapper)                                           |              yes              | Generates a command wrapper and links it into the `$(brew --prefix)/bin` folder.                                                                                                                                                                                                                                                                                           |
 | `manpage`                                                                              |              yes              | Relative path to a Man Page that should be linked into the respective man page folder on installation, e.g. `/opt/homebrew/share/man/man3` for `my_app.3`.                                                                                                                                                                                                                 |
 | `bash_completion`                                                                      |              yes              | Relative path to a Bash completion file that should be linked into the `$(brew --prefix)/etc/bash_completion.d` folder on installation.                                                                                                                                                                                                                                    |
-| `fish_completion`                                                                      |              yes              | Relative path to a fish completion file that should be linked into the `$(brew --prefix)/share/fish/vendor_completions.d` folder on installation.                                                                                                                                                                                                                          |
 | `zsh_completion`                                                                       |              yes              | Relative path to a Zsh completion file that should be linked into the `$(brew --prefix)/share/zsh/site-functions` folder on installation.                                                                                                                                                                                                                                  |
+| `fish_completion`                                                                      |              yes              | Relative path to a fish completion file that should be linked into the `$(brew --prefix)/share/fish/vendor_completions.d` folder on installation.                                                                                                                                                                                                                          |
+| `pwsh_completion`                                                                      |              yes              | Relative path to a PowerShell completion file that should be linked into the `$(brew --prefix)/share/pwsh/completions` folder on installation.                                                                                                                                                                                                                             |
 | [`generate_completions_from_executable`](#stanza-generate_completions_from_executable) |              yes              | Command and arguments used to generate shell completions from an executable at installation time.                                                                                                                                                                                                                                                                          |
 | `colorpicker`                                                                          |              yes              | Relative path to a ColorPicker plugin that should be moved into the `~/Library/ColorPickers` folder on installation.                                                                                                                                                                                                                                                       |
 | `dictionary`                                                                           |              yes              | Relative path to a Dictionary that should be moved into the `~/Library/Dictionaries` folder on installation.                                                                                                                                                                                                                                                               |
@@ -263,7 +265,7 @@ artifact "sapmachine-jdk-#{version}.jdk", target: "/Library/Java/JavaVirtualMach
 
 #### *target* works on most artifact types
 
-The `target:` key works similarly for most cask artifacts, such as `app`, `binary`, `bash_completion`, `fish_completion`, `zsh_completion`, `colorpicker`, `dictionary`, `font`, `input_method`, `internet_plugin`, `keyboard_layout`, `prefpane`, `mdimporter`, `screen_saver`, `service`, `suite`, `audio_unit_plugin`, `vst_plugin`, `vst3_plugin`, and `artifact`.
+The `target:` key works similarly for most cask artifacts, such as `app`, `binary`, `bash_completion`, `zsh_completion`, `fish_completion`, `pwsh_completion`, `colorpicker`, `dictionary`, `font`, `input_method`, `internet_plugin`, `keyboard_layout`, `prefpane`, `mdimporter`, `screen_saver`, `service`, `suite`, `audio_unit_plugin`, `vst_plugin`, `vst3_plugin`, and `artifact`.
 
 #### *target* should only be used in select cases
 
@@ -451,10 +453,12 @@ depends_on formula: "unar"
 
 Top-level `depends_on :macos` marks a cask as macOS-only. Top-level `depends_on macos:` marks a cask as macOS-only and declares the minimum compatible macOS release. The values for supported macOS releases can be found in the [`MacOSVersion` class](/rubydoc/MacOSVersion.html) documentation.
 
+Use `depends_on :macos` when the minimum is no newer than the oldest macOS release Homebrew can run on (currently Big Sur). An explicit minimum at or below that release is redundant.
+
 Only major releases are covered (10.x numbers containing a single dot or whole numbers since macOS 11). The symbol form is used for readability:
 
 ```ruby
-depends_on macos: :big_sur
+depends_on macos: :monterey
 ```
 
 An array of symbols is accepted when a cask must run on one of an exact set of macOS releases.
@@ -477,9 +481,24 @@ For a cask that supports both macOS and Linux but needs a specific macOS version
 
 ```ruby
 on_macos do
-  depends_on macos: :big_sur
+  depends_on macos: :monterey
 end
 ```
+
+Remove minimum requirements at or below Homebrew's runtime floor from OS blocks. A bare `depends_on :macos` is also redundant inside `on_macos`.
+
+When architectures require different minimum releases, declare each requirement in its architecture block. Use `depends_on :macos` for an architecture that needs no minimum newer than Homebrew's runtime floor:
+
+```ruby
+on_arm do
+  depends_on macos: :monterey
+end
+on_intel do
+  depends_on :macos
+end
+```
+
+The bare declaration makes the unrestricted minimum explicit to the style checks. Unlike an OS block, an architecture block runs on both macOS and Linux, so its `depends_on :macos` also restricts that architecture to macOS.
 
 ##### Choosing the minimum macOS release
 

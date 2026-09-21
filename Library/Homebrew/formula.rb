@@ -1668,7 +1668,7 @@ class Formula
   #
   # ```ruby
   # def fetch
-  #   system "cargo", "fetch", "--locked", "--target", "host-tuple"
+  #   system "cargo", "fetch", *std_cargo_fetch_args
   # end
   #
   # def install
@@ -2198,6 +2198,14 @@ class Formula
     args
   end
 
+  # Standard parameters for Cargo dependency fetches.
+  #
+  # @api public
+  sig { returns(T::Array[String]) }
+  def std_cargo_fetch_args
+    ["--locked", "--target", "host-tuple"]
+  end
+
   # Standard parameters for Cargo builds.
   #
   # @api public
@@ -2554,8 +2562,8 @@ class Formula
   #
   # # translates to
   # (bash_completion/"foo").write Utils.safe_popen_read({ "SHELL" => "bash" }, bin/"foo", "completions", "bash")
-  # (pwsh_completion/"foo").write Utils.safe_popen_read({ "SHELL" => "pwsh" }, bin/"foo",
-  #                                                           "completions", "powershell")
+  # (pwsh_completion/"_foo.ps1").write Utils.safe_popen_read({ "SHELL" => "pwsh" }, bin/"foo",
+  #                                                          "completions", "powershell")
   # ```
   #
   # Selecting shells and using a different `base_name`.
