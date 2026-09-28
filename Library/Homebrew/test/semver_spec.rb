@@ -1,10 +1,19 @@
 # typed: strict
 # frozen_string_literal: true
 
-require "vulns/semver"
+require "semver"
 
-RSpec.describe Homebrew::Vulns::Semver do
+RSpec.describe Homebrew::Semver do
   describe ".release_version" do
+    it "rejects repeated version prefixes" do
+      expect(%w[vv vV Vv VV].map { |prefix| described_class.release_version("#{prefix}1.0.0-rc.1") })
+        .to eq [nil, nil, nil, nil]
+    end
+
+    it "rejects an oversized prerelease" do
+      expect(described_class.release_version("1.0.0-#{"a" * 251}")).to be_nil
+    end
+
     it "normalises a prerelease with a prefix and build metadata" do
       expect(described_class.release_version("v2026.2.22-rc.1+build.2")).to eq "2026.2.22"
     end
@@ -16,7 +25,43 @@ RSpec.describe Homebrew::Vulns::Semver do
     end
   end
 
+  describe ".prerelease?" do
+    it "detects a prerelease with a prefix and build metadata" do
+      expect(described_class.prerelease?("v2026.2.22-rc.1+build.2")).to be true
+    end
+
+    it "returns false for releases, metadata-only suffixes and invalid versions" do
+      expect(["2026.2.22", "2026.2.22+build-2", "not-a-version"].map do |version|
+        described_class.prerelease?(version)
+      end).to eq [false, false, false]
+    end
+  end
+
   describe ".compare" do
+    it "rejects repeated version prefixes on either side" do
+      expect(%w[vv vV Vv VV].flat_map do |prefix|
+        [described_class.compare("#{prefix}1.0.0", "1.0.0"),
+         described_class.compare("1.0.0", "#{prefix}1.0.0")]
+      end).to all(be_nil)
+    end
+
+    it "accepts versions at the input limit" do
+      version = "1.0.0-#{"a" * 250}"
+      expect(described_class.compare(version, "1.0.0")).to eq(-1)
+    end
+
+    it "rejects versions exceeding the input limit on either side" do
+      version = "1.0.0-#{"a" * 251}"
+      expect([described_class.compare(version, "1.0.0"), described_class.compare("1.0.0", version)])
+        .to all(be_nil)
+    end
+
+    it "rejects oversized core, prerelease, build and whitespace inputs" do
+      versions = ["#{"9" * 5000}.0.0", "1.0.0-#{"9" * 5000}", "1.0.0+#{"a." * 2500}a",
+                  "#{" " * 5000}1.0.0"]
+      expect(versions.map { |version| described_class.compare(version, "1.0.0") }).to all(be_nil)
+    end
+
     # From vers gem: basic numeric ordering
     it "orders major versions numerically" do
       expect(described_class.compare("1.0.0", "2.0.0")).to eq(-1)

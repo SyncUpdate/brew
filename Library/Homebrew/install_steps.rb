@@ -907,7 +907,6 @@ module Homebrew
         temp rack
         bash_completion zsh_completion fish_completion pwsh_completion
       ].freeze
-      IMPLICIT_SUDO_STEP_TYPES = %w[delete_keychain_certificate set_ownership].freeze
 
       sig { params(context: Object, command: T.class_of(SystemCommand)).void }
       def initialize(context:, command: SystemCommand)
@@ -967,8 +966,8 @@ module Homebrew
           when "remove"
             step_paths(step, "paths").flat_map { |path| expand_path_glob(path) }.map(&:parent)
           when "inreplace", "change_dylib_id"
-            key = (step["type"] == "inreplace") ? "path" : "source"
-            [resolve_path(step_path(step, key))]
+            path = resolve_path(step_path(step, (step["type"] == "inreplace") ? "path" : "source"))
+            [path.exist? ? path : path.parent]
           when "link_dir", "link_children"
             [resolve_path(step_path(step, "target"))]
           when "run"
@@ -987,11 +986,12 @@ module Homebrew
         end.uniq
       end
 
-      sig { params(steps: Steps).returns(T::Boolean) }
-      def sudo_required?(steps)
+      # Include optional elevation when routing steps out of the sandbox.
+      sig { params(steps: Steps, include_optional: T::Boolean).returns(T::Boolean) }
+      def sudo_required?(steps, include_optional: true)
         DSL.normalise_steps(steps).any? do |step|
-          step["sudo"] == true || step["sudo"] == "if_needed" ||
-            IMPLICIT_SUDO_STEP_TYPES.include?(step["type"])
+          step["sudo"] == true || step["type"] == "delete_keychain_certificate" ||
+            (include_optional && (step["sudo"] == "if_needed" || step["type"] == "set_ownership"))
         end
       end
 
@@ -1337,12 +1337,12 @@ module Homebrew
           EOS
         end
 
-        ohai "Changing ownership of paths required by #{@context} with `sudo` (which may request your password)..."
+        ohai "Changing ownership of paths required by #{@context}..."
         args = []
         args << "-R" if step["non_recursive"] != true
         @command.run!("chown", args: [*args, "--", "#{step["user"] || ::User.current}:#{step["group"] || "staff"}",
                                       *paths],
-                               sudo: true)
+                               sudo: nil)
       end
 
       sig { params(step: Step).void }

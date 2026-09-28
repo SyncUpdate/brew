@@ -14,19 +14,18 @@ module Cask
         overridable.params(
           cask:          Cask,
           source_string: T.any(String, Pathname),
-          target_hash:   T.untyped,
+          target_hash:   T.nilable(DirectivesType),
         ).returns(T.attached_class)
       }
       def self.from_args(cask, source_string, target_hash = nil)
-        if target_hash
-          raise CaskInvalidError, cask unless target_hash.respond_to?(:keys)
+        target = if target_hash
+          raise CaskInvalidError, cask unless target_hash.is_a?(Hash)
 
           ::Utils::Data.assert_valid_keys(target_hash, :target)
+          target_hash[:target]
         end
 
-        target_hash ||= {}
-
-        new(cask, source_string, **target_hash)
+        new(cask, source_string, target:)
       end
 
       sig { overridable.params(target: T.any(String, Pathname), base_dir: T.nilable(Pathname)).returns(Pathname) }
@@ -41,14 +40,15 @@ module Cask
         target
       end
 
-      sig {
-        params(cask: Cask, source: T.any(String, Pathname), target_hash: T.any(String, Pathname))
-          .void
-      }
-      def initialize(cask, source, **target_hash)
-        super
+      sig { params(cask: Cask, source: T.any(String, Pathname), target: T.nilable(T.any(String, Pathname))).void }
+      def initialize(cask, source, target: nil)
+        # Keep `to_args` (and so the JSON API) free of an empty target stanza.
+        if target.nil?
+          super(cask, source)
+        else
+          super(cask, source, { target: })
+        end
 
-        target = target_hash[:target]
         @source = T.let(nil, T.nilable(Pathname))
         @source_string = T.let(source.to_s, String)
         @target = T.let(nil, T.nilable(Pathname))
@@ -102,12 +102,12 @@ module Cask
         # Some packages are shipped as u=rx (e.g. Bitcoin Core)
         command.run!("chmod",
                      args: ["--", "u+rw", file, file.realpath],
-                     sudo: !file.writable? || !file.realpath.writable?)
+                     sudo: nil)
 
         command.run!("/usr/bin/xattr",
                      args:         ["-w", ALT_NAME_ATTRIBUTE, altnames, file],
                      print_stderr: false,
-                     sudo:         !file.writable?)
+                     sudo:         nil)
       end
 
       private

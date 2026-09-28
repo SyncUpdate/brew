@@ -277,8 +277,9 @@ class Sandbox
       super
       @writable_paths = T.let([], T::Array[String])
       @readable_paths = T.let([], T::Array[String])
-      @error_pipe_path = T.let(nil, T.nilable(String))
+      @socket_directory = T.let(nil, T.nilable(String))
       @deny_all_network = T.let(false, T::Boolean)
+      @warn_incomplete_network = T.let(false, T::Boolean)
       @deny_read = T.let(false, T::Boolean)
     end
 
@@ -291,7 +292,11 @@ class Sandbox
       @readable_paths = readable_paths(denied_read_paths)
       @deny_read = denied_read_paths.any?
       @deny_all_network = deny_all_network?
-      @error_pipe_path = File.join(tmpdir, "socket")
+      # Children cannot update the parent's cache, so reserve the warning before forking.
+      abi = self.class.abi_version
+      @warn_incomplete_network = @deny_all_network && !abi.nil? && abi < MINIMUM_FULL_NETWORK_ABI &&
+                                 Utils::Output.claim_warning("Landlock incomplete network denial")
+      @socket_directory = tmpdir
       args
     end
 
@@ -302,7 +307,7 @@ class Sandbox
         raise self.class.failure_reason || "Landlock ABI #{MINIMUM_ABI} or later is required."
       end
 
-      if @deny_all_network && abi < MINIMUM_FULL_NETWORK_ABI
+      if @warn_incomplete_network
         network_restrictions = if abi >= MINIMUM_NETWORK_ABI
           "Applying the network restrictions supported by this kernel."
         else
@@ -347,9 +352,9 @@ class Sandbox
           add_path_rule(ruleset_fd, path, allowed_access & handled_access_fs)
         end
 
-        error_pipe_path = @error_pipe_path
-        if @deny_all_network && abi >= 9 && error_pipe_path
-          add_path_rule(ruleset_fd, error_pipe_path, ACCESS_FS_RESOLVE_UNIX)
+        socket_directory = @socket_directory
+        if @deny_all_network && abi >= 9 && socket_directory
+          add_path_rule(ruleset_fd, socket_directory, ACCESS_FS_RESOLVE_UNIX)
         end
         @readable_paths.each do |path|
           allowed_access = File.directory?(path) ? READ_ACCESS_FS : FILE_READ_ACCESS_FS
@@ -405,9 +410,9 @@ class Sandbox
     def readable_paths(denied_paths)
       return [] if denied_paths.empty? || denied_paths.include?(root_path)
 
-      root_path.children.sort.each_with_object([]) do |path, paths|
-        add_readable_path(path, denied_paths, paths)
-      end
+      paths = profile_paths(allow: true, operation: "file-read").select { |path| File.exist?(path) }
+      root_path.children.sort.each { |path| add_readable_path(path, denied_paths, paths) }
+      paths.uniq
     end
 
     private

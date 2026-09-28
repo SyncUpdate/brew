@@ -129,13 +129,23 @@ Control Homebrew's anonymous aggregate user behaviour analytics. Read more at
 
 : Turn Homebrew's analytics off.
 
+### `as-brew-user` *`command`* \[*`args`* ...\]
+
+Run a Homebrew command as the owner of `HOMEBREW_PREFIX` on macOS or Linux.
+
+Uses the owner's home and a clean environment. Changing users requires
+permission to use `sudo` or an already-root process; running as the owner does
+not. When `sudo` is disabled or unavailable, root can switch users directly.
+
 ### `as-console-user` *`command`* \[*`args`* ...\]
 
 Run a Homebrew command as the active macOS console user.
 
 This is intended for MDM, Munki and Jamf workflows where `brew` is invoked as
-root but Homebrew operations should run as the logged-in console user. The
-nested command is always dispatched through `HOMEBREW_BREW_FILE`.
+root but Homebrew operations should run as the logged-in console user. Uses
+their home and a clean environment, dispatching through `HOMEBREW_BREW_FILE`.
+Use `as-brew-user` to select the prefix owner. When `sudo` is disabled or
+unavailable, root can switch users directly.
 
 ### `autoremove` \[`--dry-run`\]
 
@@ -4980,6 +4990,13 @@ command execution (e.g. `$(cat file)`).
 
 : If set, do not relocate bottles built for a different prefix at install time.
   Homebrew will build from source instead.
+
+`HOMEBREW_NO_SUDO`
+
+: If set, do not run commands with `sudo`(8). Automatically enabled when `sudo`
+  is missing, reports a recognised inability to elevate privileges or explicitly
+  denies access. A password requirement or an inconclusive check preserves
+  normal `sudo` behaviour.
 
 `HOMEBREW_NO_UPDATE_REPORT_NEW`
 

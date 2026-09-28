@@ -48,6 +48,10 @@ module Cask
       sig { abstract.returns(String) }
       def summarize; end
 
+      # Whether installation always requires elevated privileges.
+      sig { overridable.returns(T::Boolean) }
+      def requires_sudo? = false
+
       sig { params(path: T.any(String, Pathname)).returns(Pathname) }
       def staged_path_join_executable(path)
         path = Pathname(path)
@@ -245,14 +249,9 @@ module Cask
               "/usr/bin/env",
               "HOME=#{home}",
               "nice",
-              *HOMEBREW_RUBY_EXEC_ARGS,
-              "-I", $LOAD_PATH.join(File::PATH_SEPARATOR),
-              "--",
-              HOMEBREW_LIBRARY_PATH/"cask_artifact.rb",
-              payload_path,
-              Digest::SHA256.hexdigest(payload_json),
+              *Sandbox.ruby_command("cask_artifact.rb", payload_path, Digest::SHA256.hexdigest(payload_json)),
               passthrough_stdin:,
-              child_message_handler:
+              child_message_handler:,
             )
           end
         end

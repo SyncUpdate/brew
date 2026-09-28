@@ -18,6 +18,9 @@ class SystemCommand
   #
   # @api internal
   module Mixin
+    sig { overridable.returns(T.nilable(Sandbox)) }
+    def command_sandbox = nil
+
     # Run a fallible system command.
     #
     # @api internal
@@ -25,7 +28,7 @@ class SystemCommand
       params(
         executable:   T.any(String, Pathname),
         args:         T::Array[T.any(String, Integer, Float, Pathname)],
-        sudo:         T::Boolean,
+        sudo:         T.nilable(T::Boolean),
         sudo_as_root: T::Boolean,
         env:          T::Hash[String, T.nilable(T.any(String, T::Boolean, PATH))],
         input:        T.any(String, T::Array[String]),
@@ -42,6 +45,13 @@ class SystemCommand
     def system_command(executable, args: [], sudo: false, sudo_as_root: false, env: {}, input: [],
                        must_succeed: false, print_stdout: false, print_stderr: true, debug: nil, verbose: nil,
                        secrets: [], chdir: nil, timeout: nil)
+      if (sandbox = command_sandbox)
+        Kernel.raise ArgumentError, "Sandboxed commands cannot use sudo" if sudo || sudo_as_root
+
+        return sandbox.capture(executable, args:, env:, input:, must_succeed:, print_stdout:, print_stderr:,
+                               debug:, verbose:, secrets:, chdir:, timeout:)
+      end
+
       SystemCommand.run(executable, args:, sudo:, sudo_as_root:, env:, input:, must_succeed:, print_stdout:,
                         print_stderr:, debug:, verbose:, secrets:, chdir:, timeout:)
     end
@@ -53,7 +63,7 @@ class SystemCommand
       params(
         executable:   T.any(String, Pathname),
         args:         T::Array[T.any(String, Integer, Float, Pathname)],
-        sudo:         T::Boolean,
+        sudo:         T.nilable(T::Boolean),
         sudo_as_root: T::Boolean,
         env:          T::Hash[String, T.nilable(T.any(String, T::Boolean, PATH))],
         input:        T.any(String, T::Array[String]),
@@ -69,8 +79,8 @@ class SystemCommand
     def system_command!(executable, args: [], sudo: false, sudo_as_root: false, env: {}, input: [],
                         print_stdout: false, print_stderr: true, debug: nil, verbose: nil, secrets: [],
                         chdir: nil, timeout: nil)
-      SystemCommand.run!(executable, args:, sudo:, sudo_as_root:, env:, input:, print_stdout:,
-                         print_stderr:, debug:, verbose:, secrets:, chdir:, timeout:)
+      system_command(executable, args:, sudo:, sudo_as_root:, env:, input:, must_succeed: true, print_stdout:,
+                     print_stderr:, debug:, verbose:, secrets:, chdir:, timeout:)
     end
   end
 
@@ -89,11 +99,17 @@ class SystemCommand
 
   include Context
 
+  sig { params(sandbox: T.nilable(Sandbox)).void }
+  attr_writer :sandbox
+
+  sig { params(sandbox_inheritance: IO).returns(IO) }
+  attr_writer :sandbox_inheritance
+
   sig {
     params(
       executable:   T.any(String, Pathname),
       args:         T::Array[T.any(String, Integer, Float, Pathname)],
-      sudo:         T::Boolean,
+      sudo:         T.nilable(T::Boolean),
       sudo_as_root: T::Boolean,
       env:          T::Hash[String, T.nilable(T.any(String, T::Boolean, PATH))],
       input:        T.any(String, T::Array[String]),
@@ -110,6 +126,18 @@ class SystemCommand
   def self.run(executable, args: [], sudo: false, sudo_as_root: false, env: {}, input: [], must_succeed: false,
                print_stdout: false, print_stderr: true, debug: nil, verbose: nil, secrets: [], chdir: nil,
                timeout: nil)
+    # Only use sudo: nil for operations that can safely be retried.
+    if sudo.nil?
+      result = new(executable, args:, sudo: false, sudo_as_root: false, env:, input:, must_succeed: false,
+                   print_stdout:, print_stderr: Homebrew::EnvConfig.no_sudo? ? print_stderr : false,
+                   debug:, verbose:, secrets:, chdir:, timeout:).run!
+      if result.success? || Homebrew::EnvConfig.no_sudo?
+        result.assert_success! if must_succeed
+        return result
+      end
+      sudo = true
+    end
+
     new(executable, args:, sudo:, sudo_as_root:, env:, input:, must_succeed:, print_stdout:, print_stderr:, debug:,
         verbose:, secrets:, chdir:, timeout:).run!
   end
@@ -118,7 +146,7 @@ class SystemCommand
     params(
       executable:   T.any(String, Pathname),
       args:         T::Array[T.any(String, Integer, Float, Pathname)],
-      sudo:         T::Boolean,
+      sudo:         T.nilable(T::Boolean),
       sudo_as_root: T::Boolean,
       env:          T::Hash[String, T.nilable(T.any(String, T::Boolean, PATH))],
       input:        T.any(String, T::Array[String]),
@@ -301,6 +329,8 @@ class SystemCommand
     @secrets = T.let((Array(secrets) + ENV.sensitive_environment.values).uniq, T::Array[String])
     @chdir = chdir
     @timeout = timeout
+    @sandbox = T.let(nil, T.nilable(Sandbox))
+    @sandbox_inheritance = T.let(nil, T.nilable(IO))
   end
 
   sig { returns(T::Array[String]) }
@@ -368,6 +398,12 @@ class SystemCommand
 
   sig { returns(T::Array[String]) }
   def sudo_prefix
+    # Availability is detected in brew.sh.
+    if Homebrew::EnvConfig.no_sudo?
+      raise ErrorDuringExecution.new([executable.to_s, *expanded_args], status: 1, secrets: @secrets,
+                                     output: [[:stderr, "sudo is disabled by HOMEBREW_NO_SUDO.\n"]])
+    end
+
     askpass_flags = ENV.key?("SUDO_ASKPASS") ? ["-A"] : []
     user_flags = []
     if Homebrew::EnvConfig.sudo_through_sudo_user?
@@ -420,9 +456,6 @@ class SystemCommand
 
     raw_stdin, raw_stdout, raw_stderr, raw_wait_thr = exec3(env, executable, *args, **options)
 
-    write_input_to(raw_stdin)
-    raw_stdin.close_write
-
     thread_context = Context.current
     thread_ready_queue = Queue.new
     thread_done_queue = Queue.new
@@ -438,6 +471,9 @@ class SystemCommand
     rescue ProcessTerminatedInterrupt
       nil
     end
+
+    write_input_to(raw_stdin)
+    raw_stdin.close_write
 
     end_time = Time.now + @timeout if @timeout
     if raw_wait_thr.join(Utils::Timer.remaining(end_time)).nil?
@@ -461,16 +497,24 @@ class SystemCommand
 
     raw_wait_thr.value
   rescue Interrupt
-    Process.kill("INT", raw_wait_thr.pid) if raw_wait_thr && !sudo?
+    if raw_wait_thr && !sudo?
+      # The forked child may not have created its process group before sandbox setup.
+      [-raw_wait_thr.pid, raw_wait_thr.pid].each do |target|
+        Process.kill("INT", target)
+        break
+      rescue Errno::ESRCH
+        next
+      end
+    end
     raise Interrupt
   ensure
+    raw_stdin&.close
     if line_thread
       thread_ready_queue.pop
       line_thread.raise ProcessTerminatedInterrupt.new
       thread_done_queue << true
       line_thread.join
     end
-    raw_stdin&.close
     raw_stdout&.close
     raw_stderr&.close
   end
@@ -495,19 +539,25 @@ class SystemCommand
     options[:err] = err_w
 
     exec_env = env.merge({ "COLUMNS" => Tty.width.to_s })
+    if (inheritance = @sandbox_inheritance)
+      options = options.merge(Sandbox::INHERITANCE_FD => inheritance)
+    end
 
     # `Process.spawn` avoids running `malloc` in a `fork`ed child, which is not
     # fork-safe on macOS and can abort it. `fork` is kept as a fallback.
     pid = begin
-      Process.spawn(exec_env, [executable, executable], *args, **options)
+      Process.spawn(exec_env, [executable, executable], *args, **options) unless @sandbox
     rescue SystemCallError
       nil
     end
 
     pid ||= fork do
+      $stderr = err_w if @sandbox
+      @sandbox&.apply!
       exec(exec_env, [executable, executable], *args, **options)
-    rescue SystemCallError => e
-      $stderr.puts(e.message)
+    # Never unwind into the parent's Ruby control flow after fork.
+    rescue Exception => e # rubocop:disable Lint/RescueException
+      err_w.puts(e.message)
       exit!(127)
     end
     wait_thr = Process.detach(pid)

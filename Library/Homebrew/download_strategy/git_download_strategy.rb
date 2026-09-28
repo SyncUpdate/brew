@@ -26,6 +26,13 @@ class GitDownloadStrategy < VCSDownloadStrategy
     @ref ||= T.let("master", T.untyped)
   end
 
+  sig { override.params(timeout: T.nilable(T.any(Float, Integer))).void }
+  def fetch(timeout: nil)
+    require "utils/git"
+    Utils::Git.ensure_installed!
+    super
+  end
+
   # Returns the most recent modified time for all files in the current working directory after stage.
   #
   # @api public
@@ -77,11 +84,28 @@ class GitDownloadStrategy < VCSDownloadStrategy
 
   private
 
+  sig { override.returns(Symbol) }
+  def fetch_home_read_exception = :git
+
+  sig { override.params(sandbox: Sandbox).void }
+  def allow_fetch_credentials(sandbox)
+    # Let Git and SSH resolve configuration, includes, URL rewrites and agent sockets.
+    sandbox.allow_network(path: "/", type: :subpath)
+  end
+
   # Read user Git config so credential helpers work for private downloads,
   # but never block on an interactive credential prompt.
   sig { override.returns(T::Hash[String, String]) }
   def env
-    { "GIT_TERMINAL_PROMPT" => "0" }
+    { "GIT_TERMINAL_PROMPT" => "0" }.tap do |env|
+      if fetching? && Sandbox.isolate_operation?
+        env["HOME"] = Dir.home(ENV.fetch("USER"))
+        env["PATH"] = PATH.new(ENV.fetch("PATH"), ORIGINAL_PATHS).to_s
+        if (socket = ENV.fetch("SSH_AUTH_SOCK", nil))
+          env["SSH_AUTH_SOCK"] = socket
+        end
+      end
+    end
   end
 
   # Local, read-only repository inspections (`git --git-dir … rev-parse`/`show`)
@@ -280,6 +304,10 @@ class GitDownloadStrategy < VCSDownloadStrategy
       # Only check and fix if `.git` is a regular file, not a directory.
       dot_git = work_dir/".git"
       next unless dot_git.file?
+
+      # This Ruby write runs in the parent, outside Git's sandbox.
+      Utils::Path.ensure_child_of!(cached_location, dot_git,
+                                   message: "Git submodule metadata escapes the download directory: #{dot_git}")
 
       git_dir = dot_git.read.chomp[/^gitdir: (.*)$/, 1]
       if git_dir.nil?

@@ -182,20 +182,38 @@ module Cask
 
       private
 
-      sig { params(options: DirectivesType).void }
-      def dispatch_uninstall_directives(**options)
+      sig {
+        params(
+          command:   T.class_of(SystemCommand),
+          force:     T::Boolean,
+          successor: T.nilable(Cask),
+          upgrade:   T::Boolean,
+        ).void
+      }
+      def dispatch_uninstall_directives(command:, force: false, successor: nil, upgrade: false)
         ORDERED_DIRECTIVES.each do |directive_sym|
-          dispatch_uninstall_directive(directive_sym, **options)
+          dispatch_uninstall_directive(directive_sym, command:, force:, successor:, upgrade:)
         end
       end
 
-      sig { params(directive_sym: Symbol, options: T.anything).void }
-      def dispatch_uninstall_directive(directive_sym, **options)
+      # The `uninstall_*` methods are dispatched dynamically, so they take these
+      # options uniformly and ignore the ones they do not need.
+      sig {
+        params(
+          directive_sym: Symbol,
+          command:       T.class_of(SystemCommand),
+          force:         T::Boolean,
+          successor:     T.nilable(Cask),
+          upgrade:       T::Boolean,
+        ).void
+      }
+      def dispatch_uninstall_directive(directive_sym, command:, force: false, successor: nil, upgrade: false)
         return unless directives.key?(directive_sym)
 
         args = directives[directive_sym]
 
-        send(:"uninstall_#{directive_sym}", *(args.is_a?(Hash) ? [args] : args), **options)
+        send(:"uninstall_#{directive_sym}", *(args.is_a?(Hash) ? [args] : args),
+             command:, force:, successor:, upgrade:)
       end
 
       sig { returns(Symbol) }
@@ -206,15 +224,23 @@ module Cask
       # Preserve prior functionality of script which runs first. Should rarely be needed.
       # :early_script should not delete files, better defer that to :script.
       # If cask writers never need :early_script it may be removed in the future.
-      sig { params(directives: DirectivesType, options: T.anything).void }
-      def uninstall_early_script(directives, **options)
-        uninstall_script(directives, directive_name: :early_script, **options)
+      sig {
+        params(
+          directives: DirectivesType,
+          command:    T.class_of(SystemCommand),
+          force:      T::Boolean,
+          _kwargs:    T.anything,
+        ).void
+      }
+      def uninstall_early_script(directives, command:, force: false, **_kwargs)
+        uninstall_script(directives, command:, directive_name: :early_script, force:)
       end
 
       # :launchctl must come before :quit/:signal for cases where app would instantly re-launch
       sig { params(services: String, command: T.class_of(SystemCommand), _kwargs: T.anything).void }
       def uninstall_launchctl(*services, command:, **_kwargs)
         booleans = [false, true]
+        booleans.delete(true) if Homebrew::EnvConfig.no_sudo?
 
         all_services = []
 
@@ -397,6 +423,9 @@ module Cask
 
         sig { params(_pid: Integer).returns(T.nilable(String)) }
         def bundle_identifier_for_pid(_pid) = nil
+
+        sig { params(_pid: Integer).returns(T.nilable(Integer)) }
+        def owner_uid(_pid) = nil
       end
 
       sig { returns(T::Array[String]) }
@@ -458,6 +487,16 @@ module Cask
             next
           end
 
+          pids.select! do |pid|
+            uid = AbstractUninstall.owner_uid(pid)
+            next true if uid == Process.uid
+
+            reason = uid.nil? ? "its owner could not be determined" : "it is owned by another user"
+            odebug "Skipping signalling PID #{pid} for '#{bundle_id}': #{reason}."
+            false
+          end
+          next if pids.none?
+
           ohai "Signalling '#{signal}' to application ID '#{bundle_id}'"
 
           # Note that unlike :quit, signals are sent from the current user (not
@@ -466,7 +505,6 @@ module Cask
           # misapplied "kill" by root could bring down the system. The fact that we
           # learned the pid from AppleScript is already some degree of protection,
           # though indirect.
-          # TODO: check the user that owns the PID and don't try to kill those from other users.
           odebug "Unix ids are #{pids.inspect} for processes with bundle identifier #{bundle_id}"
           begin
             Process.kill(signal, *pids)
@@ -615,21 +653,27 @@ module Cask
         end
       end
 
-      sig { params(paths: T.any(Pathname, String), options: T.anything).void }
-      def uninstall_trash(*paths, **options)
+      sig {
+        params(
+          paths:   T.any(Pathname, String),
+          command: T.nilable(T.class_of(SystemCommand)),
+          _kwargs: T.anything,
+        ).void
+      }
+      def uninstall_trash(*paths, command: nil, **_kwargs)
         return if paths.empty?
 
         resolved_paths = each_resolved_path(:trash, paths).to_a
 
         ohai "Trashing files:", resolved_paths.map(&:first)
-        trash_paths(*resolved_paths.flat_map(&:last), **options)
+        trash_paths(*resolved_paths.flat_map(&:last), command:)
       end
 
       sig {
-        params(paths: Pathname, command: T.nilable(T.class_of(SystemCommand)), _kwargs: T.anything)
+        params(paths: Pathname, command: T.nilable(T.class_of(SystemCommand)))
           .returns(T.nilable([T::Array[String], T::Array[String]]))
       }
-      def trash_paths(*paths, command: nil, **_kwargs)
+      def trash_paths(*paths, command: nil)
         return if paths.empty?
 
         trashed, untrashable = ::Cask::Utils::Trash.trash(*paths, command:)
@@ -647,8 +691,8 @@ module Cask
         directories.all?(&:directory?)
       end
 
-      sig { params(directories: Pathname, command: T.class_of(SystemCommand), _kwargs: T.anything).void }
-      def recursive_rmdir(*directories, command:, **_kwargs)
+      sig { params(directories: Pathname, command: T.class_of(SystemCommand)).void }
+      def recursive_rmdir(*directories, command:)
         directories.all? do |resolved_path|
           puts resolved_path.sub(Dir.home, "~")
           next false if resolved_path.symlink?
@@ -686,8 +730,14 @@ module Cask
         end
       end
 
-      sig { params(directories: T.any(Pathname, String), kwargs: T.anything).void }
-      def uninstall_rmdir(*directories, **kwargs)
+      sig {
+        params(
+          directories: T.any(Pathname, String),
+          command:     T.class_of(SystemCommand),
+          _kwargs:     T.anything,
+        ).void
+      }
+      def uninstall_rmdir(*directories, command:, **_kwargs)
         return if directories.empty?
 
         ohai "Removing directories if empty:"
@@ -695,7 +745,7 @@ module Cask
         each_resolved_path(:rmdir, directories) do |_path, resolved_paths|
           next unless resolved_paths.all?(&:directory?)
 
-          recursive_rmdir(*resolved_paths, **kwargs)
+          recursive_rmdir(*resolved_paths, command:)
         end
       end
 

@@ -125,39 +125,30 @@ The prefix `/opt/homebrew` was chosen to allow installations in `/opt/homebrew` 
 
 ## Why is the default installation prefix `/home/linuxbrew/.linuxbrew` on Linux?
 
-The prefix `/home/linuxbrew/.linuxbrew` was chosen to avoid writing to system-owned directories after installation while still allowing most precompiled binaries (bottles) to be used. Homebrew is designed for single-user installations rather than shared role accounts. See [Support Tiers](Support-Tiers.md#unsupported) for unsupported multi-user environments.
+The prefix `/home/linuxbrew/.linuxbrew` was chosen to avoid writing to system-owned directories after installation while still allowing most precompiled binaries (bottles) to be used.
+Homebrew is designed for one owning account, which can be a [dedicated account](Installation.md#running-as-the-homebrew-owner).
+See [Support Tiers](Support-Tiers.md#unsupported) for unsupported multi-user environments.
 
 ## Why does Homebrew say sudo is bad?
 
-__tl;dr__ Sudo is dangerous, and you installed TextMate.app without sudo anyway.
-
-Homebrew refuses to work using sudo.
-
-Use `sudo` only with software that you trust.
-Even when you trust Homebrew itself, a source build can run large upstream build scripts that have not received a security review from Homebrew.
-Running those scripts as `root` would allow them to modify or upload files anywhere permitted by the operating system.
-Some build scripts have attempted to modify `/usr` even when configured with another installation prefix.
-
-We use the macOS sandbox to stop this but this doesn't work when run as the `root` user (which also has read and write access to almost everything on the system).
-The sandbox is part of Homebrew's wider [Software Supply Chain Security](Homebrew-Security-and-Supply-Chain.md) measures.
-
-Did you `chown root /Applications/TextMate.app`? Probably not. So is it that important to `chown root wget`?
-
-Note: Homebrew is primarily designed for single-user use and does not work well in multi-user configurations.
+Homebrew runs formula builds and installations as the owning account because upstream build scripts should not have unrestricted system access.
+Some casks and system services need elevated privileges; see [running without sudo](Installation.md#running-without-sudo).
 
 ## What are the default ownership and permissions used by Homebrew?
 
-First, see previous question regarding sudo.
-
-Ownership on macOS, all subdirectories and files use a forced default of `admin` user group (instead of lower default user group `staff`) and the current user that executed the installation.
+The macOS installer uses the selected account and the `admin` group for administrators, or the account's primary group otherwise.
+Casks use the managing account's effective group when it is not an administrator or sudo is disabled.
 
 Ownership on Linux, all subdirectories and files default to the current user and the user group that executed the installation.
 
-By default, permissions for Homebrew-managed directories and files are `0755 (u=rwx,g=rx,o=rx)` on both macOS and Linux. This means that only the owning user (typically the installing user) can modify or replace files within the Homebrew prefix, while all users are allowed to read and execute installed binaries.
+Installed executable files commonly use `0755 (u=rwx,g=rx,o=rx)`, allowing other accounts to read and execute them.
+The installers also make some managed directories group-writable for administrators and custom primary groups.
+For non-admin macOS accounts whose primary group is `staff`, the installers remove group and other write permissions from the prefix and cache, and Homebrew restricts its umask while preserving stricter settings.
+Check directory permissions, group membership and access control lists when provisioning a dedicated owner.
 
 When a Homebrew-installed binary is executed, it runs with the privileges of the user who launched it.
 
-Note: Homebrew is primarily designed for single-user use and does not work well in multi-user configurations.
+Use a [single owning account](Installation.md#running-as-the-homebrew-owner) to manage the installation.
 
 ## Why isn’t a particular command documented?
 

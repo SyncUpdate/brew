@@ -1,5 +1,5 @@
 ---
-last_review_date: "2026-09-17"
+last_review_date: "2026-09-21"
 ---
 
 # Support Tiers
@@ -32,8 +32,9 @@ To qualify as Tier 1, a macOS configuration must meet all of the following:
 - Installed in the default prefix (`/opt/homebrew`) or a [compatible custom prefix](#custom-prefixes)
 - Not building official packages from source (i.e. using bottles)
 - Installed on the Mac’s internal storage (not external or removable drives)
-- Running with `sudo` access available for initial installation and cask installations that require elevated privileges
-- Xcode Command Line Tools installed and up to date
+
+Xcode Command Line Tools are not required when installing bottles or casks on Apple Silicon.
+Building formulae from source requires developer tools.
 
 ### Linux
 
@@ -47,7 +48,6 @@ To qualify as Tier 1, a Linux configuration must meet all of the following:
 - Installed in the default prefix (`/home/linuxbrew/.linuxbrew`) or a [compatible custom prefix](#custom-prefixes)
 - Using a supported architecture (ARM64/AArch64 or Intel x86_64 with SSSE3 support)
 - Not building official packages from source (i.e. using bottles)
-- Running with `sudo` access available for initial installation
 
 ### Custom prefixes
 
@@ -124,7 +124,7 @@ Unsupported configurations include:
 
 - FreeBSD
 - macOS Catalina 10.15 and earlier
-- Multi-user Homebrew environments where multiple users share the same installation, including through a setuid wrapper that switches to the installation's owner
+- Multiple accounts independently modifying the same Homebrew installation, or access through a setuid wrapper
 - Beowulf clusters
 - Nokia 3210s
 - CPUs built inside of Minecraft

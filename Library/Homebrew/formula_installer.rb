@@ -214,14 +214,6 @@ class FormulaInstaller
   sig { returns(T::Boolean) }
   def verbose? = @verbose
 
-  sig { returns(T::Boolean) }
-  def self.show_missing_bottle_metadata_warning?
-    return false if @missing_bottle_metadata_warning_shown
-
-    @missing_bottle_metadata_warning_shown = T.let(true, T.nilable(TrueClass))
-    true
-  end
-
   sig { returns(T::Set[Formula]) }
   def self.attempted
     @attempted ||= T.let(Set.new, T.nilable(T::Set[Formula]))
@@ -633,6 +625,7 @@ on_request: installed_on_request?, options:)
 
     unless @poured_bottle
       build
+      Tab.clear_cache
       clean
 
       # Store the formula used to build the keg in the keg.
@@ -1243,14 +1236,7 @@ on_request: installed_on_request?, options:)
 
   sig { params(formula_path: Pathname).returns(T::Array[T.any(String, Pathname)]) }
   def build_args(formula_path)
-    [
-      "nice",
-      *HOMEBREW_RUBY_EXEC_ARGS,
-      "--",
-      HOMEBREW_LIBRARY_PATH/"build.rb",
-      formula_path,
-      *build_argv,
-    ]
+    ["nice", *Sandbox.ruby_command("build.rb", formula_path, *build_argv)]
   end
 
   sig { params(sandbox: Sandbox, formula_path: Pathname, log_name: String).void }
@@ -1398,7 +1384,12 @@ on_request: installed_on_request?, options:)
 
   sig { params(keg: Keg).void }
   def fix_dynamic_linkage(keg)
-    keg.fix_dynamic_linkage
+    if Sandbox.isolate_operation?
+      keg.require_relocation! if JSON.parse(Sandbox.operation("fix_linkage", JSON.generate(path: keg.to_s),
+                                                              write_paths: [Pathname(keg.to_s)]))
+    else
+      keg.fix_dynamic_linkage
+    end
   # Rescue all possible exceptions when fixing linkage.
   rescue Exception => e # rubocop:disable Lint/RescueException
     ofail "Failed to fix install linkage"
@@ -1461,18 +1452,9 @@ on_request: installed_on_request?, options:)
 
   sig { void }
   def post_install
-    args = [
-      "nice",
-      *HOMEBREW_RUBY_EXEC_ARGS,
-      "-I", $LOAD_PATH.join(File::PATH_SEPARATOR),
-      "--",
-      HOMEBREW_LIBRARY_PATH/"postinstall.rb"
-    ]
-
-    args << post_install_formula_path
-
     Sandbox.with_preserved_brew_file do
-      Sandbox.run_or_fork(*args, step: "running post-install", debug: debug?) do |sandbox|
+      Sandbox.run_or_fork("nice", *Sandbox.ruby_command("postinstall.rb", post_install_formula_path),
+                          step: "running post-install", debug: debug?) do |sandbox|
         formula.logs.mkpath
         sandbox.record_log(formula.logs/"postinstall.sandbox.log")
         sandbox.allow_write_log(formula)
@@ -1715,14 +1697,12 @@ on_request: installed_on_request?, options:)
     keg = Keg.new(formula.prefix)
     skip_linkage = formula.bottle_specification.skip_relocation?(tab:)
     if Homebrew::EnvConfig.bottle_domain_custom? && tab.changed_files.nil?
-      if self.class.show_missing_bottle_metadata_warning?
-        opoo <<~EOS
-          No bottle relocation metadata was found for this `HOMEBREW_BOTTLE_DOMAIN`.
-          Homebrew will perform full relocation. Ask the mirror operator to provide
-          an OCI registry proxy of `ghcr.io` that includes manifests and their
-          `sh.brew.tab` annotations, then use `HOMEBREW_ARTIFACT_DOMAIN` instead.
-        EOS
-      end
+      opoo_once <<~EOS
+        No bottle relocation metadata was found for this `HOMEBREW_BOTTLE_DOMAIN`.
+        Homebrew will perform full relocation. Ask the mirror operator to provide
+        an OCI registry proxy of `ghcr.io` that includes manifests and their
+        `sh.brew.tab` annotations, then use `HOMEBREW_ARTIFACT_DOMAIN` instead.
+      EOS
       skip_linkage = false
     end
     keg.replace_placeholders_with_locations(tab.changed_files, skip_linkage:, linkage_files: tab.linkage_files)

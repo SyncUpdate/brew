@@ -3,6 +3,7 @@
 
 require "sandbox"
 require "extend/os/linux/sandbox/landlock"
+require "install_steps"
 
 RSpec.describe Sandbox::Landlock do
   subject(:landlock) { described_class.new(sandbox.profile) }
@@ -115,6 +116,18 @@ RSpec.describe Sandbox::Landlock do
       allow(File).to receive(:exist?).with("/dev/tty").and_return(false)
     end
 
+    it "supports captured commands without an error socket" do
+      sandbox.deny_all_network
+      landlock.command(["true"], tmpdir.to_s)
+      allow(described_class).to receive_messages(abi_version: 10, landlock_create_ruleset: 17, landlock_add_rule: 0,
+                                                 set_no_new_privileges: 0, landlock_restrict_self: 0)
+      allow(landlock).to receive(:open_path).and_return(18)
+      allow(landlock).to receive(:open_path).with("#{tmpdir}/socket").and_raise(Errno::ENOENT)
+      allow(landlock).to receive(:close_file_descriptor)
+
+      expect { landlock.apply! }.not_to raise_error
+    end
+
     it "rejects an ABI without cross-directory rename restrictions" do
       allow(described_class).to receive_messages(abi_version:    1,
                                                  failure_reason: "Landlock ABI 2 or later is required; found ABI 1.")
@@ -139,7 +152,6 @@ RSpec.describe Sandbox::Landlock do
       allow(landlock).to receive(:open_path).with(writable_dir.to_s).and_return(18)
       expect(landlock).to receive(:open_path).with(File::NULL).and_return(19)
       allow(landlock).to receive(:open_path).with(tmpdir.to_s).and_return(20)
-      expect(landlock).to receive(:open_path).with("#{tmpdir}/socket").and_return(21)
       expect(landlock).to receive(:open_path).with("/dev/ptmx").and_return(22)
       expect(landlock).to receive(:open_path).with("/dev/pts").and_return(23)
       path_rules = []
@@ -155,7 +167,7 @@ RSpec.describe Sandbox::Landlock do
       expect(described_class).to receive(:landlock_restrict_self).with(17, 0).and_return(0)
       expect(landlock).to receive(:close_file_descriptor).with(22).ordered
       expect(landlock).to receive(:close_file_descriptor).with(23).ordered
-      expect(landlock).to receive(:close_file_descriptor).with(21).ordered
+      expect(landlock).to receive(:close_file_descriptor).with(20).ordered
       expect(landlock).to receive(:close_file_descriptor).with(18).ordered
       expect(landlock).to receive(:close_file_descriptor).with(19).ordered
       expect(landlock).to receive(:close_file_descriptor).with(20).ordered
@@ -164,7 +176,7 @@ RSpec.describe Sandbox::Landlock do
       landlock.apply!
 
       expect(path_rules).to eq([
-        [32_770, 22], [32_770, 23], [65_536, 21], [32_754, 18], [16_386, 19], [32_754, 20]
+        [32_770, 22], [32_770, 23], [65_536, 20], [32_754, 18], [16_386, 19], [32_754, 20]
       ])
     end
 
@@ -321,6 +333,35 @@ RSpec.describe Sandbox::Landlock do
         expect { landlock.command(["true"], tmpdir.to_s) }.not_to output.to_stderr
       end
 
+      context "when preparing multiple sandboxed children" do
+        let(:second_landlock) { described_class.new(sandbox.profile) }
+
+        before do
+          allow(second_landlock).to receive(:open_path).and_return(18)
+          allow(second_landlock).to receive(:close_file_descriptor)
+          sandbox.deny_all_network
+          landlock.command(["true"], tmpdir.to_s)
+          second_landlock.command(["true"], tmpdir.to_s)
+        end
+
+        it "reserves the warning before either child applies the sandbox" do
+          expect { second_landlock.apply! }.not_to output.to_stderr
+        end
+
+        it "prints the warning in the first selected child" do
+          expect { landlock.apply! }
+            .to output(/Landlock ABI 10 or later is required to deny all network access; found ABI 7/).to_stderr
+        end
+
+        it "warns again after clearing the cache" do
+          Utils::Output.clear_cache
+          second_landlock.command(["true"], tmpdir.to_s)
+
+          expect { second_landlock.apply! }
+            .to output(/Landlock ABI 10 or later is required to deny all network access; found ABI 7/).to_stderr
+        end
+      end
+
       it "does not warn without network denial" do
         landlock.command(["true"], tmpdir.to_s)
 
@@ -382,6 +423,38 @@ RSpec.describe Sandbox::Landlock do
   end
 
   describe "#command" do
+    it "limits an existing dylib symlink's write access to its resolved file" do
+      directory = mktmpdir
+      (directory/"target").mkpath
+      (directory/"target/example.dylib").write "Mach-O"
+      (directory/"example.dylib").make_symlink(directory/"target/example.dylib")
+      steps = Homebrew::InstallSteps::DSL.build do
+        change_dylib_id (directory/"example.dylib").to_s, "@rpath/example.dylib", resolve_source: true
+      end
+      Homebrew::InstallSteps::Runner.new(context: Object.new).sandbox_write_paths(steps).each do |path|
+        sandbox.allow_write_path path
+      end
+
+      expect(landlock.writable_paths).to eq((directory/"target/example.dylib").to_s => :subpath)
+    end
+
+    it "leaves missing install step files available for extraction" do
+      directory = mktmpdir
+      steps = Homebrew::InstallSteps::DSL.build do
+        inreplace (directory/"share/example.desktop").to_s, "before", "after"
+        change_dylib_id (directory/"lib/example.dylib").to_s, "@rpath/example.dylib"
+      end
+      Homebrew::InstallSteps::Runner.new(context: Object.new).sandbox_write_paths(steps).each do |path|
+        sandbox.allow_write_path path
+      end
+      landlock.command(["true"], mktmpdir.to_s)
+      (directory/"share/example.desktop").write "before"
+      (directory/"lib/example.dylib").write "Mach-O"
+
+      expect(directory.glob("**/*").select(&:file?))
+        .to contain_exactly(directory/"share/example.desktop", directory/"lib/example.dylib")
+    end
+
     it "prepares missing writable directories and removes them after running" do
       writable_dir = mktmpdir/"created"
       sandbox.allow_write_path writable_dir
@@ -389,7 +462,7 @@ RSpec.describe Sandbox::Landlock do
       expect(landlock.command(["true"], mktmpdir.to_s)).to eq(["true"])
       expect(writable_dir).to be_a_directory
 
-      landlock.run { nil }
+      landlock.cleanup
 
       expect(writable_dir).not_to exist
     end
@@ -410,6 +483,29 @@ RSpec.describe Sandbox::Landlock do
       allow(landlock).to receive(:root_path).and_return(root)
 
       expect(landlock.readable_paths([denied_dir])).to eq([readable_dir.to_s])
+    end
+
+    it "allows an explicit input without reopening its denied parent" do
+      root = mktmpdir
+      home = root/"home"
+      home.mkpath
+      (home/".gitconfig").write("")
+      (home/".git-credentials").write("secret")
+      allow(landlock).to receive(:root_path).and_return(root)
+      sandbox.deny_read_path(home)
+      sandbox.allow_read(path: home/".gitconfig")
+
+      expect(landlock.readable_paths([home])).to eq([(home/".gitconfig").to_s])
+    end
+
+    it "skips an input that the sandboxed command has not created yet" do
+      root = mktmpdir
+      home = root/"home"
+      home.mkpath
+      allow(landlock).to receive(:root_path).and_return(root)
+      sandbox.allow_read(path: home/"repository.fossil")
+
+      expect(landlock.readable_paths([home])).to be_empty
     end
 
     it "does not allow a symlink alias into a denied hierarchy" do
