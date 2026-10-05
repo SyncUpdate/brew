@@ -277,7 +277,7 @@ RSpec.describe Cask::Upgrade, :cask do
           end
 
           described_class.upgrade_casks!(dry_run: true, quiet: true, summary_pinned:, args:)
-          expect(summary_pinned).to include("local-caffeine 1.2.2")
+          expect(summary_pinned).to include("local-caffeine 1.2.2 -> 1.2.3")
         ensure
           local_caffeine.unpin
         end
@@ -292,7 +292,7 @@ RSpec.describe Cask::Upgrade, :cask do
           expect do
             described_class.upgrade_casks!(local_caffeine, dry_run: true, args:)
           end.to not_to_output.to_stdout
-             .and output(/Not upgrading 1 pinned package:.*local-caffeine 1\.2\.2/m).to_stderr
+             .and output(/Not upgrading 1 pinned package:.*local-caffeine 1\.2\.2 -> 1\.2\.3/m).to_stderr
           expect(Homebrew).to be_failed
         ensure
           local_caffeine.unpin
@@ -923,6 +923,30 @@ RSpec.describe Cask::Upgrade, :cask do
       expect(bad_checksum_path).to be_a_directory
       expect(bad_checksum.installed_version).to eq "1.2.2"
       expect(bad_checksum.staged_path).not_to exist
+    end
+
+    it "removes the pre-staged download if the upgrade failed before staging" do
+      will_fail_if_upgraded = Cask::CaskLoader.load("will-fail-if-upgraded")
+      allow_any_instance_of(Cask::Installer).to receive(:start_upgrade).and_raise("quit failed")
+
+      expect do
+        described_class.upgrade_casks!(will_fail_if_upgraded, args:)
+      end.to output(/Error: will-fail-if-upgraded: quit failed/).to_stderr
+
+      expect(will_fail_if_upgraded.installed_version).to eq "1.2.2"
+      expect(HOMEBREW_TEMP_CASKROOM/"will-fail-if-upgraded").not_to exist
+    end
+
+    it "removes the pre-staged download if rolling back the upgrade also failed" do
+      will_fail_if_upgraded = Cask::CaskLoader.load("will-fail-if-upgraded")
+      allow_any_instance_of(Cask::Installer).to receive(:start_upgrade).and_raise("quit failed")
+      allow_any_instance_of(Cask::Installer).to receive(:purge_versioned_files).and_raise("rollback failed")
+
+      expect do
+        described_class.upgrade_casks!(will_fail_if_upgraded, args:)
+      end.to output(/rollback failed.*Error: will-fail-if-upgraded: quit failed/m).to_stderr
+
+      expect(HOMEBREW_TEMP_CASKROOM/"will-fail-if-upgraded").not_to exist
     end
 
     it "reports the original upgrade error, not a failure that occurs while rolling back" do

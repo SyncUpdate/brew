@@ -214,9 +214,13 @@ on_request: true)
       puts summary
       end_time = Time.now
       Homebrew.messages.package_installed(@cask.token, end_time - start_time)
-    rescue
-      restore_backup
-      raise
+    rescue => e
+      begin
+        restore_backup
+      ensure
+        purge_staged_download
+      end
+      raise e
     end
 
     sig { void }
@@ -384,7 +388,7 @@ on_request: true)
 
     sig { void }
     def check_requirements
-      if Homebrew::EnvConfig.no_sudo? && (artifact = @cask.artifacts.find(&:requires_sudo?))
+      if (artifact = @cask.artifacts.find(&:requires_sudo?)) && !SystemCommand.sudo_available?
         raise CaskError,
               "#{@cask}: The #{artifact.class.dsl_key} artifact requires sudo, but HOMEBREW_NO_SUDO is set."
       end
@@ -809,6 +813,13 @@ on_request: true)
         gain_permissions_remove(subdir)
       end
       rmdir_if_possible(bmp)
+    end
+
+    sig { void }
+    def purge_staged_download
+      downloader.purge_staged_from_download_queue(command: @command) if @defer_fetch
+    rescue => e
+      opoo "Removing the pre-staged download of #{@cask.token} also failed: #{e.message}"
     end
 
     sig { void }

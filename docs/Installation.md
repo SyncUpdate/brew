@@ -6,7 +6,7 @@ last_review_date: "2026-09-21"
 
 Instructions for a supported install of Homebrew are on the [homepage](https://brew.sh/).
 
-The script installs Homebrew to its default prefix (`/opt/homebrew` for Apple Silicon, `/usr/local` for macOS Intel and `/home/linuxbrew/.linuxbrew` for Linux) so that [you don’t need *sudo* after Homebrew's initial installation](FAQ.md#why-does-homebrew-say-sudo-is-bad) when you install formulae.
+The script installs Homebrew to its default prefix (`/opt/homebrew` for Apple Silicon and `/home/linuxbrew/.linuxbrew` for Linux) so that [you don’t need *sudo* after Homebrew's initial installation](FAQ.md#why-does-homebrew-say-sudo-is-bad) when you install formulae.
 Some casks and system services still require elevated privileges.
 Custom prefixes can also use bottles (binary packages); see their [Tier 1 requirements and stability caveat](Support-Tiers.md#custom-prefixes).
 It is a careful script; it can be run even if you have stuff installed in the preferred prefix already.
@@ -63,7 +63,8 @@ To disable Homebrew's sudo calls explicitly:
 export HOMEBREW_NO_SUDO=1
 ```
 
-When unset, Homebrew disables sudo only when it is missing, reports a recognised inability to elevate privileges or a non-interactive check explicitly denies access.
+When unset, Homebrew checks sudo access only when an operation needs it.
+Homebrew disables sudo only when it is missing, reports a recognised inability to elevate privileges or a non-interactive check explicitly denies access.
 Password requirements and inconclusive failures preserve normal behaviour.
 Optional filesystem operations try without sudo before retrying with it.
 When sudo is disabled, casks requiring it for installers, keyboard layouts or install steps are rejected before installation.

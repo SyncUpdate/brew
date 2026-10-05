@@ -40,6 +40,7 @@ require_relative "support/extend/cacheable"
 
 require_relative "../global"
 
+require "messages"
 require "system_command"
 require "sandbox"
 
@@ -70,6 +71,7 @@ TEST_DIRECTORIES = [
   HOMEBREW_LOGS,
   HOMEBREW_TEMP,
   HOMEBREW_TEMP_CELLAR,
+  HOMEBREW_TEMP_CASKROOM,
   HOMEBREW_ALIASES,
 ].freeze
 
@@ -232,6 +234,8 @@ RSpec.configure do |config|
   end
 
   config.before do
+    ENV["HOMEBREW_SUDO_CHECKED"] = "1"
+    allow(Homebrew).to receive(:messages).and_return(Messages.new)
     allow(Utils).to receive(:sleep)
     allow(DevelopmentTools).to receive_messages(needs_build_formulae?: false, needs_libc_formula?: false)
     # Worker boundaries are exercised separately in sandbox_operation_spec.rb.

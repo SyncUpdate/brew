@@ -156,10 +156,24 @@ RSpec.describe Sandbox do
       expect(JSON.parse(result.stdout)).to eq([Dir.home(ENV.fetch("USER")), ENV.fetch("SSH_AUTH_SOCK")])
     end
 
-    it "preserves the working directory for relative command arguments" do
+    test_each([0, 1]) do |status|
+      it "uses a private working directory without changing the parent's when exiting #{status}" do
+        directory = Dir.pwd
+        result = Thread.new do
+          sandbox.capture(RbConfig.ruby, must_succeed: false, args: ["-e", <<~RUBY])
+            puts Dir.pwd == File.realpath(ENV.fetch("TMPDIR"))
+            exit #{status}
+          RUBY
+        end.value
+
+        expect([result.stdout, result.exit_status, Dir.pwd]).to eq(["true\n", status, directory])
+      end
+    end
+
+    it "honours an explicit working directory for relative command arguments" do
       directory = mktmpdir
       (directory/"input").write("content")
-      result = directory.cd { sandbox.capture("cat", args: ["input"]) }
+      result = sandbox.capture("cat", args: ["input"], chdir: directory)
 
       expect(result.stdout).to eq("content")
     end
@@ -437,6 +451,21 @@ RSpec.describe Sandbox do
       expect(brew_file).to be_a_symlink
       expect(brew_file.readlink).to eq(original_target)
       expect(brew_file.dirname.stat.mode & 07777).to eq(original_directory_mode)
+    end
+  end
+
+  describe "#protect_homebrew_state" do
+    it "protects locks after granting access to var on macOS" do
+      allow(described_class).to receive(:full_write_isolation?).and_return(true)
+      sandbox.allow_read path: HOMEBREW_PREFIX/"var", type: :subpath
+      sandbox.allow_write_path HOMEBREW_PREFIX/"var"
+      sandbox.protect_homebrew_state
+
+      expect(sandbox.profile.rules.select { |rule| rule.filter&.path == HOMEBREW_LOCKS.realpath.to_s })
+        .to contain_exactly(
+          have_attributes(allow: false, operation: "file-write*"),
+          have_attributes(allow: false, operation: "file-read*"),
+        )
     end
   end
 
@@ -844,6 +873,56 @@ RSpec.describe Sandbox do
 
       expect(sandbox.profile.rules.map { |rule| rule.filter&.path })
         .to contain_exactly((home/".aws").to_s)
+    end
+
+    test_each(%w[.gitconfig .git-credentials .netrc]) do |path|
+      it "allows only the file targeted by a Git credential symlink at #{path}" do
+        (home/"Dropbox/dotfiles").mkpath
+        target = home/"Dropbox/dotfiles"/path
+        target.write("credential")
+        (home/path).make_symlink(target)
+
+        sandbox.deny_read_home(except: :git)
+
+        expect(sandbox.profile.rules.map do |rule|
+          [rule.allow, rule.operation, rule.filter&.path, rule.filter&.type]
+        end).to eq([
+          [false, "file-read*", (home/"Dropbox").realpath.to_s, :subpath],
+          [true, "file-read*", target.realpath.to_s, :literal],
+        ])
+      end
+    end
+
+    it "does not allow Git credential symlink targets without the Git exception" do
+      stub_const("HOMEBREW_CACHE", home/"cache")
+      (home/"Documents").mkpath
+      target = home/"Documents/gitconfig"
+      target.write("credential")
+      (home/".gitconfig").make_symlink(target)
+
+      sandbox.deny_read_home
+
+      expect(sandbox.profile.rules.map(&:allow)).to all(be(false))
+    end
+
+    test_each(%w[.ssh .gitconfig .config/gh]) do |path|
+      it "does not allow a Git credential symlink at #{path} to expose a directory" do
+        (home/"Documents").mkpath
+        (home/path).dirname.mkpath
+        (home/path).make_symlink(home/"Documents")
+
+        sandbox.deny_read_home(except: :git)
+
+        expect(sandbox.profile.rules.map(&:allow)).to all(be(false))
+      end
+    end
+
+    it "ignores broken Git credential symlinks" do
+      (home/".gitconfig").make_symlink(home/"missing")
+
+      sandbox.deny_read_home(except: :git)
+
+      expect(sandbox.profile.rules).to be_empty
     end
 
     it "rejects unknown home credential exceptions" do

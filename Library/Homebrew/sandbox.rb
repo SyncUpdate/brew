@@ -537,6 +537,12 @@ class Sandbox
       rescue Errno::ENOENT
         nil
       end
+      if except == :git
+        GIT_CREDENTIAL_PATHS.each do |path|
+          path = home/path
+          allow_read(path:) if path.symlink? && path.file?
+        end
+      end
       return
     end
 
@@ -618,13 +624,19 @@ class Sandbox
     allow_write_path formula.var
   end
 
-  # Deny writes to the download queue's temporary Cellar so sandboxed steps
-  # cannot plant kegs or markers that `pour` would move into the Cellar. Call
-  # this after `allow_write_cellar`: the temporary Cellar is inside the
+  # Protect locks and the temporary Cellar so sandboxed steps cannot
+  # disrupt other operations or plant kegs that `pour` moves into the Cellar.
+  # Call this after `allow_write_cellar`: both paths are inside the
   # granted `var` tree and macOS applies the last matching rule.
   sig { void }
-  def deny_write_temp_cellar
+  def protect_homebrew_state
     deny_write_path HOMEBREW_TEMP_CELLAR
+    # Landlock cannot exclude locks without preventing new directories under var.
+    return unless self.class.full_write_isolation?
+
+    deny_write_path HOMEBREW_LOCKS
+    # Advisory locks can also be acquired through read-only descriptors.
+    deny_read_path HOMEBREW_LOCKS
   end
 
   sig { void }
@@ -679,7 +691,7 @@ class Sandbox
 
       command = SystemCommand.new(sandbox_executable, args: sandbox_args, env:, input:, must_succeed:,
                                   print_stdout:, print_stderr:,
-                                  debug:, verbose:, secrets:, chdir:, timeout:)
+                                  debug:, verbose:, secrets:, chdir: chdir || tmpdir, timeout:)
       command.sandbox = self if apply_before_exec?
       File.open(__FILE__) do |inheritance|
         command.sandbox_inheritance = inheritance

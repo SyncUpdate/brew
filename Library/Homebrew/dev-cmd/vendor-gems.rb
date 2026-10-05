@@ -5,6 +5,7 @@ require "system_command"
 
 require "abstract_command"
 require "utils/git"
+require "utils/inreplace"
 require "fileutils"
 require "utils/github"
 
@@ -46,6 +47,8 @@ module Homebrew
 
           ohai "bundle install --standalone"
           run_bundle "install", "--standalone"
+          Utils::Inreplace.inreplace "vendor/bundle/bundler/setup.rb",
+                                     "/extensions/#{Gem::Platform.local}/", "/extensions/\#{Gem::Platform.local}/"
 
           require "bundler"
           definition = Bundler::Definition.build(Bundler.default_gemfile, Bundler.default_lockfile, false)
@@ -63,7 +66,7 @@ module Homebrew
           end
 
           if GitHub::Actions.env_set? && HOMEBREW_PREFIX.to_s == HOMEBREW_LINUX_DEFAULT_PREFIX &&
-             !Homebrew::EnvConfig.no_sudo?
+             SystemCommand.sudo_available?
             ohai "chmod +t -R /home/linuxbrew/"
             system "sudo", "chmod", "+t", "-R", "/home/linuxbrew/"
           end

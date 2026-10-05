@@ -52,6 +52,10 @@ module OS
             (global-name "com.apple.networkd")
             (global-name "com.apple.ocspd")
             (global-name "com.apple.trustd.agent")
+        <% if network_access_allowed %>
+            (global-name "com.apple.trustd")
+            (global-name "com.apple.TrustEvaluationAgent")
+        <% end %>
             (global-name "com.apple.SystemConfiguration.DNSConfiguration")
             (global-name "com.apple.SystemConfiguration.configd")
             )

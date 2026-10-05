@@ -22,7 +22,9 @@ RSpec.describe Homebrew::DevCmd::Contributions do
       "--maintainer-report-csv=2026-2",
       "current directory",
       "brew-contributions-FROM-to-TO-USER.csv",
-      "Only Maintainers listed at the end of that quarter are included",
+      "--from and --to",
+      "Only Maintainers listed at the end of that period are included",
+      "role recommendations use up to four full quarters of reports",
       "Completed-period GitHub searches are cached in Homebrew's cache",
       "Repository-scoped follow-up searches ensure role activity checks remain accurate",
       "YEAR-1 is December of the previous year through February",
@@ -35,11 +37,15 @@ RSpec.describe Homebrew::DevCmd::Contributions do
   it "uses the first README mention for Maintainer tenure" do
     command = described_class.new(["--maintainer-report-csv=2026-1"])
     repository_path = Pathname("/Homebrew/brew")
+    git_log_format = [
+      Homebrew::DevCmd::Contributions::GIT_LOG_COMMIT_HASH_FORMAT,
+      Homebrew::DevCmd::Contributions::GIT_LOG_COMMITTER_DATE_SHORT_FORMAT,
+    ].join(Homebrew::DevCmd::Contributions::GIT_LOG_FIELD_SEPARATOR)
     allow(Utils).to receive(:safe_popen_read).and_return("")
     allow(Utils).to receive(:safe_popen_read)
       .with(Utils::Git.git, "-C", repository_path, "log", "quarter-end-ref", "--fixed-strings",
-            "-SAlice", "--format=%H%x1f%cs", "--", "README.md")
-      .and_return("first-mention\x1f2020-01-02\n")
+            "-SAlice", "--format=#{git_log_format}", "--", "README.md")
+      .and_return("first-mention#{Homebrew::DevCmd::Contributions::GIT_LOG_FIELD_SEPARATOR}2020-01-02\n")
     allow(Utils).to receive(:safe_popen_read)
       .with(Utils::Git.git, "-C", repository_path, "show", "first-mention:README.md")
       .and_return("Homebrew was created by Alice.\n")
@@ -157,7 +163,7 @@ RSpec.describe Homebrew::DevCmd::Contributions do
     expect { command.maintainer_report_users(repository_refs, "2025-09-01") }
       .to raise_error(SystemExit)
       .and output(<<~EOS).to_stderr
-        Error: Not listed as Maintainers at the end of the reporting quarter: carol and dave.
+        Error: Not listed as Maintainers at the end of the reporting period: carol and dave.
       EOS
   end
 
@@ -256,12 +262,12 @@ RSpec.describe Homebrew::DevCmd::Contributions do
 
     reports = Dir.chdir(mktmpdir) do
       {
-        "2025-09-01-to-2025-12-01" => [true, true],
-        "2025-06-01-to-2025-09-01" => [true, false],
-        "2025-03-01-to-2025-06-01" => [false, false],
-      }.each do |dates, activity|
+        "2025-09-01-to-2025-12-01" => [25, 25],
+        "2025-06-01-to-2025-09-01" => [50, 0],
+        "2025-03-01-to-2025-06-01" => [0, 0],
+      }.each do |dates, totals|
         Pathname("brew-contributions-#{dates}.csv")
-          .write("username,maintainer met,lead met\nAlice,#{activity.join(",")}\n")
+          .write("username,brew total,core total,cask total\nAlice,#{totals.join(",")},0\n")
       end
 
       command.previous_maintainer_reports("2025-12-01")
@@ -282,6 +288,127 @@ RSpec.describe Homebrew::DevCmd::Contributions do
     end.to output(<<~EOS).to_stderr
       Warning: Could not find brew-contributions-2025-09-01-to-2025-12-01.csv; omitting the potential new role column.
     EOS
+  end
+
+  it "combines monthly counts into quarterly activity alongside legacy reports" do
+    command = described_class.new(["--maintainer-report-csv", "--from=2026-12-01", "--to=2027-01-01"])
+    reports = Dir.chdir(mktmpdir) do
+      [9, 10, 11].each do |month|
+        from = Date.new(2026, month, 1)
+        Pathname("brew-contributions-#{from}-to-#{from.next_month}.csv")
+          .write("username,brew total,core total,cask total,maintainer met,lead met\nAlice,10,10,0,false,false\n")
+      end
+      Pathname("brew-contributions-2026-06-01-to-2026-09-01.csv")
+        .write("username,brew total,core total,cask total\nAlice,50,0,0\n")
+      Pathname("brew-contributions-2026-03-01-to-2026-06-01.csv")
+        .write("username,brew total,core total,cask total\nAlice,0,0,0\n")
+      command.previous_maintainer_reports("2026-12-01")
+    end
+
+    expect(reports).to eq([
+      { "alice" => [true, true] }, { "alice" => [true, false] }, { "alice" => [false, false] }
+    ])
+  end
+
+  context "with monthly reports" do
+    sig { returns(Homebrew::DevCmd::Contributions) }
+    let(:command) do
+      described_class.new(["--maintainer-report-csv", "--from=2026-11-01", "--to=2026-12-01"])
+    end
+
+    before do
+      allow(Utils::GemSetup).to receive(:install_bundler_gems!)
+      allow(command).to receive_messages(
+        prepare_contribution_repositories: {},
+        maintainer_report_users:           [
+          { "alice" => "Alice" }, { "alice" => true }, { "alice" => "2020-01-01" }
+        ],
+        scan_contributions:                {
+          "alice" => Homebrew::DevCmd::Contributions::PRIMARY_REPOS.to_h do |repository|
+            count = (repository == "Homebrew/homebrew-cask") ? 0 : 5
+            [repository, { merged_pr_author: count, merged_pr_merger: 0, merged_pr: count,
+                           approved_pr_review: 0, coauthor: 0 }]
+          end,
+        },
+      )
+      allow(command).to receive(:previous_maintainer_reports)
+        .with("2026-09-01").and_return([{ "alice" => [false, false] }])
+    end
+
+    it "writes one month of counts but assesses a complete quarter" do
+      report = Dir.chdir(mktmpdir) do
+        [9, 10].each do |month|
+          from = Date.new(2026, month, 1)
+          Pathname("brew-contributions-#{from}-to-#{from.next_month}.csv")
+            .write("username,brew total,core total,cask total\nAlice,10,10,0\n")
+        end
+        command.run
+        CSV.read("brew-contributions-2026-11-01-to-2026-12-01.csv", headers: true).first
+      end
+
+      expect(report&.values_at("total", "maintainer met", "lead met", "potential new role"))
+        .to eq(["10", "true", "true", "Lead Maintainer"])
+    end
+
+    it "omits recommendations when a month of the assessment quarter is missing" do
+      report = Dir.chdir(mktmpdir) do
+        command.run
+        CSV.read("brew-contributions-2026-11-01-to-2026-12-01.csv", headers: true)
+      end
+
+      expect(report.headers).not_to include("potential new role")
+    end
+
+    it "uses the latest completed quarter during an incomplete quarter" do
+      allow(command).to receive(:args).and_return(described_class.new(
+        ["--maintainer-report-csv", "--from=2026-09-01", "--to=2026-10-01"],
+      ).args)
+      allow(command).to receive(:previous_maintainer_reports)
+        .with("2026-06-01").and_return([{ "alice" => [false, false] }])
+      report = Dir.chdir(mktmpdir) do
+        Pathname("brew-contributions-2026-06-01-to-2026-09-01.csv")
+          .write("username,brew total,core total,cask total\nalice,25,25,0\n")
+        command.run
+        CSV.read("brew-contributions-2026-09-01-to-2026-10-01.csv", headers: true).first
+      end
+
+      expect(report&.values_at("total", "maintainer met", "lead met", "potential new role"))
+        .to eq(["10", "true", "true", "Lead Maintainer"])
+    end
+
+    it "combines weekly reports without counting overlapping monthly reports twice" do
+      allow(command).to receive(:args).and_return(described_class.new(
+        ["--maintainer-report-csv", "--from=2026-11-24", "--to=2026-12-01"],
+      ).args)
+      report = Dir.chdir(mktmpdir) do
+        from = Date.new(2026, 9, 1)
+        while from < Date.new(2026, 11, 24)
+          Pathname("brew-contributions-#{from}-to-#{from + 7}.csv")
+            .write("username,brew total,core total,cask total\nalice,1,1,0\n")
+          from += 7
+        end
+        Pathname("brew-contributions-2026-11-01-to-2026-12-01.csv")
+          .write("username,brew total,core total,cask total\nalice,50,50,0\n")
+        command.run
+        CSV.read("brew-contributions-2026-11-24-to-2026-12-01.csv", headers: true).first
+      end
+
+      expect(report&.values_at("total", "maintainer met", "lead met", "potential new role"))
+        .to eq(%w[10 false false None])
+    end
+
+    it "can assess monthly requirements independently of the reporting dates" do
+      stub_const("Homebrew::DevCmd::Contributions::ACTIVITY_PERIOD_MONTHS", 1)
+      allow(command).to receive(:previous_maintainer_reports)
+        .with("2026-11-01").and_return([{ "alice" => [false, false] }])
+      report = Dir.chdir(mktmpdir) do
+        command.run
+        CSV.read("brew-contributions-2026-11-01-to-2026-12-01.csv", headers: true).first
+      end
+
+      expect(report&.values_at("total", "maintainer met", "lead met", "potential new role"))
+        .to eq(%w[10 false false None])
+    end
   end
 
   it "applies multi-quarter activity requirements to potential roles" do
@@ -565,13 +692,15 @@ RSpec.describe Homebrew::DevCmd::Contributions do
     command = described_class.new(["--user=alice", "--repositories=Homebrew/homebrew-core"])
     repository = "Homebrew/homebrew-core"
     repository_refs = { repository => [Pathname("/Homebrew/homebrew-core"), "origin/HEAD"] }
-    separator = "\x1f"
-    record_separator = "\x1e"
+    separator = Homebrew::DevCmd::Contributions::GIT_LOG_FIELD_SEPARATOR
+    record_separator = Homebrew::DevCmd::Contributions::GIT_LOG_RECORD_SEPARATOR
     merge = [
-      "merge", "base pull-request", "Alice", "alice@example.com",
+      "merge", "base pull-request", "Alice", "alice@example.com", "Alice", "alice@example.com",
       "Merge pull request #123 from alice/topic"
     ].join(separator)
-    pull_request = ["pull-request", "base", "Alice", "alice@example.com", "Change something"].join(separator)
+    pull_request = [
+      "pull-request", "base", "Alice", "alice@example.com", "Alice", "alice@example.com", "Change something"
+    ].join(separator)
     git_log = "#{merge}#{record_separator}#{pull_request}#{record_separator}"
     allow(Utils).to receive(:safe_popen_read).and_return(git_log)
     allow(GitHub).to receive(:search_approved_pull_requests_in_user_or_organisation).and_return([])
@@ -599,13 +728,16 @@ RSpec.describe Homebrew::DevCmd::Contributions do
     command = described_class.new(["--user=alice", "--repositories=Homebrew/homebrew-core"])
     repository = "Homebrew/homebrew-core"
     repository_refs = { repository => [Pathname("/Homebrew/homebrew-core"), "origin/HEAD"] }
-    separator = "\x1f"
-    record_separator = "\x1e"
+    separator = Homebrew::DevCmd::Contributions::GIT_LOG_FIELD_SEPARATOR
+    record_separator = Homebrew::DevCmd::Contributions::GIT_LOG_RECORD_SEPARATOR
     merge = [
-      "merge", "base pull-request", "Alice", "alice@example.com",
+      "merge", "base pull-request", "Alice", "alice@example.com", "Alice", "alice@example.com",
       "Merge pull request #123 from Homebrew/topic"
     ].join(separator)
-    pull_request = ["pull-request", "base", "BrewTestBot", "test-bot@example.com", "Change something"].join(separator)
+    pull_request = [
+      "pull-request", "base", "BrewTestBot", "test-bot@example.com", "BrewTestBot", "test-bot@example.com",
+      "Change something"
+    ].join(separator)
     git_log = "#{merge}#{record_separator}#{pull_request}#{record_separator}"
     allow(Utils).to receive(:safe_popen_read).and_return(git_log)
     allow(GitHub).to receive(:search_approved_pull_requests_in_user_or_organisation).and_return([])
@@ -631,25 +763,25 @@ RSpec.describe Homebrew::DevCmd::Contributions do
 
   it "attributes merged PRs once and learns non-Maintainer Git identities" do
     command = described_class.new(["--maintainer-report-csv=2026-1"])
-    separator = "\x1f"
-    record_separator = "\x1e"
+    separator = Homebrew::DevCmd::Contributions::GIT_LOG_FIELD_SEPARATOR
+    record_separator = Homebrew::DevCmd::Contributions::GIT_LOG_RECORD_SEPARATOR
     merge = [
-      "merge", "base pull-request", "Alice Example", "alice@example.com",
+      "merge", "base pull-request", "Alice Example", "alice@example.com", "Alice Example", "alice@example.com",
       "Merge pull request #123 from Homebrew/topic"
     ].join(separator)
     pull_request = [
-      "pull-request", "base", "Bob Example", "bob@example.com",
+      "pull-request", "base", "Bob Example", "bob@example.com", "Bob Example", "bob@example.com",
       "Change something\n\nCo-authored-by: Alice Example <123+alice@users.noreply.github.com>"
     ].join(separator)
     coauthored = [
-      "coauthored", "base", "Someone Else", "someone@example.com",
+      "coauthored", "base", "Someone Else", "someone@example.com", "Someone Else", "someone@example.com",
       "Change another thing\n\nCo-authored-by: Bob Example <bob@example.com>"
     ].join(separator)
 
     counts = command.parse_git_log(
       "#{merge}#{record_separator}#{pull_request}#{record_separator}#{coauthored}#{record_separator}",
       { "alice" => "Alice Example", "bob" => "bob" },
-      github_identities: { "bob" => ["bob", "Bob Example"] },
+      github_identities: { "alice" => ["alice@example.com"], "bob" => ["bob", "Bob Example", "bob@example.com"] },
     )
 
     expect(counts).to eq(
@@ -662,14 +794,38 @@ RSpec.describe Homebrew::DevCmd::Contributions do
     )
   end
 
+  it "attributes amended committers as coauthors" do
+    command = described_class.new(["--maintainer-report-csv=2026-1"])
+    separator = Homebrew::DevCmd::Contributions::GIT_LOG_FIELD_SEPARATOR
+    record_separator = Homebrew::DevCmd::Contributions::GIT_LOG_RECORD_SEPARATOR
+    base = ["base", "", "Maintainer", "maintainer@example.com", "Maintainer", "maintainer@example.com", "Base"]
+           .join(separator)
+    amended = [
+      "amended", "base", "Alice Example", "alice@example.com", "John", "bob@example.com", "Change something"
+    ].join(separator)
+    merge = [
+      "merge", "base amended", "Alice Example", "alice@example.com", "Joe", "alice@example.com",
+      "Merge pull request #123 from Homebrew/topic"
+    ].join(separator)
+
+    counts = command.parse_git_log(
+      "#{merge}#{record_separator}#{amended}#{record_separator}#{base}#{record_separator}",
+      { "alice" => "Alice Example", "bob" => "Bob Example" },
+      github_identities: { "alice" => ["alice@example.com"], "bob" => ["bob@example.com"] },
+    )
+
+    expect(counts.fetch("bob").fetch(:coauthor)).to eq(1)
+  end
+
   it "matches commits under a GitHub profile's name and email for a username" do
     command = described_class.new(["--user=alice", "--repositories=Homebrew/homebrew-core"])
     repository = "Homebrew/homebrew-core"
     commit = [
-      "commit", "base", "Someone Else", "someone@example.com",
+      "commit", "base", "Someone Else", "someone@example.com", "Someone Else", "someone@example.com",
       "Change something\n\nCo-authored-by: Alice Example <a.example@example.com>"
-    ].join("\x1f")
-    allow(Utils).to receive(:safe_popen_read).and_return("#{commit}\x1e")
+    ].join(Homebrew::DevCmd::Contributions::GIT_LOG_FIELD_SEPARATOR)
+    allow(Utils).to receive(:safe_popen_read)
+      .and_return("#{commit}#{Homebrew::DevCmd::Contributions::GIT_LOG_RECORD_SEPARATOR}")
     allow(GitHub::API).to receive(:open_rest)
       .with(GitHub.url_to("users", "alice"))
       .and_return({ "name" => "Alice Example", "email" => "a.example@example.com" })
@@ -692,16 +848,16 @@ RSpec.describe Homebrew::DevCmd::Contributions do
   it "skips GitHub profile names shared by multiple requested users" do
     command = described_class.new(["--maintainer-report-csv=2026-1"])
     ambiguous = [
-      "ambiguous", "base", "Someone Else", "someone@example.com",
+      "ambiguous", "base", "Someone Else", "someone@example.com", "Someone Else", "someone@example.com",
       "Change something\n\nCo-authored-by: Alex <unknown@example.com>"
-    ].join("\x1f")
+    ].join(Homebrew::DevCmd::Contributions::GIT_LOG_FIELD_SEPARATOR)
     by_email = [
-      "by-email", "base", "Someone Else", "someone@example.com",
+      "by-email", "base", "Someone Else", "someone@example.com", "Someone Else", "someone@example.com",
       "Change another thing\n\nCo-authored-by: Alex <bob@example.com>"
-    ].join("\x1f")
+    ].join(Homebrew::DevCmd::Contributions::GIT_LOG_FIELD_SEPARATOR)
 
     counts = command.parse_git_log(
-      "#{ambiguous}\x1e#{by_email}\x1e",
+      "#{ambiguous}#{Homebrew::DevCmd::Contributions::GIT_LOG_RECORD_SEPARATOR}#{by_email}#{Homebrew::DevCmd::Contributions::GIT_LOG_RECORD_SEPARATOR}",
       { "alice" => "alice", "bob" => "bob" },
       github_identities: { "alice" => %w[alice Alex alice@example.com], "bob" => %w[bob Alex bob@example.com] },
     )
@@ -712,12 +868,12 @@ RSpec.describe Homebrew::DevCmd::Contributions do
   it "prefers an exact email match over a GitHub profile name" do
     command = described_class.new(["--maintainer-report-csv=2026-1"])
     commit = [
-      "commit", "base", "Someone Else", "someone@example.com",
+      "commit", "base", "Someone Else", "someone@example.com", "Someone Else", "someone@example.com",
       "Change something\n\nCo-authored-by: Alex <bob@example.com>"
-    ].join("\x1f")
+    ].join(Homebrew::DevCmd::Contributions::GIT_LOG_FIELD_SEPARATOR)
 
     counts = command.parse_git_log(
-      "#{commit}\x1e",
+      "#{commit}#{Homebrew::DevCmd::Contributions::GIT_LOG_RECORD_SEPARATOR}",
       { "alice" => "alice", "bob" => "bob" },
       github_identities: { "alice" => %w[alice Alex alice@example.com], "bob" => %w[bob bob@example.com] },
     )
@@ -728,15 +884,18 @@ RSpec.describe Homebrew::DevCmd::Contributions do
   it "matches GitHub no-reply usernames but not other emails' local parts" do
     command = described_class.new(["--maintainer-report-csv=2026-1"])
     unrelated = [
-      "unrelated", "base", "Someone Else", "someone@example.com",
+      "unrelated", "base", "Someone Else", "someone@example.com", "Someone Else", "someone@example.com",
       "Change something\n\nCo-authored-by: Other Alice <alice@unrelated.example.com>"
-    ].join("\x1f")
+    ].join(Homebrew::DevCmd::Contributions::GIT_LOG_FIELD_SEPARATOR)
     noreply = [
-      "noreply", "base", "Someone Else", "someone@example.com",
+      "noreply", "base", "Someone Else", "someone@example.com", "Someone Else", "someone@example.com",
       "Change another thing\n\nCo-authored-by: A. Example <123+alice@users.noreply.github.com>"
-    ].join("\x1f")
+    ].join(Homebrew::DevCmd::Contributions::GIT_LOG_FIELD_SEPARATOR)
 
-    counts = command.parse_git_log("#{unrelated}\x1e#{noreply}\x1e", { "alice" => "Alice Example" })
+    counts = command.parse_git_log(
+      "#{unrelated}#{Homebrew::DevCmd::Contributions::GIT_LOG_RECORD_SEPARATOR}#{noreply}#{Homebrew::DevCmd::Contributions::GIT_LOG_RECORD_SEPARATOR}",
+      { "alice" => "Alice Example" },
+    )
 
     expect(counts.fetch("alice").fetch(:coauthor)).to eq(1)
   end
