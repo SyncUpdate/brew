@@ -33,6 +33,49 @@ RSpec.describe Formula do
     end
   end
 
+  describe "#enqueue_resources_and_patches" do
+    let(:f) do
+      formula do
+        T.bind(self, T.class_of(Formula))
+        url "https://brew.sh/foo-1.0.tar.gz"
+
+        resource "build" do
+          url "https://brew.sh/build-1.0.tar.gz"
+        end
+
+        resource "fixture", :test do
+          url "https://brew.sh/fixture-1.0.tar.gz"
+
+          patch do
+            url "https://brew.sh/fixture.patch"
+          end
+        end
+
+        patch do
+          url "https://brew.sh/build.patch"
+        end
+      end
+    end
+    let(:download_queue) { instance_double(Homebrew::DownloadQueue) }
+    let(:downloads) { [] }
+
+    before do
+      allow(download_queue).to receive(:enqueue) { |download| downloads << download }
+    end
+
+    it "excludes test-only resources from source downloads" do
+      f.enqueue_resources_and_patches(download_queue:)
+
+      expect(downloads).to eq([f.resource("build"), f.patchlist.fetch(0).resource])
+    end
+
+    it "downloads only test resources and their patches for tests" do
+      f.enqueue_resources_and_patches(download_queue:, test: true)
+
+      expect(downloads).to eq([f.resource("fixture"), f.resource("fixture").patches.fetch(0).resource])
+    end
+  end
+
   describe "#run_test" do
     let(:f) { Testball.new }
     let(:testpath) { mktmpdir }
@@ -3682,7 +3725,7 @@ RSpec.describe Formula do
     let(:f) do
       formula do
         T.bind(self, T.class_of(Formula))
-        url "foo-1.0"
+        url "https://brew.sh/foo-1.0.tar.gz"
       end
     end
 
@@ -3719,14 +3762,48 @@ RSpec.describe Formula do
           "-X 'main.builtBy=#{built_by}'"
       end
 
-      before { allow(f).to receive(:time).and_return(Time.parse(date)) }
+      before do
+        allow(f).to receive_messages(time: Time.parse(date), cached_download: Pathname("/tmp/foo-1.0.tar.gz"))
+        allow(Utils::Git).to receive(:get_tar_commit_id).and_return(nil)
+      end
+
+      context "when url has a git revision" do
+        let(:commit) { "f5e00e485e7aa4c5baa20355b27e3b84a6912790" }
+        let(:f) do
+          commit_ = commit
+          formula do
+            T.bind(self, T.class_of(Formula))
+            url "https://brew.sh/foo.git", tag: "1.0", revision: commit_.to_s
+          end
+        end
+
+        before do
+          allow(f).to receive(:cached_download).and_return(Pathname("/tmp/foo--git"))
+        end
+
+        it "uses it for main.commit" do
+          expect(std_go_args).to include("-ldflags=#{expected_ldflags}")
+        end
+      end
+
+      context "when url is tarball with extractable commit" do
+        let(:commit) { "f5e00e485e7aa4c5baa20355b27e3b84a6912790" }
+
+        before do
+          allow(Utils::Git).to receive(:get_tar_commit_id).with(Pathname("/tmp/foo-1.0.tar.gz")).and_return(commit)
+        end
+
+        it "uses it for main.commit" do
+          expect(std_go_args).to include("-ldflags=#{expected_ldflags}")
+        end
+      end
 
       context "when in a git repository" do
         let(:buildpath) { mktmpdir }
         let(:commit) { Utils.popen_read("git", "-C", buildpath, "rev-parse", "HEAD").chomp }
 
         before do
-          allow(f).to receive(:buildpath).and_return(buildpath)
+          allow(f).to receive_messages(buildpath: buildpath, cached_download: Pathname("/tmp/foo--git"))
 
           buildpath.cd do
             FileUtils.touch "LICENSE"

@@ -69,10 +69,11 @@ module OS
           end
         end
 
+        linkage_files
+      ensure
         # Every saved file's signature is now broken, so re-sign each exactly
         # once, parallelised across files.
-        codesign_patched_binaries(linkage_files.map { path/it })
-        linkage_files
+        codesign_patched_binaries(linkage_files.map { path/it }) if linkage_files
       end
 
       sig { void }
@@ -124,11 +125,11 @@ module OS
           end
         end
 
+        super
+      ensure
         # Every saved file's signature is now broken, so re-sign each exactly
         # once, parallelised across files.
-        codesign_patched_binaries(fixed_files)
-
-        super
+        codesign_patched_binaries(fixed_files) if fixed_files
       end
 
       sig { params(file: MachOShim, target: String).returns(String) }
@@ -284,13 +285,6 @@ module OS
         # Don't recurse into symlinks; the man page says this is the default, but
         # it's wrong. -O is a BSD-grep-only option.
         "-lrO"
-      end
-
-      sig { returns([String, String]) }
-      def egrep_args
-        grep_bin = "egrep"
-        grep_args = "--files-with-matches"
-        [grep_bin, grep_args]
       end
 
       private

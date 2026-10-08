@@ -15,12 +15,13 @@ module OS
       # Bump these when a new version is available from the App Store and our
       # CI systems have been updated.
       # This may be a beta version for a beta macOS.
-      sig { params(macos: MacOSVersion).returns(String) }
-      def self.latest_version(macos: MacOS.version)
+      # Pass both `macos` and `arm64` when querying a different system.
+      sig { params(macos: MacOSVersion, arm64: T::Boolean).returns(String) }
+      def self.latest_version(macos: MacOS.version, arm64: ::Hardware::CPU.physical_cpu_arm64?)
         macos = macos.strip_patch
         case macos
         when "27" then "27.0"
-        when "26" then "26.6"
+        when "26" then arm64 ? "27.0" : "26.6"
         when "15" then "26.3"
         when "14" then "16.2"
         when "13" then "15.2"
@@ -169,9 +170,6 @@ module OS
       # @api internal
       sig { returns(::Version) }
       def self.version
-        # may return a version string
-        # that is guessed based on the compiler, so do not
-        # use it in order to check if Xcode is installed.
         if @version ||= T.let(detect_version, T.nilable(String))
           ::Version.new @version
         else
@@ -183,8 +181,6 @@ module OS
       def self.detect_version
         # This is a separate function as you can't cache the value out of a block
         # if return is used in the middle, which we do many times in here.
-        return if !MacOS::Xcode.installed? && !MacOS::CLT.installed?
-
         if (xcode_prefix = prefix)
           # Fast path that will probably almost always work unless `xcode-select -p` is misconfigured
           version_plist = xcode_prefix.parent/"version.plist"
@@ -209,31 +205,7 @@ module OS
           end
         end
 
-        detect_version_from_clang_version
-      end
-
-      sig { params(version: ::Version).returns(String) }
-      def self.detect_version_from_clang_version(version = ::DevelopmentTools.clang_version)
-        return "dunno" if version.null?
-
-        # This logic provides a fake Xcode version based on the
-        # installed CLT version. This is useful as they are packaged
-        # simultaneously so workarounds need to apply to both based on their
-        # comparable version.
-        case version
-        when "11.0.0" then "11.3.1"
-        when "11.0.3" then "11.7"
-        when "12.0.0" then "12.4"
-        when "12.0.5" then "12.5.1"
-        when "13.0.0" then "13.2.1"
-        when "13.1.6" then "13.4.1"
-        when "14.0.0" then "14.2"
-        when "14.0.3" then "14.3.1"
-        when "15.0.0" then "15.4"
-        when "16.0.0" then "16.2"
-        when "17.0.0" then "26.3"
-        else               "27.0"
-        end
+        nil
       end
 
       sig { returns(T::Boolean) }
@@ -252,7 +224,7 @@ module OS
       # Returns true even if outdated tools are installed.
       sig { returns(T::Boolean) }
       def self.installed?
-        !version.null?
+        File.exist?("#{PKG_PATH}/usr/bin/clang")
       end
 
       sig { returns(CLTSDKLocator) }
@@ -294,7 +266,7 @@ module OS
 
           Alternatively, manually download them from:
             #{Formatter.url(MacOS::Xcode::APPLE_DEVELOPER_DOWNLOAD_URL)}.
-          You should download the Command Line Tools for Xcode #{MacOS::Xcode.latest_version}.
+          You should download the Command Line Tools for Xcode #{latest_version}.
         EOS
       end
 
@@ -323,6 +295,18 @@ module OS
 
       # Bump these when the new version is distributed through Software Update
       # and our CI systems have been updated.
+      #
+      # CLT releases can differ from Xcode, so override mismatches and
+      # share Xcode's latest version otherwise.
+      sig { returns(String) }
+      def self.latest_version
+        case MacOS.version
+        when "13" then "15.1"
+        when "11" then "13.2"
+        else           MacOS::Xcode.latest_version
+        end
+      end
+
       sig { returns(String) }
       def self.latest_clang_version
         case MacOS.version
@@ -355,7 +339,7 @@ module OS
 
       sig { returns(T::Boolean) }
       def self.below_minimum_version?
-        return false unless installed?
+        return false if version.null?
 
         version < minimum_version
       end
@@ -374,17 +358,10 @@ module OS
         version_output[/clang-(\d+(?:\.\d+)+)/, 1]
       end
 
-      sig { returns(T.nilable(String)) }
-      def self.detect_version_from_clang_version
-        clang_version = detect_clang_version&.sub(/\A(\d+)(\d)(\d)\..*/, "\\1.\\2.\\3")
-        return if clang_version.nil?
-
-        MacOS::Xcode.detect_version_from_clang_version(Version.new(clang_version))
-      end
-
       # Version string (a pretty long one) of the CLT package.
       # Note that the different ways of installing the CLTs lead to different
-      # version numbers.
+      # version numbers. Installations without a package receipt have an
+      # unknown version (`Version::NULL`).
       #
       # @api internal
       sig { returns(::Version) }
@@ -398,13 +375,9 @@ module OS
 
       sig { returns(T.nilable(String)) }
       def self.detect_version
-        version = T.let(nil, T.nilable(String))
-        if File.exist?("#{PKG_PATH}/usr/bin/clang")
-          version = MacOS.pkgutil_info(EXECUTABLE_PKG_ID)[/version: (.+)$/, 1]
-          return version if version
-        end
+        return unless installed?
 
-        detect_version_from_clang_version
+        MacOS.pkgutil_info(EXECUTABLE_PKG_ID)[/version: (.+)$/, 1]
       end
     end
   end

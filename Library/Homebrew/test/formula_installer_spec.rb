@@ -207,6 +207,26 @@ RSpec.describe FormulaInstaller do
 
       installer.run_fetch
     end
+
+    it "opens a shell with the sandbox home after fetching in interactive mode" do
+      shell = mktmpdir/"shell"
+      shell.write <<~SH
+        #!/bin/sh
+        printf '%s %s' "$(cat fetched)" "$HOME" > shell.out
+      SH
+      shell.chmod 0755
+      ENV["SHELL"] = shell.to_s
+      ENV["HOMEBREW_NO_INSTALL_FROM_API"] = "1"
+      installer = described_class.new(TestballFetch.new, interactive: true)
+      staging_path = mktmpdir
+      installer.fetch
+
+      installer.run_fetch(staging_path:)
+
+      shell_out = staging_path.glob("**/shell.out").fetch(0)
+      home = shell_out.dirname/".brew_home"
+      expect(shell_out.read).to eq("#{home} #{home}")
+    end
   end
 
   describe "#post_install" do
@@ -749,15 +769,19 @@ RSpec.describe FormulaInstaller do
   end
 
   describe "#install_dependency" do
-    it "reports an outdated dependency as upgrading" do
-      dependency_formula = formula "outdated-dependency" do
+    let(:dependency_formula) do
+      formula "outdated-dependency" do
         T.bind(self, T.class_of(Formula))
         url "foo-1.0"
       end
-      dependency = instance_double(Dependency, to_formula: dependency_formula, name: dependency_formula.name,
-                                               options: Options.new)
-      installer = described_class.new(Testball.new)
+    end
+    let(:dependency) do
+      instance_double(Dependency, to_formula: dependency_formula, name: dependency_formula.name,
+                                  options: Options.new)
+    end
+    let(:installer) { described_class.new(Testball.new) }
 
+    before do
       allow(dependency_formula).to receive_messages(
         linked_keg:                Pathname("/tmp/nonexistent-linked-keg"),
         latest_version_installed?: false,
@@ -765,8 +789,6 @@ RSpec.describe FormulaInstaller do
         any_version_installed?:    true,
         outdated?:                 true,
       )
-      expect(installer).to receive(:oh1)
-        .with("Upgrading testball dependency: #{Formatter.identifier(dependency_formula.name)}")
       allow(described_class).to receive(:new).and_wrap_original do |original, formula, **kwargs|
         instance = original.call(formula, **kwargs)
         next instance if formula != dependency_formula
@@ -774,6 +796,41 @@ RSpec.describe FormulaInstaller do
         allow(instance).to receive_messages(prelude: true, install: true, finish: true)
         instance
       end
+    end
+
+    it "reports an outdated dependency as upgrading" do
+      expect(installer).to receive(:oh1)
+        .with("Upgrading testball dependency: #{Formatter.identifier(dependency_formula.name)} (1.0)")
+
+      installer.install_dependency(dependency)
+    end
+
+    it "reports the version an outdated dependency is upgraded from" do
+      old_keg = HOMEBREW_CELLAR/"outdated-dependency/0.9"
+      old_keg.mkpath
+      allow(dependency_formula).to receive_messages(optlinked?: true, opt_prefix: old_keg)
+
+      expect(installer).to receive(:oh1)
+        .with("Upgrading testball dependency: #{Formatter.identifier(dependency_formula.name)} (0.9 -> 1.0)")
+
+      installer.install_dependency(dependency)
+    end
+
+    it "reads the old version before moving the installed latest keg aside" do
+      dependency_formula.prefix.mkpath
+      dependency_formula.opt_prefix.parent.mkpath
+      dependency_formula.opt_prefix.make_symlink(dependency_formula.prefix)
+      allow(dependency_formula).to receive(:latest_version_installed?).and_return(true)
+      allow(installer).to receive(:oh1)
+
+      expect { installer.install_dependency(dependency) }.not_to raise_error
+    end
+
+    it "reports the version a new dependency is installed at" do
+      allow(dependency_formula).to receive(:outdated?).and_return(false)
+
+      expect(installer).to receive(:oh1)
+        .with("Installing testball dependency: #{Formatter.identifier(dependency_formula.name)} (1.0)")
 
       installer.install_dependency(dependency)
     end

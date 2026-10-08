@@ -816,20 +816,37 @@ module Homebrew
       #   candidate rather than emitting `{introduced: "0", fixed: <first>}`.
       # - `:history_unavailable` when the tap is a shallow clone, the formula
       #   has no git history or a revision cannot be loaded or compared, so the
-      #   caller can skip the candidate rather than inventing a boundary.
-      # - a `pkg_version` String when the walk hits `:affected`.
+      #   caller can skip the candidate rather than inventing a boundary. This
+      #   includes a version that moved backwards, leaving no later fixed
+      #   version above the affected one.
+      # - `:shared_fixed_version` when the current `pkg_version` also has an
+      #   affected build, so no released version is fixed yet.
+      # - a `pkg_version` String when the walk hits `:affected`. A fix that
+      #   changed a resource without a revision bump shares its version with
+      #   affected builds, which the version cannot distinguish, so the boundary
+      #   is the next version with only fixed builds.
       sig { params(formula: Formula, hit: Hit).returns(T.nilable(T.any(String, Symbol))) }
       def first_fixed_version(formula, hit)
         return unless range_status(hit, formula_name: formula.name)&.first&.fixed?
 
-        last_fixed = T.let(formula.pkg_version.to_s, String)
+        fixed_versions = T.let([formula.pkg_version], T::Array[PkgVersion])
         result = @history.walk(formula) do |old|
           aggregate = aggregate_state_at(old, hit)
+          version = old.pkg_version
           case aggregate
           when :fixed
-            last_fixed = old.pkg_version.to_s
+            fixed_versions << version if fixed_versions.last != version
             nil
-          when :affected then last_fixed
+          when :affected
+            later = fixed_versions.take_while { |fixed| fixed != version }
+            boundary = later.last
+            if boundary.nil?
+              :shared_fixed_version
+            elsif boundary > version
+              boundary.to_s
+            else
+              :history_unavailable
+            end
           when :not_applicable then :never_affected
           when nil then :history_unavailable
           else raise TypeError, "unexpected historical aggregate: #{aggregate.inspect}"
@@ -1028,24 +1045,30 @@ module Homebrew
 
       sig { params(formula: Formula, hit: Hit).returns(T.nilable(Symbol)) }
       def aggregate_state_at(formula, hit)
-        results = hit.evidence.filter_map do |ev|
-          # Evidence built without a subject_version (distro queries, own-
-          # identity rows for a formula with no derivable tag) is deliberately
-          # uncheckable and must stay that way at historical revisions too;
-          # substituting the historical formula version would compare it
-          # against the distro record's distro-versioned range.
-          next if ev.subject_version.nil?
+        # Evidence built without a subject_version (distro queries, own-
+        # identity rows for a formula with no derivable tag) is deliberately
+        # uncheckable and must stay that way at historical revisions too;
+        # substituting the historical formula version would compare it
+        # against the distro record's distro-versioned range.
+        subjects = hit.evidence.reject { |ev| ev.subject_version.nil? }.group_by(&:resource)
+        results = subjects.flat_map do |_, evidence|
+          states = evidence.map do |ev|
+            present, subject = subject_version_at(formula, ev)
+            # Absence means this formula revision did not ship the vulnerable
+            # package. Treat it as fixed for boundary walking so a temporary
+            # removal can be the fix boundary while still allowing the walk to
+            # find an older affected revision.
+            next :absent unless present
+            next :unknown if subject.nil?
+            next :prerelease_boundary if evidence_prerelease_boundary?(ev, subject)
 
-          present, subject = subject_version_at(formula, ev)
-          # Absence means this formula revision did not ship the vulnerable
-          # package. Treat it as fixed for boundary walking so a temporary
-          # removal can be the fix boundary while still allowing the walk to
-          # find an older affected revision.
-          next :fixed unless present
-          next :unknown if subject.nil?
-          next :prerelease_boundary if evidence_prerelease_boundary?(ev, subject)
-
-          evidence_range_status(ev, subject)&.state || :unknown
+            evidence_range_status(ev, subject)&.state || :unknown
+          end
+          # As in `range_status`, a source that cannot be compared (such as a
+          # commit-only GIT range) does not hide a comparison of the same
+          # subject from another source. Other subjects still fail closed.
+          states -= [:unknown] if states.intersect?([:affected, :fixed, :not_applicable])
+          states.map { |state| (state == :absent) ? :fixed : state }
         end
         return if results.empty? || results.include?(:prerelease_boundary)
         return :affected if results.include?(:affected)
