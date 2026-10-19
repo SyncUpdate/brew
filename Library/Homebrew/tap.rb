@@ -551,8 +551,8 @@ class Tap
     old_remote = remote
     return if old_remote.present? && self.class.same_remote?(old_remote, redirected_remote)
 
-    redirected_reference = self.class.remote_to_reference(redirected_remote)
-    redirected_tap = if redirected_reference.present? && !self.class.remote_reference?(redirected_reference)
+    redirected_reference = Tap.remote_to_reference(redirected_remote)
+    redirected_tap = if redirected_reference.present? && !Tap.remote_reference?(redirected_reference)
       Tap.fetch(redirected_reference)
     end
 
@@ -575,6 +575,39 @@ class Tap
       raise TapRedirectNotAllowedError, error_message
     end
 
+    require "trust"
+    # Resolve the current fetch URL: `remote` can be cached and Git can rewrite it with `insteadOf`.
+    source_remote = Utils.popen_read("git", "-C", path, "remote", "get-url", "origin").chomp
+    github_source = source_remote.match?(%r{\Ahttps://(?:[^/@]+@)?github\.com(?::443)?/}i) ||
+                    source_remote.match?(%r{\Assh://(?:[^/@]+@)?github\.com(?::22)?/}i) ||
+                    source_remote.match?(%r{\A(?:[^/@]+@)?github\.com:}i)
+    unsafe_redirect = (old_name != redirect_target.name && !github_source) ||
+                      (official? && old_name != redirect_target.name) ||
+                      (redirect_target.implicitly_trusted?(remote: redirected_remote) &&
+                       (!official_git_checkout? || old_name != redirect_target.name))
+    if !unsafe_redirect && !Homebrew::Trust.trusted_tap?(self)
+      destination_tap = if redirected_tap && redirected_tap.name != name && !redirected_tap.installed?
+        redirected_tap
+      else
+        self
+      end
+      unsafe_redirect = Homebrew::Trust.trusted_entries(:tap).any? do |reference|
+        destination_tap.matches_reference?(reference, remote: redirected_remote)
+      end
+      unsafe_redirect ||= [:formula, :cask, :command].any? do |type|
+        Homebrew::Trust.trusted_entries(type).any? do |entry|
+          reference = entry.rpartition("/").first
+          reference == destination_tap.name ||
+            destination_tap.matches_reference?(reference, remote: redirected_remote)
+        end
+      end
+    end
+    if unsafe_redirect
+      raise TapRedirectNotAllowedError,
+            "Refusing automatic redirect from #{old_name} to #{redirected_remote}.\n" \
+            "Untap #{old_name}, then tap the new location directly to review its source and trust."
+    end
+
     if redirected_tap && redirected_tap.name != name && !redirected_tap.installed?
       old_path = path
       redirected_tap.path.dirname.mkpath
@@ -595,7 +628,6 @@ class Tap
     clear_cache
     Tap.clear_cache
 
-    require "trust"
     trust_invalidated = Homebrew::Trust.invalidate_tap_references!(old_name, remote: old_remote)
 
     return if quiet
@@ -682,7 +714,7 @@ class Tap
     Utils::Git.ensure_installed!
 
     use_worktree_source_tap = core_tap? || (core_cask_tap? && clone_target.nil? && !custom_remote)
-    worktree_source_tap_path = use_worktree_source_tap ? worktree_source_tap_path_for(path: HOMEBREW_REPOSITORY) : nil
+    worktree_source_tap_path = worktree_source_tap_path_for(path: HOMEBREW_REPOSITORY) if use_worktree_source_tap
 
     if installed?
       if requested_remote != remote # we are sure that clone_target is not nil and custom_remote is true here
@@ -837,11 +869,13 @@ class Tap
   sig { params(requested_remote: T.nilable(T.any(Pathname, String)), quiet: T::Boolean).void }
   def fix_remote_configuration(requested_remote: nil, quiet: false)
     if requested_remote.present?
+      previous_remote = remote
       path.cd do
         SystemCommand.safe_system "git", "remote", "set-url", "origin", "--end-of-options", requested_remote
         SystemCommand.safe_system "git", "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"
       end
-      $stderr.ohai "#{name}: changed remote from #{remote} to #{requested_remote}" unless quiet
+      $stderr.ohai "#{name}: changed remote from #{previous_remote} to #{requested_remote}" unless quiet
+      clear_cache
     end
     return unless remote
 
@@ -1430,7 +1464,10 @@ class Tap
   sig { returns(T::Array[Tap]) }
   def self.installed
     cache[:installed] ||= if HOMEBREW_TAP_DIRECTORY.directory?
-      HOMEBREW_TAP_DIRECTORY.subdirs.flat_map(&:subdirs).map { from_path(it) }
+      # Keep hidden-directory exclusion in sync with cmd/update.sh.
+      HOMEBREW_TAP_DIRECTORY.glob("*").select(&:directory?)
+                            .flat_map { it.glob("*").select(&:directory?) }
+                            .map { from_path(it) }
     else
       []
     end

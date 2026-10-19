@@ -408,7 +408,9 @@ class FormulaInstaller
 
   sig { void }
   def check_installation_already_attempted
-    raise FormulaInstallationAlreadyAttemptedError, formula if self.class.attempted.include?(formula)
+    return unless self.class.attempted.any? { same_formula?(it) }
+
+    raise FormulaInstallationAlreadyAttemptedError, formula
   end
 
   sig { void }
@@ -666,6 +668,9 @@ on_request: installed_on_request?, options:)
       next false if c.name == formula.name || c.name == formula.full_name
 
       f = Formulary.factory(c.name)
+    rescue Homebrew::UntrustedTapError
+      name = Formulary.loader_for(c.name, warn: false).name
+      (HOMEBREW_LINKED_KEGS/name).exist? && (HOMEBREW_PREFIX/"opt"/name).exist?
     rescue TapFormulaUnavailableError
       # If the formula name is a fully-qualified name let's silently
       # ignore it as we don't care about things used in taps that aren't
@@ -778,8 +783,14 @@ on_request: installed_on_request?, options:)
     unsatisfied_reqs
   end
 
-  sig { params(formula: Formula).returns(T::Array[Dependency]) }
-  def expand_dependencies_for_formula(formula)
+  sig {
+    params(
+      formula:                     Formula,
+      keepable_build_dependencies: T.nilable(T::Array[String]),
+      kept_build_dependencies:     T::Hash[Formula, T::Array[String]],
+    ).returns(T::Array[Dependency])
+  }
+  def expand_dependencies_for_formula_once(formula, keepable_build_dependencies, kept_build_dependencies)
     # Cache for this expansion only. FormulaInstaller has a lot of inputs which can alter expansion.
     cache_key = "FormulaInstaller-#{formula.full_name}-#{Time.now.to_f}"
     formula_cache = T.let({}, T::Hash[Dependency, Formula])
@@ -814,7 +825,41 @@ on_request: installed_on_request?, options:)
       end
 
       next Dependable::SKIP if satisfied
+      next if !dep.build? || build_bottle?
+
+      dep_formula = dep.to_formula
+      next if keepable_build_dependencies&.exclude?(dep_formula.full_name)
+      next unless dep.satisfied?(minimum_compatibility_version: dep_formula.compatibility_version)
+
+      runtime_dependencies = dep_formula.any_installed_keg&.runtime_dependencies
+      next if runtime_dependencies.nil?
+
+      # Keep the installed build dependency as-is, including the dependencies it was built against.
+      kept_build_dependencies[dep_formula] = runtime_dependencies.map { |runtime_dep| runtime_dep["full_name"] }
+      Dependable::PRUNE
     end
+  end
+
+  sig { params(formula: Formula).returns(T::Array[Dependency]) }
+  def expand_dependencies_for_formula(formula)
+    kept_build_dependencies = T.let({}, T::Hash[Formula, T::Array[String]])
+    deps = expand_dependencies_for_formula_once(formula, nil, kept_build_dependencies)
+
+    # Each pass keeps fewer build dependencies than the last, so at worst this ends with none kept.
+    kept_build_dependencies.size.times do
+      incompatible_upgrades = deps.filter_map do |dep|
+        dep_formula = dep.to_formula
+        dep_formula.full_name unless dep.installed?(minimum_compatibility_version: dep_formula.compatibility_version)
+      end << formula.full_name
+      keepable_build_dependencies = kept_build_dependencies.filter_map do |kept, runtime_dependency_names|
+        kept.full_name unless runtime_dependency_names.intersect?(incompatible_upgrades)
+      end
+      return deps if keepable_build_dependencies.size == kept_build_dependencies.size
+
+      kept_build_dependencies = {}
+      deps = expand_dependencies_for_formula_once(formula, keepable_build_dependencies, kept_build_dependencies)
+    end
+    deps
   end
 
   sig { returns(T::Array[Dependency]) }
@@ -1294,7 +1339,7 @@ on_request: installed_on_request?, options:)
       keg.remove_linked_keg_record
     end
 
-    Homebrew::Unlink.unlink_link_overwrite_formulae(formula, verbose: verbose?)
+    Homebrew::Unlink.unlink_link_overwrite_formulae(formula, locked_formulae: self.class.locked, verbose: verbose?)
 
     link_overwrite_backup = {} # Hash: conflict file -> backup file
     backup_dir = HOMEBREW_CACHE/"Backup"
@@ -1503,14 +1548,7 @@ on_request: installed_on_request?, options:)
 
   sig { returns(T.nilable(Formula)) }
   def previously_fetched_formula
-    # We intentionally don't compare classes here:
-    # from-API-JSON and from-source formula classes are not equal but we
-    # want to equate them to be the same thing here given mixing bottle and
-    # from-source installs of the same formula within the same operation
-    # doesn't make sense.
-    self.class.fetched.find do |fetched_formula|
-      fetched_formula.full_name == formula.full_name && fetched_formula.active_spec_sym == formula.active_spec_sym
-    end
+    self.class.fetched.find { same_formula?(it) }
   end
 
   sig { params(quiet: T::Boolean, enqueue: T::Boolean, bottle: T.nilable(Bottle)).void }
@@ -1556,7 +1594,6 @@ on_request: installed_on_request?, options:)
     bottle_install = !only_deps? && local_bottle_path.nil? && pour_bottle?(output_warning: true)
     # We skip bottle installs from local bottle paths, as these are done in CI
     # as part of the build lifecycle before attestations are produced.
-    verify_attestation = bottle_install && verify_bottle_attestation?
     bottle_download = @enqueued_bottle_download
     bottle_download = enqueue_bottle_download(stage: false) if bottle_download.nil? && bottle_install && @ran_prelude
 
@@ -1569,7 +1606,7 @@ on_request: installed_on_request?, options:)
     if bottle_install
       if bottle_download.nil?
         fetch_bottle_tab(enqueue: true)
-        check_attestation = verify_attestation && !downloadable_object.cached_download.exist?
+        check_attestation = verify_bottle_attestation?
       end
     else
       @formula = Homebrew::API::Formula.source_download_formula(formula) if formula.loaded_from_api?
@@ -1601,8 +1638,7 @@ on_request: installed_on_request?, options:)
     return if only_deps? || formula.local_bottle_path
 
     bottle_download = downloadable
-    check_attestation = verify_bottle_attestation? && !bottle_download.cached_download.exist?
-    download_queue.enqueue(bottle_download, check_attestation:, stage:)
+    download_queue.enqueue(bottle_download, check_attestation: verify_bottle_attestation?, stage:)
     bottle_download
   end
 
@@ -1919,6 +1955,16 @@ on_request: installed_on_request?, options:)
 
   private
 
+  sig { params(other: Formula).returns(T::Boolean) }
+  def same_formula?(other)
+    # We intentionally don't compare classes here:
+    # from-API-JSON and from-source formula classes are not equal but we
+    # want to equate them to be the same thing here given mixing bottle and
+    # from-source installs of the same formula within the same operation
+    # doesn't make sense.
+    other.full_name == formula.full_name && other.active_spec_sym == formula.active_spec_sym
+  end
+
   sig { returns(T::Boolean) }
   def auto_link_versioned_keg_only?
     return false unless installed_on_request?
@@ -1937,6 +1983,7 @@ on_request: installed_on_request?, options:)
   def lock
     return unless self.class.locked.empty?
 
+    @hold_locks = true
     unless ignore_deps?
       formula.recursive_dependencies.each do |dep|
         self.class.locked << dep.to_formula
@@ -1945,7 +1992,6 @@ on_request: installed_on_request?, options:)
     self.class.locked.unshift(formula)
     self.class.locked.uniq!
     self.class.locked.each(&:lock)
-    @hold_locks = true
   end
 
   sig { void }

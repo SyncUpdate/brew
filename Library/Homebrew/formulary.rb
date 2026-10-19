@@ -252,6 +252,7 @@ module Formulary
       license formula_struct.license
       revision formula_struct.revision
       version_scheme formula_struct.version_scheme
+      compatibility_version formula_struct.compatibility_version
 
       if formula_struct.stable?
         stable do
@@ -399,6 +400,10 @@ module Formulary
       define_method(:ruby_source_checksum) do
         checksum = self.class.instance_variable_get(:@ruby_source_checksum_string)
         Checksum.new(checksum) if checksum
+      end
+
+      define_method(:local_patch_checksums) do
+        formula_struct.local_patch_checksums
       end
     end
 

@@ -140,17 +140,17 @@ RSpec.describe Homebrew::FormulaAuditor do
     end
   end
 
+  def homepage_auditor(**options)
+    formula_auditor "foo", <<~RUBY, { core_tap: true, new_formula: true }.merge(options)
+      class Foo < Formula
+        homepage "https://brew.sh"
+        url "https://brew.sh/foo-1.0.tar.gz"
+      end
+    RUBY
+  end
+
   describe "#audit_homepage_domain_age" do
     let(:domain_problem) { "`homepage` domain `brew.sh` was registered on 2026-07-01" }
-
-    def homepage_auditor(**options)
-      formula_auditor "foo", <<~RUBY, { core_tap: true, new_formula: true }.merge(options)
-        class Foo < Formula
-          homepage "https://brew.sh"
-          url "https://brew.sh/foo-1.0.tar.gz"
-        end
-      RUBY
-    end
 
     it "reports newly registered homepage domains" do
       allow(SharedAudits).to receive(:new_domain_problem)
@@ -183,6 +183,48 @@ RSpec.describe Homebrew::FormulaAuditor do
 
       expect(SharedAudits).not_to receive(:new_domain_problem)
       fa.audit_homepage_domain_age
+    end
+  end
+
+  describe "#audit_self_submission" do
+    let(:self_submission_problem) { "Self-submitted (a commit author's email address matches brew.sh)" }
+
+    it "reports self-submissions without a git forge repository" do
+      allow(SharedAudits).to receive(:self_submission_problem)
+        .with({ homepage: "https://brew.sh", url: "https://brew.sh/foo-1.0.tar.gz", head: nil })
+        .and_return(self_submission_problem)
+
+      fa = homepage_auditor online: true
+      fa.audit_self_submission
+
+      expect(fa.new_formula_problems.first[:message]).to eq(self_submission_problem)
+    end
+
+    it "does not check existing formulae" do
+      fa = homepage_auditor new_formula: false
+
+      expect(SharedAudits).not_to receive(:self_submission_problem)
+      fa.audit_self_submission
+    end
+  end
+
+  describe "#audit_livecheck_required" do
+    let(:livecheck_required_problem) { "New formulae must have a working `livecheck` block" }
+
+    it "reports new formulae without a working livecheck" do
+      allow(SharedAudits).to receive(:livecheck_required_problem).and_return(livecheck_required_problem)
+
+      fa = homepage_auditor
+      fa.audit_livecheck_required
+
+      expect(fa.new_formula_problems.first[:message]).to eq(livecheck_required_problem)
+    end
+
+    it "does not check existing formulae" do
+      fa = homepage_auditor new_formula: false
+
+      expect(SharedAudits).not_to receive(:livecheck_required_problem)
+      fa.audit_livecheck_required
     end
   end
 
@@ -1000,13 +1042,19 @@ RSpec.describe Homebrew::FormulaAuditor do
     end
 
     it "suggests a detected default branch for Git head URLs" do
+      head_url = "https://github.com/Homebrew/homebrew-test-bot.git"
       fa = formula_auditor "foo", <<~RUBY, online: true, core_tap: true
         class Foo < Formula
           url "https://brew.sh/foo-1.0.tgz"
           sha256 "31cccfc6630528db1c8e3a06f6decf2a370060b982841cfab2b8677400a5092e"
-          head "https://github.com/Homebrew/homebrew-test-bot.git", branch: "master"
+          head "#{head_url}", branch: "master"
         end
       RUBY
+      allow(Utils::Git).to receive(:remote_exists?).and_return(true)
+      allow(Utils).to receive(:popen_read).and_call_original
+      allow(Utils).to receive(:popen_read)
+        .with("git", "ls-remote", "--symref", "--end-of-options", head_url, "HEAD")
+        .and_return("ref: refs/heads/main\tHEAD\n")
 
       message = "To use a non-default HEAD branch, add the formula to `head_non_default_branch_allowlist.json`."
       fa.audit_specs
@@ -1014,30 +1062,37 @@ RSpec.describe Homebrew::FormulaAuditor do
       expect(fa.problems.last[:message]).to match(message)
     end
 
-    it "can specify a default branch without an allowlist if not in a core tap" do
+    it "can specify a non-default branch without an allowlist if not in a core tap" do
+      head_url = "https://github.com/Homebrew/homebrew-test-bot.git"
       fa = formula_auditor "foo", <<~RUBY, online: true
         class Foo < Formula
           url "https://brew.sh/foo-1.0.tgz"
           sha256 "31cccfc6630528db1c8e3a06f6decf2a370060b982841cfab2b8677400a5092e"
-          head "https://github.com/Homebrew/homebrew-test-bot.git", branch: "main"
+          head "#{head_url}", branch: "master"
         end
       RUBY
+      allow(Utils::Git).to receive(:remote_exists?).and_return(true)
+      allow(Utils).to receive(:popen_read).and_call_original
+      allow(Utils).to receive(:popen_read)
+        .with("git", "ls-remote", "--symref", "--end-of-options", head_url, "HEAD")
+        .and_return("ref: refs/heads/main\tHEAD\n")
 
       fa.audit_specs
-      expect(fa.problems).not_to match("Git `head` URL must specify a branch name")
+      expect(fa.problems).not_to include(a_hash_including(message: a_string_including("non-default HEAD branch")))
     end
 
     it "ignores `branch:` for non-Git head URLs" do
-      fa = formula_auditor "foo", <<~RUBY, online: true
+      fa = formula_auditor "foo", <<~RUBY, online: true, core_tap: true
         class Foo < Formula
           url "https://brew.sh/foo-1.0.tgz"
           sha256 "31cccfc6630528db1c8e3a06f6decf2a370060b982841cfab2b8677400a5092e"
           head "https://brew.sh/foo.tgz", branch: "develop"
         end
       RUBY
+      allow(Utils::Git).to receive(:remote_exists?).and_return(true)
 
       fa.audit_specs
-      expect(fa.problems).not_to match("Git `head` URL must specify a branch name")
+      expect(fa.problems).not_to include(a_hash_including(message: a_string_including("non-default HEAD branch")))
     end
 
     it "ignores `branch:` for `resource` URLs" do
@@ -1046,15 +1101,19 @@ RSpec.describe Homebrew::FormulaAuditor do
           url "https://brew.sh/foo-1.0.tgz"
           sha256 "31cccfc6630528db1c8e3a06f6decf2a370060b982841cfab2b8677400a5092e"
 
-          resource "bar" do
-            url "https://raw.githubusercontent.com/Homebrew/homebrew-core/HEAD/Formula/bar.rb"
-            sha256 "31cccfc6630528db1c8e3a06f6decf2a370060b982841cfab2b8677400a5092e"
+          head do
+            url "https://brew.sh/foo.tgz"
+
+            resource "bar" do
+              url "https://brew.sh/bar.git"
+            end
           end
         end
       RUBY
+      allow(Utils::Git).to receive(:remote_exists?).and_return(true)
 
       fa.audit_specs
-      expect(fa.problems).not_to match("Git `head` URL must specify a branch name")
+      expect(fa.problems).not_to include(a_hash_including(message: a_string_including("must specify a branch name")))
     end
 
     it "allows versions with no throttle rate" do

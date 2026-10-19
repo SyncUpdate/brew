@@ -718,6 +718,23 @@ RSpec.describe FormulaInstaller do
 
         installer.enqueue_fetch
       end
+
+      it "enqueues attestation verification for cached bottles" do
+        allow(bottle.cached_download).to receive(:exist?).and_return(true)
+        allow(installer).to receive(:fetch_dependencies)
+
+        expect(download_queue).to receive(:enqueue).with(bottle, check_attestation: true)
+
+        installer.enqueue_fetch
+      end
+
+      it "enqueues attestation verification before staging cached bottles" do
+        allow(bottle.cached_download).to receive(:exist?).and_return(true)
+
+        expect(download_queue).to receive(:enqueue).with(bottle, check_attestation: true, stage: true)
+
+        installer.enqueue_bottle_download(stage: true)
+      end
     end
   end
 
@@ -903,6 +920,118 @@ RSpec.describe FormulaInstaller do
       end
     end
 
+    context "when conflicting formula is untrusted", :trust_store do
+      let(:tap) { Tap.fetch("untrustedconflicts", "foo") }
+      let(:conflicting_name) { "#{tap}/conflicting" }
+      let(:conflicting_prefix) { HOMEBREW_CELLAR/"conflicting/1.0" }
+      let(:test_formula) do
+        name = conflicting_name
+        formula "testball" do
+          T.bind(self, T.class_of(Formula))
+          url "https://brew.sh/testball-0.1.tar.gz"
+          conflicts_with name
+        end
+      end
+
+      before do
+        allow(Formulary).to receive(:factory).and_call_original
+        tap.formula_dir.mkpath
+        (tap.formula_dir/"conflicting.rb").write 'raise "untrusted formula evaluated"'
+        tap.alias_dir.mkpath
+        (tap.alias_dir/"conflicting-alias").make_symlink(tap.formula_dir/"conflicting.rb")
+        (tap.path/"formula_renames.json").write JSON.generate("old-conflicting" => "conflicting")
+      end
+
+      after do
+        FileUtils.rm_rf HOMEBREW_TAP_DIRECTORY/"untrustedconflicts"
+      end
+
+      test_each(%w[
+        conflicting
+        untrustedconflicts/foo/conflicting
+        untrustedconflicts/foo/conflicting-alias
+        untrustedconflicts/foo/old-conflicting
+      ]) do |name|
+        context "when named #{name}" do
+          let(:conflicting_name) { name }
+
+          it "ignores an uninstalled conflict without evaluating its formula" do
+            expect { described_class.new(test_formula).check_conflicts }.not_to raise_error
+          end
+
+          context "when installed" do
+            before do
+              (conflicting_prefix/".brew").mkpath
+              (conflicting_prefix/".brew/conflicting.rb").write 'raise "installed formula evaluated"'
+              (HOMEBREW_PREFIX/"opt").mkpath
+              (HOMEBREW_PREFIX/"opt/conflicting").make_symlink(conflicting_prefix)
+            end
+
+            it "ignores an unlinked conflict without evaluating its formula" do
+              expect { described_class.new(test_formula).check_conflicts }.not_to raise_error
+            end
+
+            it "rejects a linked conflict without evaluating its formula" do
+              HOMEBREW_LINKED_KEGS.mkpath
+              (HOMEBREW_LINKED_KEGS/"conflicting").make_symlink(conflicting_prefix)
+
+              expect { described_class.new(test_formula).check_conflicts }.to raise_error(FormulaConflictError)
+            end
+          end
+        end
+      end
+
+      it "ignores an opt alias pointing to another linked formula" do
+        other_prefix = HOMEBREW_CELLAR/"other/1.0"
+        other_prefix.mkpath
+        HOMEBREW_LINKED_KEGS.mkpath
+        (HOMEBREW_LINKED_KEGS/"other").make_symlink(other_prefix)
+        (HOMEBREW_PREFIX/"opt").mkpath
+        (HOMEBREW_PREFIX/"opt/conflicting").make_symlink(other_prefix)
+
+        expect { described_class.new(test_formula).check_conflicts }.not_to raise_error
+      end
+
+      it "ignores an unlinked conflict with a non-keg opt directory" do
+        (HOMEBREW_PREFIX/"opt/conflicting").mkpath
+
+        expect { described_class.new(test_formula).check_conflicts }.not_to raise_error
+      end
+
+      it "rejects a linked conflict when opt points to a different version" do
+        conflicting_prefix.mkpath
+        (HOMEBREW_CELLAR/"conflicting/2.0").mkpath
+        HOMEBREW_LINKED_KEGS.mkpath
+        (HOMEBREW_LINKED_KEGS/"conflicting").make_symlink(conflicting_prefix)
+        (HOMEBREW_PREFIX/"opt").mkpath
+        (HOMEBREW_PREFIX/"opt/conflicting").make_symlink(HOMEBREW_CELLAR/"conflicting/2.0")
+
+        expect { described_class.new(test_formula).check_conflicts }.to raise_error(FormulaConflictError)
+      end
+
+      context "when the conflicting formula was renamed" do
+        let(:conflicting_name) { "#{tap}/old-conflicting" }
+
+        it "does not warn about a renamed conflict" do
+          expect { described_class.new(test_formula).check_conflicts }.not_to output.to_stderr
+        end
+      end
+
+      it "ignores an uninstalled conflict when only the requested formula is trusted" do
+        (tap.formula_dir/"requested.rb").write <<~RUBY
+          class Requested < Formula
+            url "https://brew.sh/requested-1.0.tar.gz"
+            conflicts_with "conflicting"
+          end
+        RUBY
+        Homebrew::Trust.trust!(:formula, "#{tap}/requested")
+
+        expect do
+          described_class.new(Formulary.factory("#{tap}/requested")).check_conflicts
+        end.not_to raise_error
+      end
+    end
+
     it "ignores conflicts that name the formula being installed" do
       f = self_conflicting_formula
 
@@ -1044,6 +1173,83 @@ RSpec.describe FormulaInstaller do
       deps = installer.expand_dependencies_for_formula(f)
 
       expect(deps.map(&:name)).to eq(%w[shared first-parent second-parent])
+    end
+
+    context "with an outdated build dependency with a matching compatibility_version" do
+      let(:build_dep) { Dependency.new("homebrew-compatible-build-dependency", [:build]) }
+      let(:runtime_dep_formula) do
+        formula "homebrew-build-dependency-runtime-dependency" do
+          T.bind(self, T.class_of(Formula))
+          url "foo-1.0"
+        end
+      end
+      let(:f) do
+        formula "homebrew-keep-compatible-build-dependency" do
+          T.bind(self, T.class_of(Formula))
+          url "foo-1.0"
+        end
+      end
+      let(:build_bottle) { false }
+      let(:installer) { described_class.new(f, build_bottle:) }
+
+      before do
+        build_dep_formula = formula build_dep.name do
+          T.bind(self, T.class_of(Formula))
+          url "foo-1.0"
+        end
+        keg = instance_double(Keg, runtime_dependencies: [{ "full_name" => runtime_dep_formula.full_name }])
+        allow(build_dep_formula).to receive_messages(
+          compatibility_version: 1,
+          deps:                  [Dependency.new(runtime_dep_formula.name)],
+          any_installed_keg:     keg,
+        )
+        stub_formula_loader(build_dep_formula)
+        stub_formula_loader(runtime_dep_formula)
+        allow(build_dep).to receive(:satisfied?).and_return(false)
+        allow(build_dep).to receive(:satisfied?).with(minimum_compatibility_version: 1).and_return(true)
+        allow(installer).to receive_messages(effective_build_options_for: BuildOptions.new(Options.new, Options.new),
+                                             install_bottle_for?:         false)
+      end
+
+      it "keeps it and the dependencies it was built against" do
+        allow(f).to receive(:deps).and_return([build_dep])
+
+        expect(installer.expand_dependencies_for_formula(f)).to be_empty
+      end
+
+      it "upgrades it if a dependency it was built against is upgraded" do
+        allow(f).to receive(:deps).and_return([build_dep, Dependency.new(runtime_dep_formula.name)])
+
+        expect(installer.expand_dependencies_for_formula(f).map(&:name)).to include(build_dep.name)
+      end
+
+      it "keeps other compatible build dependencies if one is upgraded" do
+        other_build_dep = Dependency.new("homebrew-other-compatible-build-dependency", [:build])
+        other_build_dep_formula = formula other_build_dep.name do
+          T.bind(self, T.class_of(Formula))
+          url "foo-1.0"
+        end
+        allow(other_build_dep_formula).to receive_messages(
+          compatibility_version: 1,
+          any_installed_keg:     instance_double(Keg, runtime_dependencies: []),
+        )
+        stub_formula_loader(other_build_dep_formula)
+        allow(other_build_dep).to receive(:satisfied?).and_return(false)
+        allow(other_build_dep).to receive(:satisfied?).with(minimum_compatibility_version: 1).and_return(true)
+        allow(f).to receive(:deps).and_return([build_dep, other_build_dep, Dependency.new(runtime_dep_formula.name)])
+
+        expect(installer.expand_dependencies_for_formula(f).map(&:name)).not_to include(other_build_dep.name)
+      end
+
+      context "when building a bottle" do
+        let(:build_bottle) { true }
+
+        it "upgrades it" do
+          allow(f).to receive(:deps).and_return([build_dep])
+
+          expect(installer.expand_dependencies_for_formula(f).map(&:name)).to include(build_dep.name)
+        end
+      end
     end
   end
 
@@ -1204,14 +1410,73 @@ RSpec.describe FormulaInstaller do
     end
 
     it "unlinks siblings before linking when explicitly requested" do
+      allow(described_class).to receive(:locked).and_return([other_version])
       installer = described_class.new(versioned_formula, link_keg: true)
 
       expect(installer.link_keg).to be true
       expect(Homebrew::Unlink).to receive(:unlink_link_overwrite_formulae).with(versioned_formula,
-                                                                                verbose: false).ordered
+                                                                                locked_formulae: [other_version],
+                                                                                verbose:         false).ordered
       expect(keg).to receive(:link).with(verbose: false, overwrite: false).ordered
 
       installer.link(keg)
+    end
+
+    context "with a linked sibling" do
+      let(:keg) { Keg.new(versioned_formula.prefix) }
+
+      before do
+        [versioned_formula, other_version].each do |formula|
+          formula.bin.mkpath
+          (formula.bin/"foo").write("foo")
+        end
+        Keg.new(other_version.prefix).link
+      end
+
+      after { [versioned_formula, other_version].each(&:unlock) }
+
+      it "unlinks the sibling without releasing its installer lock" do
+        [versioned_formula, other_version].each(&:lock)
+        allow(described_class).to receive(:locked).and_return([versioned_formula, other_version])
+
+        described_class.new(versioned_formula, link_keg: true).link(keg)
+
+        expect(other_version).not_to be_linked
+        expect(keg).to be_linked
+        expect do
+          FormulaLock.new(other_version.name).with_lock { raise "Installer lock was released" }
+        end.to raise_error(OperationInProgressError)
+      end
+
+      it "rejects a sibling lock not held by the installer" do
+        [versioned_formula, other_version].each(&:lock)
+        allow(described_class).to receive(:locked).and_return([versioned_formula])
+
+        expect do
+          described_class.new(versioned_formula, link_keg: true).link(keg)
+        end.to raise_error(OperationInProgressError)
+      end
+
+      it "clears partially acquired locks before a later link attempt" do
+        installer_class = Class.new(described_class)
+        dependency = Dependency.new(other_version.name)
+        allow(dependency).to receive(:to_formula).and_return(other_version)
+        allow(versioned_formula).to receive(:recursive_dependencies).and_return([dependency])
+
+        FormulaLock.new(other_version.name).with_lock do
+          expect do
+            installer_class.new(versioned_formula, link_keg: true).install
+          end.to raise_error(OperationInProgressError)
+          expect(installer_class.locked).to be_empty
+          expect do
+            FormulaLock.new(versioned_formula.name).with_lock { nil }
+          end.not_to raise_error
+          expect do
+            installer_class.new(versioned_formula, link_keg: true).link(keg)
+          end.to raise_error(OperationInProgressError)
+          expect(other_version).to be_linked
+        end
+      end
     end
   end
 
@@ -1242,6 +1507,45 @@ RSpec.describe FormulaInstaller do
         To link this version, run:
           brew link #{formula_name}
       EOS
+    end
+  end
+
+  describe "#check_installation_already_attempted" do
+    it "rejects a queued formula already attempted through a different formula class" do
+      formula = Testball.new
+      installer = described_class.new(formula)
+      described_class.fetched << Class.new(Testball).new
+      installer.enqueue_fetch
+      described_class.attempted << described_class.new(formula).formula
+
+      expect { installer.check_installation_already_attempted }
+        .to raise_error(FormulaInstallationAlreadyAttemptedError)
+    end
+
+    it "rejects an already attempted formula of the same class" do
+      described_class.attempted << Testball.new
+
+      expect { described_class.new(Testball.new).check_installation_already_attempted }
+        .to raise_error(FormulaInstallationAlreadyAttemptedError)
+    end
+
+    it "allows a formula with the same name from a different tap" do
+      described_class.attempted << Testball.new(tap: Tap.fetch("user/first"))
+      installer = described_class.new(Testball.new(tap: Tap.fetch("user/second")))
+
+      expect { installer.check_installation_already_attempted }.not_to raise_error
+    end
+
+    it "allows a different spec of an already attempted formula" do
+      stable_formula = formula do
+        T.bind(self, T.class_of(Formula))
+        url "https://brew.sh/testball-1.0.tar.gz"
+        head "https://brew.sh/testball.git"
+      end
+      described_class.attempted << stable_formula
+      installer = described_class.new(stable_formula.class.new(stable_formula.name, stable_formula.path, :head))
+
+      expect { installer.check_installation_already_attempted }.not_to raise_error
     end
   end
 

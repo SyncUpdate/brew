@@ -580,67 +580,8 @@ Refer to [Deprecating, Disabling and Removing](Deprecating-Disabling-and-Removin
 
 ### Stanza: `desc`
 
-`desc` accepts a single-line UTF-8 string containing a short description of the software. As it’s used to help with searchability and disambiguation, it must concisely describe what the software does (or what you can accomplish with it).
-
-`desc` is not for app slogans! Vendors’ descriptions tend to be filled with generic adjectives such as “modern” and “lightweight”. Those are meaningless marketing fluff (do you ever see apps proudly describing themselves as outdated and bulky?) which must be deleted. It’s fine to use the information on the software’s website as a starting point, but it will require editing in almost all cases.
-
-#### Dos and don'ts
-
-* **Do** start with an uppercase letter.
-
-  ```diff
-  - desc "sound and music editor"
-  + desc "Sound and music editor"
-  ```
-
-* **Do** be brief, i.e. use less than 80 characters.
-
-  ```diff
-  - desc "Sound and music editor which comes with effects, instruments, sounds and all kinds of creative features"
-  + desc "Sound and music editor"
-  ```
-
-* **Do** describe what the software does or is.
-
-  ```diff
-  - desc "Development of musical ideas made easy"
-  + desc "Sound and music editor"
-  ```
-
-* **Do not** include the platform. Platform compatibility belongs in the cask's requirements rather than its description.
-
-  ```diff
-  - desc "Sound and music editor for macOS"
-  + desc "Sound and music editor"
-  ```
-
-* **Do not** include the cask’s [name](#stanza-name).
-
-  ```diff
-  - desc "Ableton Live is a sound and music editor"
-  + desc "Sound and music editor"
-  ```
-
-* **Do not** include the vendor. This should be added to the cask’s [name](#stanza-name) instead.
-
-  ```diff
-  - desc "Sound and music editor made by Ableton"
-  + desc "Sound and music editor"
-  ```
-
-* **Do not** add user pronouns.
-
-  ```diff
-  - desc "Edit your music files"
-  + desc "Sound and music editor"
-  ```
-
-* **Do not** use empty marketing jargon.
-
-  ```diff
-  - desc "Beautiful and powerful modern sound and music editor"
-  + desc "Sound and music editor"
-  ```
+`desc` accepts a single-line UTF-8 string containing a short description of the software.
+Follow the [Description Guidelines](Description-Guidelines.md), which are shared with formulae.
 
 ### Stanza: `*flight_steps`
 
@@ -710,6 +651,12 @@ Ruby `#{...}` interpolation is normally evaluated before structured steps are se
 The runtime steps DSL retains compatibility helpers for `token`, `name`, `arch`, `version`, `version.major` and `version.major_minor`. Interpolating these helpers is safe and permitted by RuboCop because they return the corresponding `{{...}}` token text rather than a concrete value. Other Ruby interpolation is rejected. Prefer explicit `{{...}}` tokens in new steps so it is clear that expansion is deferred until installation.
 
 Content, replacements, command arguments and command environments may use fixed install-time tokens. These include `{{HOMEBREW_BREW_FILE}}`, `{{HOMEBREW_CELLAR}}`, `{{HOMEBREW_PREFIX}}`, `{{token}}`, `{{name}}`, `{{arch}}`, `{{user}}`, `{{staged_path}}`, `{{appdir}}`, `{{caskroom_path}}`, `{{temp}}`, `{{version}}`, `{{version.major}}` and `{{version.major_minor}}`. `{{name}}` is retained for compatibility; prefer `{{token}}`. `{{arch}}` expands to the value the cask's `arch` stanza selected for the current architecture, and to an empty string when the cask has no matching value. Any other `{{...}}` is left verbatim. For example: `write_file "settings.conf", "application = {{appdir}}/Example.app"`.
+
+`{{temp}}` and `base: :temp` use a private, uniquely created directory with permissions `0700`, shared across the phases of one cask upgrade or reinstall so backups can be restored by a later phase.
+Successful `move` steps into this directory record expected backups; a later `move` from a missing backup fails even when guarded by `if_path_exists`.
+Homebrew removes this directory after a successful operation; on failure, it retains the directory and reports its location for recovery.
+Separate uninstall and install commands do not share this directory.
+Commands' temporary environment variables still point to the sandbox's disposable directory for each phase.
 
 {% endraw %}
 

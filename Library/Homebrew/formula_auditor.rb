@@ -682,6 +682,25 @@ module Homebrew
     end
 
     sig { void }
+    def audit_self_submission
+      return unless @core_tap
+      return unless @new_formula
+      return unless @online
+
+      self_submission_problem = SharedAudits.self_submission_problem(self_submission_urls)
+      new_formula_problem self_submission_problem if self_submission_problem
+    end
+
+    sig { void }
+    def audit_livecheck_required
+      return unless @core_tap
+      return unless @new_formula
+
+      livecheck_required_problem = SharedAudits.livecheck_required_problem(formula)
+      new_formula_problem livecheck_required_problem if livecheck_required_problem
+    end
+
+    sig { void }
     def audit_duplicate_formula
       return unless @core_tap
       return unless @new_formula
@@ -806,7 +825,7 @@ module Homebrew
 
     sig { void }
     def audit_github_repository
-      user, repo = get_repo_data(%r{https?://github\.com/([^/]+)/([^/]+)/?.*}) if @new_formula
+      user, repo = get_repo_data(SharedAudits::NOTABILITY_REPOSITORY_REGEXES.fetch(:github)) if @new_formula
 
       return if user.blank? || repo.nil?
 
@@ -819,7 +838,7 @@ module Homebrew
 
     sig { void }
     def audit_gitlab_repository
-      user, repo = get_repo_data(%r{https?://gitlab\.com/([^/]+)/([^/]+)/?.*}) if @new_formula
+      user, repo = get_repo_data(SharedAudits::NOTABILITY_REPOSITORY_REGEXES.fetch(:gitlab)) if @new_formula
       return if user.blank? || repo.nil?
 
       self_submission = self_submission?(user)
@@ -831,7 +850,7 @@ module Homebrew
 
     sig { void }
     def audit_bitbucket_repository
-      user, repo = get_repo_data(%r{https?://bitbucket\.org/([^/]+)/([^/]+)/?.*}) if @new_formula
+      user, repo = get_repo_data(SharedAudits::NOTABILITY_REPOSITORY_REGEXES.fetch(:bitbucket)) if @new_formula
       return if user.blank? || repo.nil?
 
       self_submission = self_submission?(user)
@@ -843,7 +862,7 @@ module Homebrew
 
     sig { void }
     def audit_forgejo_repository
-      user, repo = get_repo_data(%r{https?://codeberg\.org/([^/]+)/([^/]+)/?.*}) if @new_formula
+      user, repo = get_repo_data(SharedAudits::NOTABILITY_REPOSITORY_REGEXES.fetch(:forgejo)) if @new_formula
       return if user.blank? || repo.nil?
 
       self_submission = self_submission?(user)
@@ -1362,7 +1381,13 @@ module Homebrew
     def self_submission?(repo_owner)
       return false if repo_owner.blank?
 
-      SharedAudits.self_submission_for_repo_owner?(repo_owner)
+      SharedAudits.self_submission_for_repo_owner?(repo_owner) ||
+        !SharedAudits.commit_email_domain_match(self_submission_urls).nil?
+    end
+
+    sig { returns(T::Hash[Symbol, T.nilable(String)]) }
+    def self_submission_urls
+      { homepage: formula.homepage, url: formula.stable&.url, head: formula.head&.url }
     end
 
     sig { params(formula: Formula).returns(T::Boolean) }

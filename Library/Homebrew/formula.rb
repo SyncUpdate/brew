@@ -439,6 +439,13 @@ class Formula
     return unless spec.url
 
     spec.owner = self
+    spec.declared_deps.reject(&:implicit?).group_by(&:name).each do |dep_name, declarations|
+      next if declarations.none?(&:no_linkage?)
+      next if declarations.all?(&:no_linkage?)
+
+      raise FormulaSpecificationError,
+            "#{full_name}: conflicting :no_linkage declarations for #{dep_name.inspect} in the #{name} spec"
+    end
     add_global_deps_to_spec(spec)
     instance_variable_set(:"@#{name}", spec)
   end
@@ -3084,6 +3091,21 @@ class Formula
     Checksum.new(Digest::SHA256.file(path).hexdigest) if path.exist?
   end
 
+  # API generation requires every patch checksum; other metadata consumers can omit unreadable patches.
+  sig { returns(T::Hash[String, String]) }
+  def local_patch_checksums
+    [stable, head].compact.flat_map do |spec|
+      (spec.patches + spec.resources.values.flat_map(&:patches)).grep(LocalPatch).filter_map do |patch|
+        [patch.file.to_s, Digest::SHA256.hexdigest(patch.contents)]
+      rescue ArgumentError, SystemCallError => e
+        raise if Formula.generating_hash?
+
+        opoo "#{full_name}: cannot checksum #{patch.file}: #{e}"
+        nil
+      end
+    end.to_h
+  end
+
   sig { params(dependables: T::Hash[Symbol, T.untyped]).returns(T::Array[T::Hash[Symbol, T.untyped]]) }
   def merge_spec_dependables(dependables)
     # We have a hash of specs names (stable/head) to dependency lists.
@@ -3119,6 +3141,7 @@ class Formula
       },
       "urls"                            => urls_hash,
       "patches"                         => serialized_patches,
+      "local_patch_checksums"           => local_patch_checksums,
       "revision"                        => revision,
       "version_scheme"                  => version_scheme,
       "compatibility_version"           => compatibility_version,
@@ -3135,6 +3158,7 @@ class Formula
       "test_dependencies"               => [],
       "recommended_dependencies"        => [],
       "optional_dependencies"           => [],
+      "no_linkage_dependencies"         => [],
       "uses_from_macos"                 => [],
       "uses_from_macos_bounds"          => [],
       "requirements"                    => serialized_requirements,
@@ -3174,9 +3198,13 @@ class Formula
 
     hsh.merge!(dependencies_hash)
 
+    require "sbom"
+
     hsh["installed"] = installed_kegs.sort_by(&:scheme_and_version).map do |keg|
       tab = keg.tab
+      sbom_path = keg/SBOM::FILENAME
       {
+        "sbom"                 => sbom_path.file? ? sbom_path.to_s : nil,
         "version"              => keg.version.to_s,
         "used_options"         => tab.used_options.as_flags,
         "built_as_bottle"      => tab.built_as_bottle,
@@ -3401,6 +3429,10 @@ class Formula
                                                    .reject(&:uses_from_macos?)
                                                    .map(&:name)
                                                    .uniq
+      dep_hash["no_linkage_dependencies"] = spec_deps.select(&:no_linkage?)
+                                                     .reject(&:uses_from_macos?)
+                                                     .map(&:name)
+                                                     .uniq
 
       uses_from_macos_deps = spec_deps.select(&:uses_from_macos?).uniq
       dep_hash["uses_from_macos"] = uses_from_macos_deps.map do |dep|
@@ -4072,6 +4104,7 @@ class Formula
     # desc "Example formula"
     # ```
     #
+    # @see https://docs.brew.sh/Description-Guidelines Description Guidelines
     # @api public
     sig { params(val: T.nilable(String)).returns(T.nilable(String)) }
     def desc(val = nil)
@@ -4673,6 +4706,15 @@ class Formula
     #
     # ```ruby
     # depends_on "node" => :test
+    # ```
+    #
+    # `:no_linkage` declares that the formula does not link against this dependency.
+    # It does not change when the dependency is required.
+    # All declarations of the same dependency within a spec and platform must
+    # agree on `:no_linkage`; stable, HEAD and different platforms may differ.
+    #
+    # ```ruby
+    # depends_on "python@3.14" => :no_linkage
     # ```
     #
     # `:recommended` dependencies are built by default.

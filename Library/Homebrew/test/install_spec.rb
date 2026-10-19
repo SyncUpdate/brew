@@ -121,6 +121,22 @@ RSpec.describe Homebrew::Install do
     end
   end
 
+  describe "::install_formula" do
+    it "preserves the linked keg when another formula class already attempted the upgrade" do
+      formula = Testball.new
+      formula.bin.mkpath
+      (formula.bin/"testball").write "installed"
+      Tab.create(formula).write
+      keg = Keg.new(formula.prefix)
+      keg.link
+      installer = FormulaInstaller.new(formula)
+      FormulaInstaller.attempted << Class.new(Testball).new
+      allow(installer).to receive(:install).and_raise("unexpected duplicate installation")
+
+      expect { described_class.install_formula(installer, upgrade: true) }.not_to change(keg, :linked?)
+    end
+  end
+
   describe "::install_formulae" do
     it "only prints the upgrade group for an installed keg-only formula" do
       formula = formula("keg-only") do
@@ -187,7 +203,7 @@ RSpec.describe Homebrew::Install do
           described_class.install_formulae([installer], dry_run: true)
         end.to output(<<~EOS).to_stdout
           ==> Would install 1 dependency for requested:
-          dependency
+          dependency 1.0
         EOS
       end
     end
@@ -471,7 +487,11 @@ RSpec.describe Homebrew::Install do
         instance_double(Dependency, to_formula: installed),
       ]
 
-      expect { described_class.print_dry_run_dependencies(Testball.new, deps, &:name) }
+      expect do
+        described_class.print_dry_run_dependencies(Testball.new, deps) do |dep|
+          version_change(dep.name, "1.0")
+        end
+      end
         .to output(/Would install 1 dependency.*fresh-dep.*Would upgrade 1 dependency.*installed-dep/m).to_stdout
     end
   end

@@ -175,6 +175,7 @@ module Cask
 
     sig { void }
     def install
+      completed = false
       raise CaskError, "Download failed for #{@cask}." if download_failed?
 
       start_time = Time.now
@@ -214,6 +215,7 @@ on_request: true)
       puts summary
       end_time = Time.now
       Homebrew.messages.package_installed(@cask.token, end_time - start_time)
+      completed = true
     rescue => e
       begin
         restore_backup
@@ -221,6 +223,8 @@ on_request: true)
         purge_staged_download
       end
       raise e
+    ensure
+      @cask.cleanup_temp(retain: !completed)
     end
 
     sig { void }
@@ -625,6 +629,7 @@ on_request: true)
 
     sig { params(successor: T.nilable(Cask)).void }
     def uninstall(successor: nil)
+      completed = false
       load_installed_caskfile!
       oh1 "Uninstalling Cask #{Formatter.identifier(@cask)}"
       if !reinstall? && !upgrade? && @installed_uninstall_artifacts_missing && artifacts.empty?
@@ -641,6 +646,9 @@ on_request: true)
       end
       purge_versioned_files
       purge_caskroom_path if force?
+      completed = true
+    ensure
+      @cask.cleanup_temp(retain: !completed) if !reinstall? && !upgrade?
     end
 
     sig { void }
@@ -715,69 +723,70 @@ on_request: true)
       puts summary
     end
 
-    sig { params(clear: T::Boolean, successor: T.nilable(Cask), quit: T::Boolean).void }
-    def uninstall_artifacts(clear: false, successor: nil, quit: true)
+    sig {
+      params(clear: T::Boolean, successor: T.nilable(Cask), quit: T::Boolean, zap_stanzas: T::Array[Artifact::Zap])
+        .void
+    }
+    def uninstall_artifacts(clear: false, successor: nil, quit: true, zap_stanzas: [])
       odebug "Uninstalling artifacts"
       odebug "#{::Utils.pluralize("artifact", artifacts.length, include_count: true)} defined", artifacts
 
-      artifacts.each do |artifact|
-        if artifact.respond_to?(:uninstall_phase)
-          artifact = T.cast(
-            artifact,
-            T.any(
-              Artifact::AbstractFlightBlock,
-              Artifact::GeneratedCompletion,
-              Artifact::KeyboardLayout,
-              Artifact::Moved,
-              Artifact::PostflightSteps,
-              Artifact::PreflightSteps,
-              Artifact::Qlplugin,
-              Artifact::Symlinked,
-              Artifact::Uninstall,
-              Artifact::UninstallPostflightSteps,
-              Artifact::UninstallPreflightSteps,
-            ),
-          )
+      directive_artifacts = [*artifacts.grep(Artifact::Uninstall), *zap_stanzas]
 
-          odebug "Uninstalling artifact of class #{artifact.class}"
-          if artifact.is_a?(Artifact::Uninstall)
-            artifact.uninstall_phase(command: @command, verbose: verbose?, skip: clear, force: force?, successor:,
-                                     upgrade: upgrade?, reinstall: reinstall?, quit:)
-          else
-            artifact.uninstall_phase(command: @command, verbose: verbose?, skip: clear, force: force?, successor:,
-                                     upgrade: upgrade?, reinstall: reinstall?)
-          end
-        end
-
-        next unless artifact.respond_to?(:post_uninstall_phase)
-
-        artifact = T.cast(artifact, Artifact::Uninstall)
-
-        odebug "Post-uninstalling artifact of class #{artifact.class}"
-        artifact.post_uninstall_phase(
-          command:   @command,
-          verbose:   verbose?,
-          skip:      clear,
-          force:     force?,
-          successor:,
-        )
+      preflight, removable = T.cast(
+        artifacts.grep_v(Artifact::AbstractUninstall).select { |artifact| artifact.respond_to?(:uninstall_phase) },
+        T::Array[
+          T.any(
+            Artifact::AbstractFlightBlock,
+            Artifact::GeneratedCompletion,
+            Artifact::KeyboardLayout,
+            Artifact::Moved,
+            Artifact::PostflightSteps,
+            Artifact::PreflightSteps,
+            Artifact::Qlplugin,
+            Artifact::Symlinked,
+            Artifact::UninstallPostflightSteps,
+            Artifact::UninstallPreflightSteps,
+          ),
+        ],
+      ).partition do |artifact|
+        order = artifact.sort_order
+        uninstall_order = order.fetch(Artifact::Uninstall)
+        order.fetch(artifact.class, uninstall_order) < uninstall_order
       end
+
+      preflight.each do |artifact|
+        odebug "Uninstalling artifact of class #{artifact.class}"
+        artifact.uninstall_phase(command: @command, verbose: verbose?, skip: clear, force: force?, successor:,
+                                 upgrade: upgrade?, reinstall: reinstall?)
+      end
+
+      Artifact::AbstractUninstall.dispatch_directives(directive_artifacts, command: @command, force: force?,
+                                                      successor:, upgrade: upgrade?, reinstall: reinstall?, quit:)
+
+      removable.each do |artifact|
+        odebug "Uninstalling artifact of class #{artifact.class}"
+        artifact.uninstall_phase(command: @command, verbose: verbose?, skip: clear, force: force?, successor:,
+                                 upgrade: upgrade?, reinstall: reinstall?)
+      end
+
+      Artifact::AbstractUninstall.dispatch_directives(directive_artifacts, command: @command, deferred: true,
+                                                                           force: force?, successor:)
     end
 
     sig { void }
     def zap
+      completed = false
       load_installed_caskfile!
-      uninstall_artifacts
-      if (zap_stanzas = @cask.artifacts.grep(Artifact::Zap)).empty?
-        opoo "No zap stanza present for Cask '#{@cask}'"
-      else
-        ohai "Dispatching zap stanza"
-        zap_stanzas.each do |stanza|
-          stanza.zap_phase(command: @command, verbose: verbose?, force: force?)
-        end
-      end
+      oh1 "Zapping Cask #{Formatter.identifier(@cask)}"
+      zap_stanzas = @cask.artifacts.grep(Artifact::Zap)
+      opoo "No zap stanza present for Cask '#{@cask}'" if zap_stanzas.empty?
+      uninstall_artifacts(clear: true, zap_stanzas:)
       ohai "Removing all staged versions of Cask '#{@cask}'"
       purge_caskroom_path
+      completed = true
+    ensure
+      @cask.cleanup_temp(retain: !completed) if !reinstall? && !upgrade?
     end
 
     sig { returns(T.nilable(Pathname)) }
@@ -996,6 +1005,7 @@ on_request: true)
     # load the same cask file that was used for installation, if possible
     sig { void }
     def load_installed_caskfile!
+      previous_cask = @cask
       Migrator.migrate_if_needed(@cask)
 
       installed_caskfile = @cask.installed_caskfile
@@ -1053,6 +1063,11 @@ on_request: true)
       recovered_cask = CaskLoader.recover_from_installed_caskfile(installed_caskfile, tab:, fallback_cask: @cask)
       # otherwise we default to the current cask
       @cask = recovered_cask if recovered_cask
+    ensure
+      if previous_cask
+        @cask.temp = previous_cask.temp
+        previous_cask.temp = nil if !reinstall? && !upgrade? && !@cask.equal?(previous_cask)
+      end
     end
 
     private

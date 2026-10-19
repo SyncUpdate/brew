@@ -2105,7 +2105,191 @@ RSpec.describe Formula do
     expect(h["patches"]).to eq([])
   end
 
+  it "includes existing and missing SBOM paths for each installed keg" do
+    f = formula("foo") do
+      T.bind(self, T.class_of(Formula))
+      url "foo-2.0"
+    end
+    f.prefix("1.0").mkpath
+    f.prefix("2.0").mkpath
+    (f.prefix("2.0")/"sbom.spdx.json").write("{}")
+
+    expect(f.to_hash["installed"].map { |keg| keg.values_at("version", "sbom") }).to eq([
+      ["1.0", nil], ["2.0", (f.prefix("2.0")/"sbom.spdx.json").to_s]
+    ])
+  end
+
+  specify "#to_hash dependencies" do
+    f = formula "foo" do
+      T.bind(self, T.class_of(Formula))
+      url "foo-1.0"
+      depends_on "bar"
+      depends_on "baz" => :no_linkage
+      head do
+        url "foo-HEAD"
+        depends_on "qux" => [:test, :no_linkage]
+      end
+    end
+    stub_formula_loader(f)
+
+    expect(f.to_hash).to include(
+      "dependencies"            => ["bar", "baz"],
+      "test_dependencies"       => [],
+      "no_linkage_dependencies" => ["baz"],
+      "head_dependencies"       => include("test_dependencies"       => ["qux"],
+                                           "no_linkage_dependencies" => ["baz", "qux"]),
+    )
+  end
+
+  describe "dependency linkage declarations" do
+    test_each([[[], [:test, :no_linkage]], [[:no_linkage], [:test]], [[], [:no_linkage]]]
+                .flat_map { |tags| [tags, tags.reverse] }) do |(first_tags, second_tags)|
+      it "rejects conflicting #{first_tags} then #{second_tags} declarations" do
+        expect do
+          formula "foo" do
+            T.bind(self, T.class_of(Formula))
+            url "foo-1.0"
+            depends_on "bar" => first_tags
+            depends_on "bar" => second_tags
+          end
+        end.to raise_error(FormulaSpecificationError,
+                           'foo: conflicting :no_linkage declarations for "bar" in the stable spec')
+      end
+    end
+
+    it "allows matching declarations across roles" do
+      f = formula "foo" do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+        depends_on "bar" => :no_linkage
+        depends_on "bar" => [:test, :no_linkage]
+      end
+
+      expect(f.declared_deps.map(&:tags)).to eq([[:no_linkage], [:test, :no_linkage]])
+    end
+
+    it "ignores implicit dependencies when validating declarations" do
+      f = formula "foo" do
+        T.bind(self, T.class_of(Formula))
+        stable do
+          url "foo-1.0"
+          dependency_collector.add(Dependency.new("bar", [:build, :implicit]))
+          depends_on "bar" => :no_linkage
+        end
+      end
+
+      expect(f.declared_deps.map(&:tags)).to eq([[:build, :implicit], [:no_linkage]])
+    end
+
+    it "allows stable and HEAD to have different linkage declarations" do
+      f = formula "foo" do
+        T.bind(self, T.class_of(Formula))
+        stable do
+          url "foo-1.0"
+          depends_on "bar"
+        end
+        head do
+          url "foo-HEAD"
+          depends_on "bar" => :no_linkage
+        end
+      end
+
+      expect([f.stable&.declared_deps&.map(&:tags), f.head&.declared_deps&.map(&:tags)])
+        .to eq([[[]], [[:no_linkage]]])
+    end
+
+    it "rejects conflicting HEAD declarations while loading stable" do
+      expect do
+        formula "foo" do
+          T.bind(self, T.class_of(Formula))
+          url "foo-1.0"
+          depends_on "bar"
+          head do
+            url "foo-HEAD"
+            depends_on "bar" => [:test, :no_linkage]
+          end
+        end
+      end.to raise_error(FormulaSpecificationError,
+                         'foo: conflicting :no_linkage declarations for "bar" in the head spec')
+    end
+  end
+
   describe "#to_hash patches" do
+    before do
+      allow_any_instance_of(LocalPatch).to receive(:contents).and_return("patch contents")
+    end
+
+    it "includes checksums for stable, HEAD and resource patch files" do
+      f = formula "foo" do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+        patch do
+          file "Patches/stable.diff"
+        end
+        resource "bar" do
+          url "bar-1.0"
+          patch do
+            file "Patches/resource.diff"
+          end
+        end
+        head do
+          url "https://example.com/foo.git"
+          patch do
+            file "Patches/head.diff"
+          end
+          resource "baz" do
+            url "baz-1.0"
+            patch do
+              file "Patches/head-resource.diff"
+            end
+          end
+        end
+      end
+
+      expect(f.to_hash["local_patch_checksums"]).to eq(
+        %w[stable resource head head-resource].to_h do |name|
+          ["Patches/#{name}.diff", Digest::SHA256.hexdigest("patch contents")]
+        end,
+      )
+    end
+
+    shared_examples "an unreadable local patch" do |error|
+      let(:f) do
+        formula "foo" do
+          T.bind(self, T.class_of(Formula))
+          url "foo-1.0"
+          patch do
+            file "Patches/unreadable.diff"
+          end
+          patch do
+            file "Patches/valid.diff"
+          end
+        end
+      end
+
+      before do
+        allow(f.patchlist.fetch(0)).to receive(:contents).and_raise(error, "unreadable patch")
+      end
+
+      it "serialises checksums for the remaining patches" do
+        expect(f.to_hash["local_patch_checksums"])
+          .to eq("Patches/valid.diff" => Digest::SHA256.hexdigest("patch contents"))
+      end
+
+      it "warns about the omitted checksum" do
+        expect { f.to_hash }.to output(%r{cannot checksum Patches/unreadable.diff}).to_stderr
+      end
+
+      it "rejects unreadable patches during API generation" do
+        allow(described_class).to receive(:generating_hash?).and_return(true)
+
+        expect { f.to_hash }.to raise_error(error, /unreadable patch/)
+      end
+    end
+
+    it_behaves_like "an unreadable local patch", ArgumentError
+    it_behaves_like "an unreadable local patch", Errno::EACCES
+
     it "serialises an external patch" do
       f = formula "foo" do
         T.bind(self, T.class_of(Formula))

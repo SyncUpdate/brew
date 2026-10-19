@@ -7,6 +7,7 @@ require "cask/quarantine"
 require "deprecate_disable"
 require "install"
 require "upgrade"
+require "version_change"
 require "utils/output"
 require "cask/installer"
 
@@ -32,7 +33,7 @@ module Cask
         greedy:              T.nilable(T::Boolean),
         greedy_latest:       T.nilable(T::Boolean),
         greedy_auto_updates: T.nilable(T::Boolean),
-        summary_pinned:      T.nilable(T::Array[String]),
+        summary_pinned:      T.nilable(T::Array[VersionChange]),
         summary_disabled:    T.nilable(T::Array[String]),
       ).returns(T::Array[Cask])
     }
@@ -82,28 +83,29 @@ module Cask
       pinned_casks = outdated_casks.select(&:pinned?)
       outdated_casks -= pinned_casks
       pinned_versions = pinned_casks.map do |cask|
-        "#{cask.full_name} #{cask.installed_version} -> #{cask.version}"
+        VersionChange.new(name: cask.full_name, old_version: cask.installed_version.to_s,
+                          new_version: cask.version.to_s)
       end
       summary_pinned&.concat(pinned_versions)
 
       if pinned_casks.any? && ((!quiet && summary_pinned.nil?) || casks.any?)
         message = "Not upgrading #{pinned_casks.count} pinned #{::Utils.pluralize("package", pinned_casks.count)}:"
         casks.any? ? ofail(message) : opoo(message)
-        $stderr.puts Homebrew::Upgrade.format_upgrade_summary(pinned_versions).join("\n") if
+        $stderr.puts Formatter.version_changes(pinned_versions).join("\n") if
           !quiet && summary_pinned.nil?
       end
 
       outdated_casks
     end
 
-    sig { params(cask_upgrades: T::Array[String], dry_run: T.nilable(T::Boolean), verb: String).void }
+    sig { params(cask_upgrades: T::Array[VersionChange], dry_run: T.nilable(T::Boolean), verb: String).void }
     def self.show_upgrade_summary(cask_upgrades, dry_run: false, verb: "Upgrading")
       cask_upgrades = cask_upgrades.uniq
       return if cask_upgrades.empty?
 
       verb = "Would upgrade" if dry_run
       oh1 "#{verb} #{cask_upgrades.count} outdated #{::Utils.pluralize("package", cask_upgrades.count)}:"
-      puts Homebrew::Upgrade.format_upgrade_summary(cask_upgrades).join("\n")
+      puts Formatter.version_changes(cask_upgrades).join("\n")
     end
 
     sig {
@@ -124,8 +126,8 @@ module Cask
         skip_prefetch:              T::Boolean,
         show_upgrade_summary:       T::Boolean,
         download_queue:             T.nilable(Homebrew::DownloadQueue),
-        summary_upgrades:           T.nilable(T::Array[String]),
-        summary_pinned:             T.nilable(T::Array[String]),
+        summary_upgrades:           T.nilable(T::Array[VersionChange]),
+        summary_pinned:             T.nilable(T::Array[VersionChange]),
         summary_deprecated:         T.nilable(T::Array[String]),
         summary_disabled:           T.nilable(T::Array[String]),
         prefetched_errors:          T.nilable(T::Array[StandardError]),
@@ -272,7 +274,8 @@ module Cask
       return false if upgradable_casks.empty? && !failed
 
       cask_upgrades = upgradable_casks.map do |(old_cask, new_cask)|
-        "#{new_cask.full_name} #{old_cask.version} -> #{new_cask.version}"
+        VersionChange.new(name: new_cask.full_name, old_version: old_cask.version.to_s,
+                          new_version: new_cask.version.to_s)
       end
       summary_upgrades&.concat(cask_upgrades) if dry_run
       summary_deprecated&.concat(upgradable_casks.filter_map do |(_, new_cask)|
@@ -385,6 +388,7 @@ module Cask
       binaries:, force:, require_sha:, quit:, skip_cask_deps:, verbose:, download_queue:,
       new_cask_installer: nil
     )
+      completed = false
       start_time = Time.now
       odebug "Started upgrade process for Cask #{old_cask}"
       old_config = old_cask.config
@@ -419,8 +423,8 @@ module Cask
       new_artifacts_installed = false
       old_signing_identities = T.let({}, T::Hash[String, T.nilable(Quarantine::SigningIdentity)])
       old_user_approved = T.let({}, T::Hash[String, T::Boolean])
-      old_approved_paths = T.let({}, T::Hash[String, T::Array[String]])
       old_unquarantined = T.let({}, T::Hash[String, T::Boolean])
+      old_cask.temp = new_cask.temp
 
       begin
         oh1 "Upgrading #{Formatter.identifier(old_cask)}"
@@ -436,16 +440,10 @@ module Cask
         # This snapshot reads quarantine metadata, so it needs the same guard as the code below that uses it.
         if Quarantine.available?
           old_cask.artifacts.grep(Artifact::App).each do |artifact|
-            user_approved = if artifact.target.exist?
+            old_user_approved[artifact.target.to_s] = if artifact.target.exist?
               Quarantine.user_approved?(artifact.target)
             else
               false
-            end
-            old_user_approved[artifact.target.to_s] = user_approved
-            # Only an already approved app has approvals to pass on, so skip the scan otherwise.
-            if user_approved
-              old_approved_paths[artifact.target.to_s] =
-                Quarantine.user_approved_paths(artifact.target)
             end
             old_unquarantined[artifact.target.to_s] = if artifact.target.exist?
               Quarantine.detect(artifact.target).blank?
@@ -475,10 +473,7 @@ module Cask
               odebug "#{new_cask.token} wasn't quarantined so approving the new version to match."
             end
             new_cask.artifacts.grep(Artifact::App).each do |artifact|
-              Quarantine.inherit_user_approval!(
-                download_path:  artifact.target,
-                approved_paths: old_approved_paths.fetch(artifact.target.to_s, []),
-              )
+              Quarantine.inherit_user_approval!(download_path: artifact.target)
             rescue CaskQuarantineReleaseError => e
               odebug e
               opoo "Homebrew couldn't inherit #{new_cask.token}'s quarantine approval so macOS may prompt at " \
@@ -527,6 +522,10 @@ module Cask
 
       end_time = Time.now
       Homebrew.messages.package_installed(new_cask.token, end_time - start_time)
+      completed = true
+    ensure
+      new_cask.cleanup_temp(retain: !completed)
+      old_cask.temp = nil
     end
   end
 end

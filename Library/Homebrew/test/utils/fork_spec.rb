@@ -28,7 +28,64 @@ RSpec.describe Utils do
     end
   end
 
+  describe "::report_forked_child_error" do
+    it "preserves a BuildError with Pathname commands and arguments" do
+      error = BuildError.new(nil, Pathname("/bin/false"), ["arg1", 2, Pathname("arg 3"), :arg4], { "PATH" => "/bin" })
+      error.set_backtrace ["/some/file.rb:1:in 'block'"]
+
+      IO.pipe do |reader, writer|
+        described_class.report_forked_child_error(writer, error)
+
+        expect(described_class.rewrite_child_error(JSON.parse(reader.read))).to have_attributes(
+          class:     BuildError,
+          cmd:       "/bin/false",
+          args:      ["arg1", "2", "arg 3", "arg4"],
+          env:       { "PATH" => "/bin" },
+          message:   error.message,
+          backtrace: error.backtrace,
+        )
+      end
+    end
+
+    it "preserves an ErrorDuringExecution with a Pathname command" do
+      error = ErrorDuringExecution.new([Pathname("/usr/bin/false"), "arg"], status: 1)
+
+      IO.pipe do |reader, writer|
+        described_class.report_forked_child_error(writer, error)
+
+        expect(described_class.rewrite_child_error(JSON.parse(reader.read))).to have_attributes(
+          class: ErrorDuringExecution,
+          cmd:   ["/usr/bin/false", "arg"],
+        )
+      end
+    end
+  end
+
   describe "#safe_fork" do
+    it "reports only the parent error when the child reports a failure after disconnection" do
+      handler = proc do |_message|
+        raise Errno::EACCES, "/usr/local/bin/kubectl"
+      end
+
+      expect do
+        Timeout.timeout(10) do
+          described_class.safe_fork(child_message_handler: handler) do
+            exec RUBY_PATH.to_s, "-I", HOMEBREW_LIBRARY_PATH.to_s, "-rglobal", "-rutils/fork", "-e", <<~RUBY
+              channel = Utils.forked_child_channel
+              channel.puts "privileged step"
+              channel.flush
+              exit! 0 if channel.gets
+
+              Utils.report_forked_child_error(channel, RuntimeError.new("parent step failed"))
+              exit! 1
+            RUBY
+          end
+        end
+      rescue Errno::EACCES => e
+        warn e.message
+      end.to output("Permission denied - /usr/local/bin/kubectl\n").to_stderr_from_any_process
+    end
+
     it "preserves a parent failure while the child error pipe is open" do
       IO.pipe do |ready_read, ready_write|
         expect do

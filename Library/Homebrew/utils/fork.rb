@@ -68,8 +68,8 @@ module Utils
     }
     case error
     when BuildError
-      error_hash["cmd"] = error.cmd
-      error_hash["args"] = error.args
+      error_hash["cmd"] = error.cmd.to_s
+      error_hash["args"] = error.args.map(&:to_s)
       error_hash["env"] = error.env
     when ErrorDuringExecution
       error_hash["cmd"] = error.cmd
@@ -93,12 +93,16 @@ module Utils
     coder = JSON::Coder.new do |object|
       case object
       when Exception then child_error_hash(object)
+      when Pathname then object.to_s
       else object
       end
     end
 
     error_pipe&.puts coder.dump(error)
     error_pipe&.close
+  rescue Errno::EPIPE
+    # The parent has already failed and closed its end of the pipe.
+    nil
   end
 
   sig { params(child_error: T::Hash[String, T.untyped]).returns(Exception) }

@@ -247,9 +247,7 @@ module Homebrew
           metadata << pinned
         end
 
-        if !formula.any_version_installed? &&
-           formula_installs_from_source?(formula) &&
-           formula.requirements.none? { |requirement| requirement_for_other_os?(requirement) }
+        if !formula.any_version_installed? && formula_installs_from_source?(formula)
           metadata << "Installs from source: yes"
         end
         metadata
@@ -271,6 +269,7 @@ module Homebrew
 
       sig { params(formula: T.untyped).returns(T::Boolean) }
       def self.formula_installs_from_source?(formula)
+        return false if formula.requirements.any? { |requirement| requirement_for_other_os?(requirement) }
         return true if formula.stable.blank? && formula.head.present?
         return false if formula.stable.blank?
 
@@ -313,8 +312,7 @@ module Homebrew
         end
       end
 
-      private_class_method :formula_metadata_lines, :formatted_time, :pin_path_mtime,
-                           :formula_installs_from_source?
+      private_class_method :formula_metadata_lines, :formatted_time, :pin_path_mtime
 
       sig { params(quiet: T::Boolean).void }
       def print_info(quiet: false)
@@ -380,7 +378,20 @@ module Homebrew
           # which case there is no meaningful upstream URL to link to.
           return formula.path.to_s unless formula.path.to_s.start_with?("#{tap.path}/")
 
-          formula.path.relative_path_from(tap.path)
+          relative_path = formula.path.relative_path_from(tap.path)
+          unless formula.loaded_from_api?
+            @tracked_files ||= T.let({}, T.nilable(T::Hash[Tap, T::Set[String]]))
+            @tracked_files[tap] ||= Utils.popen_read(Utils::Git.git, "-C", tap.path, "ls-files",
+                                                     "-z").split("\0").to_set
+            if @tracked_files.fetch(tap).exclude?(relative_path.to_s)
+              installed_path = formula.opt_prefix/".brew/#{formula.name}.rb"
+              return installed_path.to_s if installed_path.file? && Tab.for_keg(formula.opt_prefix).tap == tap
+
+              return formula.path.to_s
+            end
+          end
+
+          relative_path
         when Cask::Cask
           cask = formula_or_cask
           tap = cask.tap
@@ -426,8 +437,13 @@ module Homebrew
       def info_formula(formula, shadowed_by: nil)
         specs = T.let([], T::Array[String])
 
+        shadowing_formula = shadowing_installed_formula(formula)
+        kegs = shadowing_formula ? [] : formula.installed_kegs
+        installed = kegs.any?
+        outdated = installed && formula.outdated?
+
         if (stable = formula.stable)
-          string = "stable #{stable.version}"
+          string = "stable #{outdated ? formula.pkg_version : stable.version}"
           string += " (bottled)" if stable.bottled? && formula.pour_bottle?
           specs << string
         end
@@ -437,10 +453,6 @@ module Homebrew
         attrs = []
         attrs << "keg-only" if formula.keg_only?
 
-        shadowing_formula = shadowing_installed_formula(formula)
-        kegs = shadowing_formula ? [] : formula.installed_kegs
-        installed = kegs.any?
-        outdated = installed && formula.outdated?
         missing_libraries, missing_library_deps = formula.missing_library_linkage if installed
         missing_libraries ||= []
         missing_library_deps ||= Set.new
@@ -546,12 +558,10 @@ module Homebrew
         else
           [].freeze
         end
+        built_from_source = kegs.any? { |keg| !keg.tab.poured_from_bottle }
+        installs_from_source = !installed && self.class.formula_installs_from_source?(formula)
         dependency_lines = %w[build required recommended optional].filter_map do |type|
-          next if type == "build" &&
-                  (kegs.all? { |keg| keg.tab.poured_from_bottle } ||
-                   (kegs.empty? &&
-                    (formula.requirements.any? { |requirement| self.class.requirement_for_other_os?(requirement) } ||
-                     (stable.present? ? stable.bottled? && formula.pour_bottle? : formula.head.blank?))))
+          next if type == "build" && !built_from_source && !installs_from_source
 
           deps = formula.deps.public_send(type).uniq
           next if deps.empty?

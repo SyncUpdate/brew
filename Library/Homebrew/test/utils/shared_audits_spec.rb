@@ -188,6 +188,13 @@ RSpec.describe SharedAudits do
         .to include("`homepage` domain `brew.sh` was registered on 2026-07-01")
     end
 
+    it "parses `whois` registration dates that start with a weekday" do
+      mock_whois stdout: whois_output.sub("Creation Date: 2026-07-01T15:50:45Z", "Registered:\tWed Jul 1 2026")
+
+      expect(described_class.new_domain_problem("https://brew.sh"))
+        .to include("`homepage` domain `brew.sh` was registered on 2026-07-01")
+    end
+
     it "ignores the IANA record for the TLD when the registry publishes no date" do
       mock_whois stdout: "#{whois_output.lines.take(5).join}Domain: brew.sh\nStatus: connect\n"
 
@@ -242,6 +249,131 @@ RSpec.describe SharedAudits do
         expect(SystemCommand).not_to receive(:run)
         expect(described_class.new_domain_problem(homepage)).to be_nil
       end
+    end
+  end
+
+  describe "::pull_request_commit_email_domains" do
+    let(:commits_url) { "https://api.github.com/repos/Homebrew/homebrew-cask/pulls/1/commits" }
+
+    before { described_class.pull_request_commit_email_domains = nil }
+    after { described_class.pull_request_commit_email_domains = nil }
+
+    it "returns the email domains of the pull request's commit authors" do
+      event_path = mktmpdir/"event.json"
+      event_path.write(JSON.generate({ pull_request: { commits_url: } }))
+      ENV["GITHUB_EVENT_PATH"] = event_path.to_s
+      first_page = [{ "commit" => { "author" => { "email" => "Jo@Acme.io" } } }]
+      second_page = [{ "commit" => { "author" => { "email" => "x@brew.sh" } } }]
+      allow(GitHub::API).to receive(:paginate_rest).with(commits_url)
+                                                   .and_yield(first_page, 1).and_yield(second_page, 2)
+
+      expect(described_class.pull_request_commit_email_domains).to eq(["acme.io", "brew.sh"])
+    end
+
+    it "returns no domains outside a pull request" do
+      ENV.delete("GITHUB_EVENT_PATH")
+
+      expect(described_class.pull_request_commit_email_domains).to be_empty
+    end
+  end
+
+  describe "::commit_email_domain_match" do
+    before { allow(described_class).to receive(:pull_request_commit_email_domains).and_return(["acme.io"]) }
+
+    it "returns the stanza and domain at a commit author's email domain" do
+      expect(described_class.commit_email_domain_match({ homepage: "https://www.acme.io/app" }))
+        .to eq([:homepage, "acme.io"])
+    end
+
+    it "matches a subdomain of a commit author's email domain" do
+      urls = { homepage: "https://acmeapp.com", url: "https://dl.acme.io/app.dmg" }
+
+      expect(described_class.commit_email_domain_match(urls)).to eq([:url, "dl.acme.io"])
+    end
+
+    it "ignores other domains" do
+      expect(described_class.commit_email_domain_match({ homepage: "https://notacme.io" })).to be_nil
+    end
+
+    it "ignores git forge domains" do
+      allow(described_class).to receive(:pull_request_commit_email_domains).and_return(["github.com"])
+
+      expect(described_class.commit_email_domain_match({ homepage: "https://github.com/acme/app" })).to be_nil
+    end
+  end
+
+  describe "::self_submission_problem" do
+    before { allow(described_class).to receive(:pull_request_commit_email_domains).and_return(["acme.io"]) }
+
+    it "reports self-submissions without a repository to assess" do
+      urls = { homepage: "https://acmeapp.com", url: "https://dl.acme.io/app.dmg" }
+
+      expect(described_class.self_submission_problem(urls)).to include("matches the `url` domain `dl.acme.io`")
+    end
+
+    it "reports self-submissions whose git forge pages have no repository to assess" do
+      urls = { homepage: "https://acme.github.io", url: "https://acme.io/app.dmg" }
+
+      expect(described_class.self_submission_problem(urls)).to include("matches the `url` domain `acme.io`")
+    end
+
+    it "ignores git forge URLs embedded in other URLs" do
+      urls = { homepage: "https://acme.io", url: "https://dl.acme.io/app.dmg?source=https://github.com/acme/app" }
+
+      expect(described_class.self_submission_problem(urls)).to include("matches the `homepage` domain `acme.io`")
+    end
+
+    it "leaves self-submissions with a repository to the notability audits" do
+      urls = { homepage: "https://acme.io", url: "https://github.com/acme/app/releases/download/v1.0/app.dmg" }
+
+      expect(described_class.self_submission_problem(urls)).to be_nil
+    end
+  end
+
+  describe "::livecheck_required_problem" do
+    it "reports a `livecheck` block that uses `skip`" do
+      cask = Cask::Cask.new("livecheck-skip") do
+        url "https://github.com/acme/app/releases/download/1.0/app.dmg"
+        livecheck do
+          skip "No version information available"
+        end
+      end
+
+      expect(described_class.livecheck_required_problem(cask)).to include("uses `skip` in its `livecheck` block")
+    end
+
+    it "reports URLs without a default `livecheck` strategy" do
+      f = formula do
+        T.bind(self, T.class_of(Formula))
+        homepage "https://brew.sh"
+        url "https://brew.sh/foo-1.0.tar.gz"
+      end
+
+      expect(described_class.livecheck_required_problem(f)).to include("New formulae must have a working `livecheck`")
+    end
+
+    it "accepts URLs with a default `livecheck` strategy" do
+      cask = Cask::Cask.new("livecheck-default") do
+        url "https://github.com/acme/app/releases/download/1.0/app.dmg"
+        homepage "https://acme.io"
+      end
+
+      expect(described_class.livecheck_required_problem(cask)).to be_nil
+    end
+
+    it "accepts a `livecheck` block that does not use `skip`" do
+      f = formula do
+        T.bind(self, T.class_of(Formula))
+        homepage "https://brew.sh"
+        url "https://brew.sh/foo-1.0.tar.gz"
+
+        livecheck do
+          url :homepage
+          regex(/foo[._-]v?(\d+(?:\.\d+)+)\.t/i)
+        end
+      end
+
+      expect(described_class.livecheck_required_problem(f)).to be_nil
     end
   end
 

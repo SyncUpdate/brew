@@ -30,6 +30,12 @@ module Cask
 
     DOWNLOAD_TIMEOUT = 600
 
+    GATEKEEPER_BUNDLE_ARTIFACTS = T.let([
+      Artifact::App, Artifact::AudioUnitPlugin, Artifact::Colorpicker, Artifact::InputMethod,
+      Artifact::InternetPlugin, Artifact::Mdimporter, Artifact::Prefpane, Artifact::ScreenSaver,
+      Artifact::Service, Artifact::Vst3Plugin, Artifact::VstPlugin
+    ].freeze, T::Array[T.class_of(Artifact::Moved)])
+
     Error = T.type_alias do
       {
         message:   T.nilable(String),
@@ -168,14 +174,15 @@ module Cask
 
     sig {
       params(
-        include_manual_installers: T::Boolean,
-        _block:                    T.nilable(T.proc.params(
+        include_manual_installers:      T::Boolean,
+        include_all_signable_artifacts: T::Boolean,
+        _block:                         T.nilable(T.proc.params(
           arg0: T::Array[T.any(Artifact::Installer, Artifact::Pkg, Artifact::Relocated)],
           arg1: Pathname,
         ).void),
       ).void
     }
-    def extract_artifacts(include_manual_installers: false, &_block)
+    def extract_artifacts(include_manual_installers: false, include_all_signable_artifacts: false, &_block)
       return unless online?
       return if download.nil? || @download_failed
 
@@ -186,7 +193,10 @@ module Cask
           (include_manual_installers &&
             artifact.is_a?(Artifact::Installer) &&
             artifact.manual_install &&
-            [".app", ".pkg"].include?(artifact.path.extname.downcase))
+            [".app", ".pkg"].include?(artifact.path.extname.downcase)) ||
+          (include_all_signable_artifacts &&
+            [Artifact::Installer, Artifact::Suite, Artifact::Artifact, *GATEKEEPER_BUNDLE_ARTIFACTS]
+              .any? { artifact.is_a?(it) })
       end
 
       if @artifacts_extracted && @tmpdir
@@ -621,7 +631,7 @@ module Cask
                                                  Homebrew::SimulateSystem.current_arch.to_s) ||
                        cask.tap&.audit_exception(:signing_audit_skiplist, cask.token, "all")
 
-      extract_artifacts(include_manual_installers: true) do |artifacts, tmpdir|
+      extract_artifacts(include_all_signable_artifacts: true) do |artifacts, tmpdir|
         is_container = artifacts.any? do |artifact|
           artifact.is_a?(Artifact::App) || artifact.is_a?(Artifact::Pkg) ||
             (artifact.is_a?(Artifact::Installer) && [".app", ".pkg"].include?(artifact.path.extname.downcase))
@@ -647,18 +657,14 @@ module Cask
 
           result = case artifact
           when Artifact::Pkg
-            system_command("spctl", args: ["--assess", "--type", "install", path], print_stderr: false)
-          when Artifact::App
-            next opoo "gktool not found, skipping app signing audit" unless which("gktool")
-
-            system_command("gktool", args: ["scan", path], print_stderr: false)
+            package_assessment(path)
           when Artifact::Installer
             if artifact.path.extname.downcase == ".app"
-              next opoo "gktool not found, skipping app signing audit" unless which("gktool")
-
-              system_command("gktool", args: ["scan", path], print_stderr: false)
+              gatekeeper_scan(path)
             elsif artifact.path.extname.downcase == ".pkg"
-              system_command("spctl", args: ["--assess", "--type", "install", path], print_stderr: false)
+              package_assessment(path)
+            elsif !artifact.manual_install && BinaryPathname.wrap(path).binary_executable?
+              notarization_check(path)
             else
               next false
             end
@@ -666,19 +672,52 @@ module Cask
             # Shell scripts cannot be signed, so we skip them
             next false if ::Utils::Path.text_executable?(path)
 
-            system_command("codesign", args:         ["--verify", "-R=notarized", "--check-notarization", path],
-                                       print_stderr: false)
+            notarization_check(path)
+          when Artifact::Suite, Artifact::Artifact
+            bundle_extnames = %w[
+              .app .bundle .colorpicker .component .mdimporter .plugin .prefpane .saver .service .vst .vst3
+            ]
+            # `gktool scan` fails any plain folder, so check the bundles and executables inside instead.
+            failed_path, failed_result = path.find do |found|
+              next if found.symlink?
+
+              bundle = found.directory? && bundle_extnames.include?(found.extname.downcase)
+              # Gatekeeper can reject quarantined resource-only bundles, so traverse them as plain folders.
+              if bundle && found.extname.downcase == ".bundle" &&
+                 !(found/"Contents/Info.plist").file? && !(found/"Info.plist").file?
+                bundle = found.find.any? do |child|
+                  # The outer traversal assesses nested bundles separately.
+                  Find.prune if child != found && child.directory? && bundle_extnames.include?(child.extname.downcase)
+                  next false unless child.file?
+
+                  binary = BinaryPathname.wrap(child)
+                  binary.binary_executable? || binary.dylib? || binary.mach_o_bundle?
+                end
+              end
+              found_result = if bundle
+                gatekeeper_scan(found)
+              elsif found.file? && found.executable? && BinaryPathname.wrap(found).binary_executable?
+                notarization_check(found)
+              end
+              break found, found_result if found_result&.success? == false
+
+              Find.prune if bundle
+            end
+            path = failed_path if failed_path
+            failed_result
+          when *GATEKEEPER_BUNDLE_ARTIFACTS
+            gatekeeper_scan(path)
           else
             add_error "Unknown artifact type: #{artifact.class}", location: url.location
             next
           end
 
-          next false if result.success?
+          next false if result.nil? || result.success?
           next true if gatekeeper_failure_expected
           next true if is_in_skiplist
 
           signing_failure_message = <<~EOS
-            Signature verification failed:
+            Signature verification failed for #{path.relative_path_from(tmpdir)}:
             #{result.merged_output}
           EOS
 
@@ -1047,7 +1086,7 @@ module Cask
       return unless new_cask?
       return if (url = cask.url).nil?
 
-      user, repo = get_repo_data(%r{https?://github\.com/([^/]+)/([^/]+)/?.*})
+      user, repo = get_repo_data(SharedAudits::NOTABILITY_REPOSITORY_REGEXES.fetch(:github))
       return if user.nil? || repo.nil?
 
       odebug "Auditing GitHub repo"
@@ -1062,7 +1101,7 @@ module Cask
       return unless new_cask?
       return if (url = cask.url).nil?
 
-      user, repo = get_repo_data(%r{https?://gitlab\.com/([^/]+)/([^/]+)/?.*})
+      user, repo = get_repo_data(SharedAudits::NOTABILITY_REPOSITORY_REGEXES.fetch(:gitlab))
       return if user.nil? || repo.nil?
 
       odebug "Auditing GitLab repo"
@@ -1077,7 +1116,7 @@ module Cask
       return unless new_cask?
       return if (url = cask.url).nil?
 
-      user, repo = get_repo_data(%r{https?://bitbucket\.org/([^/]+)/([^/]+)/?.*})
+      user, repo = get_repo_data(SharedAudits::NOTABILITY_REPOSITORY_REGEXES.fetch(:bitbucket))
       return if user.nil? || repo.nil?
 
       odebug "Auditing Bitbucket repo"
@@ -1092,7 +1131,7 @@ module Cask
       return unless new_cask?
       return if (url = cask.url).nil?
 
-      user, repo = get_repo_data(%r{https?://codeberg\.org/([^/]+)/([^/]+)/?.*})
+      user, repo = get_repo_data(SharedAudits::NOTABILITY_REPOSITORY_REGEXES.fetch(:forgejo))
       return if user.nil? || repo.nil?
 
       odebug "Auditing Forgejo repo"
@@ -1162,6 +1201,25 @@ module Cask
     end
 
     sig { void }
+    def audit_self_submission
+      return unless new_cask?
+      return unless online?
+      return unless cask.tap&.official?
+
+      self_submission_problem = SharedAudits.self_submission_problem(self_submission_urls)
+      add_error self_submission_problem if self_submission_problem
+    end
+
+    sig { void }
+    def audit_livecheck_required
+      return unless new_cask?
+      return unless cask.tap&.official?
+
+      livecheck_required_problem = SharedAudits.livecheck_required_problem(cask)
+      add_error livecheck_required_problem if livecheck_required_problem
+    end
+
+    sig { void }
     def audit_url_https_availability
       return unless online?
       return unless (url = cask.url)
@@ -1218,6 +1276,27 @@ module Cask
     end
 
     private
+
+    sig { params(path: Pathname).returns(T.nilable(SystemCommand::Result)) }
+    def gatekeeper_scan(path)
+      unless which("gktool")
+        opoo "gktool not found, skipping bundle signing audit"
+        return
+      end
+
+      system_command("gktool", args: ["scan", path], print_stderr: false)
+    end
+
+    sig { params(path: Pathname).returns(SystemCommand::Result) }
+    def package_assessment(path)
+      system_command("spctl", args: ["--assess", "--type", "install", path], print_stderr: false)
+    end
+
+    sig { params(path: Pathname).returns(SystemCommand::Result) }
+    def notarization_check(path)
+      system_command("codesign", args:         ["--verify", "-R=notarized", "--check-notarization", path],
+                                 print_stderr: false)
+    end
 
     sig { returns(T.nilable(Pathname)) }
     def fetch_download
@@ -1420,7 +1499,13 @@ module Cask
     def self_submission?(repo_owner)
       return false if repo_owner.empty?
 
-      SharedAudits.self_submission_for_repo_owner?(repo_owner)
+      SharedAudits.self_submission_for_repo_owner?(repo_owner) ||
+        !SharedAudits.commit_email_domain_match(self_submission_urls).nil?
+    end
+
+    sig { returns(T::Hash[Symbol, T.nilable(String)]) }
+    def self_submission_urls
+      { homepage: cask.homepage, url: cask.url&.to_s }
     end
 
     sig {

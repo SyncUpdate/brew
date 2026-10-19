@@ -86,7 +86,10 @@ homepage "https://www.example.com", browsed: "2026-07-26"
 
 This skips automated homepage availability audits for one year. Do not use a future date.
 
-Try to summarise from the [`homepage`](/rubydoc/Formula.html#homepage-class_method) what the formula does in the [`desc`](/rubydoc/Formula.html#desc-class_method). Note that the [`desc`](/rubydoc/Formula.html#desc-class_method) is automatically prepended with the formula name when printed.
+### Fill in the `desc`
+
+Summarise what the formula does in one line in the [`desc`](/rubydoc/Formula.html#desc-class_method), following the [Description Guidelines](Description-Guidelines.md).
+The formula name is automatically prepended to the `desc` when printed, so there is no need to repeat it.
 
 ### Fill in the `license`
 
@@ -178,6 +181,8 @@ A `Hash` (e.g. `=>`) adds information to a dependency. Given a string or symbol,
 
 * `:build` means this is a build-time only dependency so it can be skipped when installing from a bottle or when listing missing dependencies using `brew missing`.
 * `:test` means this is only required when running `brew test`.
+* `:no_linkage` means the formula does not link against this dependency; it does not change when the dependency is required.
+  All explicit declarations of the same dependency within a spec and platform must agree on `:no_linkage`; stable, HEAD and different platforms may differ.
 * `:optional` (not allowed in `Homebrew/homebrew-core`) generates an implicit `with-foo` option for the formula. This means that, given `depends_on "foo" => :optional`, the user must pass `--with-foo` to use the dependency.
 * `:recommended` (not allowed in `Homebrew/homebrew-core`) generates an implicit `without-foo` option, meaning that the dependency is enabled by default and the user must pass `--without-foo` to disable this dependency. The default description can be overridden using the [`option`](/rubydoc/Formula.html#option-class_method) syntax (in this case, the [`option` declaration](#adding-optional-steps) must precede the dependency):
 
@@ -358,8 +363,8 @@ end
   `brew test-bot` fetches test resources alongside the tested formula's source or bottle so these downloads can run in parallel.
   Ordinary source fetches and installations skip test-only resources.
   Formulae that iterate over `resources` during installation must use `resources.reject(&:test?)` to exclude test fixtures.
-  `brew style --fix --only-cops=FormulaAuditStrict/TestResource <formula>` moves static resource declarations out of `test do` and adds `:test`; declarations using test-time values require manual migration.
-  This check runs during strict audits and is excluded from ordinary `brew style` checks.
+  `brew style --fix --only-cops=FormulaAudit/TestResource <formula>` moves static resource declarations out of `test do` and adds `:test`; declarations using test-time values require manual migration.
+  This check runs during ordinary `brew style` checks for all homebrew/core formulae.
 
 * If the binary only writes to `stderr`, you can redirect `stderr` to `stdout` for assertions with `shell_output`. For example:
 

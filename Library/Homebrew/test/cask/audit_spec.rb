@@ -811,21 +811,44 @@ RSpec.describe Cask::Audit, :cask do
         allow(audit).to receive_messages(download: download_double, signing?: true)
       end
 
-      context "when cask is not using a signed artifact" do
+      test_each(["font 'Audit.ttf'", "qlplugin 'Audit.qlgenerator'"]) do |stanza|
+        context "when cask only has `#{stanza}`" do
+          let(:cask) do
+            tmp_cask "signing-cask-test", <<~RUBY
+              cask 'signing-cask-test' do
+                version '1.0'
+                url "https://brew.sh/index.html"
+                #{stanza}
+              end
+            RUBY
+          end
+
+          it "does not fail" do
+            expect(download_double).not_to receive(:fetch)
+            expect(UnpackStrategy).not_to receive(:detect)
+            expect(run).not_to error_with(/Audit\.app/)
+          end
+        end
+      end
+
+      context "when cask only has a suite" do
+        let(:online) { true }
         let(:cask) do
           tmp_cask "signing-cask-test", <<~RUBY
             cask 'signing-cask-test' do
               version '1.0'
-              url "https://brew.sh/index.html"
-              artifact "example.pdf", target: "/Library/Application Support/example"
+              url "https://brew.sh/"
+              suite 'Audit Suite'
             end
           RUBY
         end
 
-        it "does not fail" do
-          expect(download_double).not_to receive(:fetch)
-          expect(UnpackStrategy).not_to receive(:detect)
-          expect(run).not_to error_with(/Audit\.app/)
+        it "extracts it" do
+          allow(Cask::Quarantine).to receive(:available?).and_return(true)
+          allow(ObjectSpace).to receive(:define_finalizer)
+          allow(download_double).to receive(:fetch).and_return(Pathname.new("/tmp/test.zip"))
+          expect(UnpackStrategy).to receive(:detect).and_return(nil)
+          run
         end
       end
 
@@ -918,6 +941,145 @@ RSpec.describe Cask::Audit, :cask do
         it "skips the signing audit" do
           expect(Cask::Quarantine).not_to receive(:available?)
           run
+        end
+      end
+
+      context "when cask has other signable artifacts" do
+        let(:tmpdir) { mktmpdir }
+        let(:passed_result) { instance_double(SystemCommand::Result, success?: true) }
+        let(:failed_result) do
+          instance_double(SystemCommand::Result, success?: false, merged_output: "rejected")
+        end
+        let(:cask_artifact) { "suite 'Audit Suite'" }
+        let(:cask) do
+          tmp_cask "signing-cask-test", <<~RUBY
+            cask 'signing-cask-test' do
+              version '1.0'
+              url "https://brew.sh/"
+              #{cask_artifact}
+            end
+          RUBY
+        end
+        let(:suite) { tmpdir/"Audit Suite" }
+
+        def stub_check(command, *args, path)
+          allow(audit).to receive(:system_command)
+            .with(command, args: [*args, path], print_stderr: false).and_return(failed_result)
+        end
+
+        before do
+          allow(cask).to receive(:tap).and_return(tap)
+          allow(Cask::Quarantine).to receive_messages(available?: true, detect: true)
+          allow(audit).to receive(:which).with("gktool").and_return(Pathname("/usr/bin/gktool"))
+          allow(audit).to receive(:system_command).and_return(passed_result)
+          allow(audit).to receive(:extract_artifacts).and_yield(cask.artifacts.to_a, tmpdir)
+        end
+
+        test_each_hash({
+          audio_unit_plugin: "Audit.component",
+          colorpicker:       "Audit.colorPicker",
+          input_method:      "Audit.app",
+          internet_plugin:   "Audit.plugin",
+          mdimporter:        "Audit.mdimporter",
+          prefpane:          "Audit.prefPane",
+          screen_saver:      "Audit.saver",
+          service:           "Audit.service",
+          vst3_plugin:       "Audit.vst3",
+          vst_plugin:        "Audit.vst",
+        }) do |stanza, bundle|
+          context "when the #{stanza} fails Gatekeeper" do
+            let(:cask_artifact) { "#{stanza} '#{bundle}'" }
+
+            it "errors" do
+              stub_check("gktool", "scan", tmpdir/bundle)
+              expect(run).to error_with(/Signature verification failed/)
+            end
+          end
+        end
+
+        context "when a generic artifact bundle fails Gatekeeper" do
+          let(:cask_artifact) { "artifact 'Audit.plugin', target: '~/Library/Audit/Audit.plugin'" }
+
+          it "errors" do
+            (tmpdir/"Audit.plugin").mkpath
+            stub_check("gktool", "scan", tmpdir/"Audit.plugin")
+            expect(run).to error_with(/Signature verification failed/)
+          end
+        end
+
+        it "errors when an app in the suite fails Gatekeeper" do
+          (suite/"Good.app").mkpath
+          (suite/"Bad.app").mkpath
+          stub_check("gktool", "scan", suite/"Bad.app")
+          expect(run).to error_with(%r{Signature verification failed for Audit Suite/Bad\.app:})
+        end
+
+        context "when the suite contains a .bundle directory" do
+          let(:bundle) { suite/".install4j/Messages.bundle" }
+
+          before do
+            (bundle/"Contents/Resources/en.lproj").mkpath
+            (bundle/"Contents/Resources/en.lproj/Localizable.strings").write('"hello" = "Hello";')
+            allow(BinaryPathname).to receive(:wrap) { it }
+            stub_check("gktool", "scan", bundle)
+          end
+
+          it "skips resource-only bundles" do
+            expect(run).to pass
+          end
+
+          test_each(%w[Contents/Info.plist Info.plist]) do |plist|
+            it "checks bundles with #{plist}" do
+              (bundle/plist).write("plist")
+              expect(run).to error_with(/Signature verification failed/)
+            end
+          end
+
+          test_each([:binary_executable?, :dylib?, :mach_o_bundle?]) do |type|
+            it "checks bundles containing #{type} code without an Info.plist" do
+              (bundle/"Contents/code").write("code")
+              binary = instance_double(Pathname, binary_executable?: false, dylib?: false, mach_o_bundle?: false)
+              allow(binary).to receive(type).and_return(true)
+              allow(BinaryPathname).to receive(:wrap).with(bundle/"Contents/code").and_return(binary)
+              expect(run).to error_with(/Signature verification failed/)
+            end
+          end
+
+          test_each(%w[app bundle plugin]) do |extension|
+            it "checks .#{extension} bundles with code nested inside resource-only bundles" do
+              nested = bundle/"Nested.#{extension}"
+              (nested/"Contents/MacOS").mkpath
+              FileUtils.install TEST_FIXTURE_DIR/"mach/a.out", nested/"Contents/MacOS/nested", mode: 0755
+              allow(BinaryPathname).to receive(:wrap).with(nested/"Contents/MacOS/nested")
+                                                     .and_return(instance_double(Pathname, binary_executable?: true))
+              stub_check("gktool", "scan", nested)
+              expect(run).to error_with(/Signature verification failed for .*Nested\.#{extension}:/)
+            end
+          end
+        end
+
+        it "does not check a suite without code" do
+          (suite/"lib").mkpath
+          FileUtils.touch suite/"lib/audit.jar"
+          expect(audit).not_to receive(:system_command)
+          run
+        end
+
+        it "errors when a loose executable in the suite is not notarized", :needs_macos do
+          suite.mkpath
+          FileUtils.install TEST_FIXTURE_DIR/"mach/a.out", suite/"audit", mode: 0755
+          stub_check("codesign", "--verify", "-R=notarized", "--check-notarization", suite/"audit")
+          expect(run).to error_with(%r{Signature verification failed for Audit Suite/audit:})
+        end
+
+        context "when an installer script is not notarized", :needs_macos do
+          let(:cask_artifact) { "installer script: { executable: 'audit-installer' }" }
+
+          it "errors" do
+            FileUtils.install TEST_FIXTURE_DIR/"mach/a.out", tmpdir/"audit-installer", mode: 0755
+            stub_check("codesign", "--verify", "-R=notarized", "--check-notarization", tmpdir/"audit-installer")
+            expect(run).to error_with(/Signature verification failed/)
+          end
         end
       end
     end
@@ -1534,6 +1696,92 @@ RSpec.describe Cask::Audit, :cask do
         let(:cask_token) { "latest-with-auto-updates" }
 
         it { is_expected.to error_with(message) }
+      end
+    end
+
+    describe "self-submission" do
+      let(:only) { ["self_submission"] }
+      let(:new_cask) { true }
+      let(:self_submission_problem) { "Self-submitted (a commit author's email address matches brew.sh)" }
+      let(:cask) do
+        Cask::Cask.new("self-submission", tap: CoreCaskTap.instance) do
+          version "1.0"
+          sha256 :no_check
+          url "https://brew.sh/self-submission.tar.gz"
+          homepage "https://brew.sh"
+        end
+      end
+
+      context "when a commit author's email address matches the homepage domain" do
+        before do
+          allow(SharedAudits).to receive(:self_submission_problem)
+            .with({ homepage: "https://brew.sh", url: "https://brew.sh/self-submission.tar.gz" })
+            .and_return(self_submission_problem)
+        end
+
+        it { is_expected.to error_with(self_submission_problem) }
+      end
+
+      context "when the cask is not new" do
+        let(:new_cask) { false }
+
+        it "does not check for self-submission" do
+          expect(SharedAudits).not_to receive(:self_submission_problem)
+          run
+        end
+      end
+    end
+
+    describe "livecheck required" do
+      let(:only) { ["livecheck_required"] }
+      let(:new_cask) { true }
+      let(:livecheck_required_problem) { "New casks must have a working `livecheck` block" }
+      let(:cask) do
+        Cask::Cask.new("livecheck-required", tap: CoreCaskTap.instance) do
+          version "1.0"
+          sha256 :no_check
+          url "https://brew.sh/livecheck-required.dmg"
+          homepage "https://brew.sh"
+        end
+      end
+
+      context "when the cask has no working livecheck" do
+        before do
+          allow(SharedAudits).to receive(:livecheck_required_problem).with(cask)
+                                                                     .and_return(livecheck_required_problem)
+        end
+
+        it { is_expected.to error_with(livecheck_required_problem) }
+      end
+
+      context "when the cask is not new" do
+        let(:new_cask) { false }
+
+        it "does not check for a working livecheck" do
+          expect(SharedAudits).not_to receive(:livecheck_required_problem)
+          run
+        end
+      end
+    end
+
+    describe "GitHub repository notability" do
+      let(:only) { ["github_repository"] }
+      let(:new_cask) { true }
+      let(:cask) do
+        Cask::Cask.new("github-repository", tap: CoreCaskTap.instance) do
+          version "1.0"
+          sha256 :no_check
+          url "https://github.com/acme/app/releases/download/1.0/app.dmg"
+          homepage "https://acme.io"
+        end
+      end
+
+      it "applies the self-submission thresholds when a commit author's email address matches the homepage" do
+        allow(SharedAudits).to receive_messages(self_submission_for_repo_owner?:   false,
+                                                pull_request_commit_email_domains: ["acme.io"])
+
+        expect(SharedAudits).to receive(:github).with("acme", "app", self_submission: true)
+        run
       end
     end
 

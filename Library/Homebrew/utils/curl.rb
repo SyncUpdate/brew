@@ -349,6 +349,14 @@ module Utils
       args = ["--remote-time", "--output", destination.to_s, *args]
 
       curl(*args, **options, timeout: Utils::Timer.remaining!(end_time))
+    rescue ErrorDuringExecution => e
+      raise if e.exitstatus != 23 # CURLE_WRITE_ERROR
+
+      raise DownloadWriteError, <<~EOS
+        Could not write download to #{destination}
+        Check that the destination has enough free disk space and is writable.
+        #{strip_progress_bar(Tty.collapse_carriage_returns(e.stderr)).strip}
+      EOS
     end
 
     # Run after `Tty.collapse_carriage_returns`; a bar-only line becomes empty.
@@ -583,8 +591,14 @@ module Utils
       return unless check_content
 
       no_protocol_file_contents = %r{https?:\\?/\\?/}
-      http_content = details[:file]&.scrub&.gsub(no_protocol_file_contents, "/")
-      https_content = secure_details[:file]&.scrub&.gsub(no_protocol_file_contents, "/")
+      http_content, https_content = [details, secure_details].map do |response|
+        content = response[:file]&.scrub&.gsub(no_protocol_file_contents, "/")
+        # Each side may declare a different charset, so compare both as UTF-8.
+        content&.encode("UTF-8", invalid: :replace, undef: :replace)
+      rescue Encoding::ConverterNotFoundError
+        # e.g. Windows-1258 has no converter, so compare it as it is.
+        content
+      end
 
       # Check for the same content after removing all protocols
       if http_content && https_content && (http_content == https_content) && http_with_https_available
@@ -673,15 +687,18 @@ module Utils
           open_args = {}
           content_type = Array(headers["content-type"]).last
 
-          # Try to get encoding from Content-Type header
-          # TODO: add guessing encoding by <meta http-equiv="Content-Type" ...> tag
-          if content_type &&
-             (match = content_type.match(/;\s*charset\s*=\s*([^\s]+)/)) &&
-             (charset = match[1])
+          # Try to get encoding from Content-Type header, then from a `<meta>` tag
+          # outside comments in the first 1024 bytes as browsers do.
+          charset = content_type[/;\s*charset\s*=\s*"?([^\s";]+)/i, 1] if content_type
+          charset ||= File.binread(file_path, 1024).to_s
+                          .gsub(/<!--.*?(?:-->|\z)/m, "")[/<meta[^>]*[\s;]charset\s*=\s*["']?([\w-]+)/i, 1]
+          if charset
             begin
-              open_args[:encoding] = Encoding.find(charset)
+              encoding = Encoding.find(charset)
+              # Content is compared with ASCII regexes, which raise on e.g. UTF-16.
+              open_args[:encoding] = encoding if encoding.ascii_compatible?
             rescue ArgumentError
-              # Unknown charset in Content-Type header
+              # Unknown charset
             end
           end
 

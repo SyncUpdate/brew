@@ -47,8 +47,8 @@ module Homebrew
           T.any(
             # Formula name: "foo"
             String,
-            # Formula name and dependency type: { "foo" => :build }
-            T::Hash[String, Symbol],
+            # Formula name and dependency types: { "foo" => :build } or { "foo" => [:test, :no_linkage] }
+            T::Hash[String, T.any(Symbol, T::Array[Symbol])],
           ),
           # Requirements
           T.any(
@@ -90,6 +90,7 @@ module Homebrew
       const :bottle_checksums, T::Array[T::Hash[Symbol, T.any(String, Symbol)]], default: []
       const :bottle_rebuild, Integer, default: 0
       const :caveats, T.nilable(String)
+      const :compatibility_version, T.nilable(Integer)
       const :conflicts, T::Array[[String, T::Hash[Symbol, String]]], default: []
       const :deprecate_args, T::Hash[Symbol, T.nilable(T.any(String, Symbol))], default: {}
       const :desc, String
@@ -102,6 +103,7 @@ module Homebrew
       const :keg_only_args, T::Array[T.any(String, Symbol)], default: []
       const :license, SPDX::LicenseExpression
       const :link_overwrite_paths, T::Array[String], default: []
+      const :local_patch_checksums, T::Hash[String, String], default: {}
       const :no_autobump_args, T::Hash[Symbol, T.any(String, Symbol)], default: {}
       const :oldnames, T::Array[String], default: []
       const :post_install_defined, T::Boolean, default: false

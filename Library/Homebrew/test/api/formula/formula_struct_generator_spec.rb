@@ -135,6 +135,17 @@ RSpec.describe Homebrew::API::Formula::FormulaStructGenerator do
     ).to eq [[], []]
   end
 
+  it "annotates no_linkage dependencies without duplicating them" do
+    deps_hash = {
+      "dependencies"            => ["foo", "bar"],
+      "test_dependencies"       => ["baz"],
+      "no_linkage_dependencies" => ["bar", "baz"],
+    }
+
+    expect(described_class.process_dependencies_and_requirements(deps_hash, nil, :stable))
+      .to eq [["foo", { "bar" => :no_linkage }, { "baz" => [:test, :no_linkage] }], []]
+  end
+
   describe "::generate_formula_struct_hash" do
     subject(:struct) { described_class.generate_formula_struct_hash(hash) }
 
@@ -161,6 +172,14 @@ RSpec.describe Homebrew::API::Formula::FormulaStructGenerator do
       expect(struct.head_dependencies).to eq struct.stable_dependencies
     end
 
+    it "carries no_linkage dependencies into stable and head dependencies" do
+      hash.update({
+        "dependencies"            => ["foo", "bar"],
+        "no_linkage_dependencies" => ["bar"],
+      })
+      expect([struct.stable_dependencies, struct.head_dependencies]).to all(eq(["foo", { "bar" => :no_linkage }]))
+    end
+
     it "preserves stable patches" do
       hash.update({
         "patches" => [
@@ -172,6 +191,13 @@ RSpec.describe Homebrew::API::Formula::FormulaStructGenerator do
         ],
       })
       expect(struct.stable_patches).to eq hash["patches"]
+    end
+
+    it "preserves local patch checksums through internal API serialisation" do
+      hash["local_patch_checksums"] = { "Patches/foo.diff" => TEST_SHA256 }
+
+      expect(struct.serialize["local_patch_checksums"])
+        .to eq(hash["local_patch_checksums"])
     end
 
     context "when input contains placeholders" do

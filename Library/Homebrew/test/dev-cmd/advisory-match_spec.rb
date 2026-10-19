@@ -24,6 +24,7 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
 
   before do
     allow(Formulary).to receive(:enable_factory_cache!)
+    allow(Formulary).to receive(:factory).with(requests.path).and_return(requests)
     allow(Homebrew::Vulns::Repology).to receive_messages(
       load:   Homebrew::Vulns::Repology.new({ "meta" => {}, "formulae" => {} }),
       lookup: {},
@@ -53,10 +54,20 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
     )
   end
 
+  def history_result(introduced: "2.27.0", fixed: "2.28.1", state: :range, reasons: [])
+    Homebrew::Vulns::Match::ReconciledHistory.new(
+      state:, reasons:,
+      intervals: (state == :range) ? [Homebrew::Vulns::Match::Interval.new(introduced:, fixed:)] : []
+    )
+  end
+
   context "with --reconcile-history" do
     let(:matcher) { Homebrew::Vulns::Match.new(strict_upstream: true) }
     let(:result) do
-      Homebrew::Vulns::Match::ReconciledHistory.new(state: :range, introduced: "2.20.0", fixed: "2.28.1", reasons: [])
+      Homebrew::Vulns::Match::ReconciledHistory.new(
+        state: :range,
+        intervals: [Homebrew::Vulns::Match::Interval.new(introduced: "2.20.0", fixed: "2.28.1")], reasons: []
+      )
     end
     let(:stored) do
       hit = matcher.advisories_for(requests).fetch(0)
@@ -367,6 +378,69 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
         .to output(/upstream_unavailable: 1/).to_stdout
     end
 
+    it "writes split history without covering the unaffected gap" do
+      intervals = [
+        Homebrew::Vulns::Match::Interval.new(introduced: "2.20.0", fixed: "2.21.0"),
+        Homebrew::Vulns::Match::Interval.new(introduced: "2.27.0", fixed: "2.28.1"),
+      ]
+      allow(matcher).to receive(:reconcile_history).and_return(result.with(intervals: intervals.map(&:serialize)))
+
+      reconcile_record do |path, _original|
+        expect(JSON.parse(File.read(path)).dig("affected", 0, "ranges", 0, "events")).to eq [
+          { "introduced" => "2.20.0" }, { "fixed" => "2.21.0" },
+          { "introduced" => "2.27.0" }, { "fixed" => "2.28.1" }
+        ]
+      end
+    end
+
+    it "does not fill a reviewed unaffected gap during reconciliation" do
+      stored.fetch("affected").fetch(0).fetch("ranges").fetch(0)["events"] = [
+        { "introduced" => "0" }, { "fixed" => "2.21.0" },
+        { "introduced" => "2.27.0" }, { "fixed" => "2.31.0" }
+      ]
+
+      expect { reconcile_record { |path, original| expect(File.read(path)).to eq original } }
+        .to output(/range_expansion: 1/).to_stdout
+    end
+
+    it "preserves an identical reviewed split history byte for byte" do
+      intervals = [
+        Homebrew::Vulns::Match::Interval.new(introduced: "2.20.0", fixed: "2.21.0"),
+        Homebrew::Vulns::Match::Interval.new(introduced: "2.27.0", fixed: "2.28.1"),
+      ]
+      stored.fetch("affected").fetch(0)["ranges"] = intervals.map do |interval|
+        { "type" => "ECOSYSTEM", "events" => JSON.parse(JSON.generate(interval.events)) }
+      end
+      allow(matcher).to receive(:reconcile_history).and_return(result.with(intervals: intervals.map(&:serialize)))
+
+      reconcile_record { |path, original| expect(File.read(path)).to eq original }
+    end
+
+    it "keeps unknown platforms held even when another platform is affected" do
+      allow(matcher).to receive(:reconcile_history) do
+        if Homebrew::SimulateSystem.simulating_or_running_on_linux?
+          history_result(state: :unresolved, reasons: [:history_unavailable])
+        else
+          result
+        end
+      end
+
+      expect { reconcile_record { |path, original| expect(File.read(path)).to eq original } }
+        .to output(/history_unavailable: 1/).to_stdout
+    end
+
+    it "does not delete a record affected on only one platform" do
+      allow(matcher).to receive(:reconcile_history) do
+        Homebrew::SimulateSystem.simulating_or_running_on_linux? ? result : result.with(state: :never_affected)
+      end
+
+      reconcile_record do |path, _original|
+        expect(JSON.parse(File.read(path)).dig("affected", 0, "ranges", 0, "events")).to eq [
+          { "introduced" => "2.20.0" }, { "fixed" => "2.28.1" }
+        ]
+      end
+    end
+
     it "shrinks a matched terminal range while preserving every other field" do
       reconcile_record do |path, _original|
         updated = JSON.parse(File.read(path))
@@ -456,18 +530,24 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
     end
 
     it "does not expand an existing affected interval" do
-      allow(matcher).to receive(:reconcile_history).and_return(result.with(fixed: "2.32.0"))
+      allow(matcher).to receive(:reconcile_history).and_return(
+        result.with(intervals: [result.intervals.fetch(0).with(fixed: "2.32.0").serialize]),
+      )
       reconcile_record { |path, original| expect(File.read(path)).to eq original }
     end
 
     it "classifies an open reconciliation result as reopened" do
-      allow(matcher).to receive(:reconcile_history).and_return(result.with(fixed: nil))
+      allow(matcher).to receive(:reconcile_history).and_return(
+        result.with(intervals: [result.intervals.fetch(0).with(fixed: nil).serialize]),
+      )
       expect { reconcile_record { |path, original| expect(File.read(path)).to eq original } }
         .to output(/reopened: 1/).to_stdout
     end
 
     it "distinguishes an invalid interval from range expansion" do
-      allow(matcher).to receive(:reconcile_history).and_return(result.with(introduced: "2.28.1"))
+      allow(matcher).to receive(:reconcile_history).and_return(
+        result.with(intervals: [result.intervals.fetch(0).with(introduced: "2.28.1").serialize]),
+      )
       expect { reconcile_record { |path, original| expect(File.read(path)).to eq original } }
         .to output(/invalid_interval: 1/).to_stdout
     end
@@ -484,21 +564,55 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
       reconcile_record { |path, original| expect(File.read(path)).to eq original }
     end
 
-    it "holds differing platform histories" do
+    it "unions differing known platform histories" do
       allow(matcher).to receive(:reconcile_history) do
         Homebrew::Vulns::Match::ReconciledHistory.new(
-          state:      :range,
-          introduced: "2.20.0",
-          fixed:
-            if Homebrew::SimulateSystem.simulating_or_running_on_linux?
-              "2.29.0"
-            else
-              "2.28.1"
-            end,
-          reasons:    [],
+          state:     :range,
+          intervals: [Homebrew::Vulns::Match::Interval.new(
+            introduced: "2.20.0",
+            fixed:      Homebrew::SimulateSystem.simulating_or_running_on_linux? ? "2.29.0" : "2.28.1",
+          )],
+          reasons:   [],
         )
       end
-      reconcile_record { |path, original| expect(File.read(path)).to eq original }
+      reconcile_record do |path, _original|
+        expect(JSON.parse(File.read(path)).dig("affected", 0, "ranges", 0, "events")).to eq [
+          { "introduced" => "2.20.0" }, { "fixed" => "2.29.0" }
+        ]
+      end
+    end
+
+    it "unions disjoint platform intervals without filling their safe gap" do
+      allow(matcher).to receive(:reconcile_history) do
+        if Homebrew::SimulateSystem.simulating_or_running_on_linux?
+          history_result(introduced: "2.27.0", fixed: "2.28.1")
+        else
+          history_result(introduced: "2.20.0", fixed: "2.21.0")
+        end
+      end
+
+      reconcile_record do |path, _original|
+        expect(JSON.parse(File.read(path)).dig("affected", 0, "ranges", 0, "events")).to eq [
+          { "introduced" => "2.20.0" }, { "fixed" => "2.21.0" },
+          { "introduced" => "2.27.0" }, { "fixed" => "2.28.1" }
+        ]
+      end
+    end
+
+    it "unions overlapping platform intervals before narrowing the reviewed range" do
+      allow(matcher).to receive(:reconcile_history) do
+        if Homebrew::SimulateSystem.simulating_or_running_on_linux?
+          history_result(introduced: "2.26.0", fixed: "2.28.1")
+        else
+          history_result(introduced: "2.20.0", fixed: "2.27.0")
+        end
+      end
+
+      reconcile_record do |path, _original|
+        expect(JSON.parse(File.read(path)).dig("affected", 0, "ranges", 0, "events")).to eq [
+          { "introduced" => "2.20.0" }, { "fixed" => "2.28.1" }
+        ]
+      end
     end
 
     it "holds a match missing from an alternate platform" do
@@ -956,7 +1070,7 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
 
     it "repairs legacy missing, empty or invalid ranges after verifying history" do
       matcher = Homebrew::Vulns::Match.new
-      allow(matcher).to receive_messages(first_fixed_version: "2.28.1", first_introduced_version: "2.27.0")
+      allow(matcher).to receive(:reconcile_history).and_return(history_result(introduced: "2.27.0"))
       allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
       cases = [nil, [], [{ type: "ECOSYSTEM", events: [] }]]
       outcomes = cases.map do |ranges|
@@ -976,7 +1090,7 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
     it "derives introductions before repairing affected records with changed provenance" do
       stub_osv_hit("CVE-2024-1234", fixed: "2.32.0")
       matcher = Homebrew::Vulns::Match.new
-      allow(matcher).to receive(:first_introduced_version).and_return("2.30.0")
+      allow(matcher).to receive(:reconcile_history).and_return(history_result(introduced: "2.30.0", fixed: nil))
       allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
       outcomes = [nil, [], [{ type: "ECOSYSTEM", events: [] }]].map do |ranges|
         record = existing.deep_dup
@@ -990,7 +1104,7 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
         output = capture_stdout { cmd_for("requests", "--output", dir, "--new-history").run }
         refreshed = JSON.parse(File.read(path))
         [refreshed.dig("affected", 0, "ranges", 0, "events"),
-         refreshed.dig("database_specific", "upstream_evidence"), output.include?("1 history walks")]
+         refreshed.dig("database_specific", "upstream_evidence"), output.include?("4 history walks")]
       end
 
       expect(outcomes).to all(eq([[{ "introduced" => "2.30.0" }], reviewed_git_evidence, true]))
@@ -999,7 +1113,8 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
     it "preserves affected records with changed provenance when introduction history is unavailable" do
       stub_osv_hit("CVE-2024-1234", fixed: "2.32.0")
       matcher = Homebrew::Vulns::Match.new
-      allow(matcher).to receive(:first_introduced_version).and_return(:history_unavailable)
+      allow(matcher).to receive(:reconcile_history)
+        .and_return(history_result(state: :unresolved, reasons: [:history_unavailable]))
       allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
       outcomes = [nil, [], [{ type: "ECOSYSTEM", events: [] }]].map do |ranges|
         record = existing.deep_dup
@@ -1319,17 +1434,242 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
     end
   end
 
+  it "reuses an independent current formula's hits without additional OSV queries" do
+    stub_osv_hit("CVE-2024-1234", fixed: "2.28.1")
+    allow(requests.path).to receive(:read).and_return(<<~RUBY)
+      class Requests < Formula
+        url "https://files.pythonhosted.org/packages/aa/bb/cc/requests-2.31.0.tar.gz"
+        head "https://github.com/psf/requests.git"
+      end
+    RUBY
+    matcher = Homebrew::Vulns::Match.new
+    allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
+    expect(matcher).to receive(:reconcile_history).with(requests, anything, reuse_platforms: true)
+                                                  .exactly(4).times.and_return(history_result)
+    expect(matcher).not_to receive(:advisories_for)
+    expect(Formulary).not_to receive(:factory).with(requests.path)
+
+    cmd_for("requests", "--json").run
+  end
+
+  it "still stops at the first held platform when the current source is independent" do
+    stub_osv_hit("CVE-2024-1234", fixed: "2.28.1")
+    allow(requests.path).to receive(:read).and_return("class Requests < Formula; end")
+    matcher = Homebrew::Vulns::Match.new
+    allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
+    expect(matcher).to receive(:reconcile_history).with(requests, anything, reuse_platforms: true).once
+                                                  .and_return(history_result(state:   :unresolved,
+                                                                             reasons: [:history_unavailable]))
+    expect(matcher).not_to receive(:advisories_for)
+
+    cmd_for("requests", "--json").run
+  end
+
+  it "queries each additional platform once for multiple new candidates" do
+    ids = %w[CVE-2024-1234 CVE-2024-5678]
+    ids.each { |id| stub_osv_hit(id, fixed: "2.28.1") }
+    allow(Homebrew::Vulns::OSV).to receive(:query_batch).and_return([ids.map { |id| { "id" => id } }, []])
+    matcher = Homebrew::Vulns::Match.new
+    allow(matcher).to receive(:reconcile_history).and_return(history_result)
+    allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
+    expect(matcher).to receive(:advisories_for).exactly(3).times.and_call_original
+
+    cmd_for("requests", "--json").run
+  end
+
+  it "stops loading platforms once every new candidate is unresolved" do
+    stub_osv_hit("CVE-2024-1234", fixed: "2.28.1")
+    matcher = Homebrew::Vulns::Match.new
+    allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
+    expect(matcher).to receive(:reconcile_history).once
+                                                  .and_return(history_result(state:   :unresolved,
+                                                                             reasons: [:history_unavailable]))
+    expect(matcher).not_to receive(:advisories_for)
+
+    cmd_for("requests", "--json").run
+  end
+
+  context "with a resource absent from another platform's current formula" do
+    def resource_formula(version, resource_version, unknown: false)
+      formula("requests") do
+        T.bind(self, T.class_of(Formula))
+        url "https://files.pythonhosted.org/packages/aa/bb/cc/requests-#{version}.tar.gz"
+        if resource_version
+          resource "certifi" do
+            url unknown ? "https://example.com/certifi-#{resource_version}.tar.gz" : "https://files.pythonhosted.org/packages/aa/bb/cc/certifi-#{resource_version}.tar.gz"
+          end
+        end
+      end
+    end
+
+    let(:requests) { resource_formula("3.0", "1.2") }
+    let(:linux_resource) { nil }
+    let(:unknown_identity) { false }
+    let(:linux_history_unavailable) { false }
+    let(:formerly_on_linux) { false }
+    let(:history) { instance_double(Homebrew::Vulns::History) }
+
+    before do
+      allow(Formulary).to receive(:factory).with(requests.path) do
+        if Homebrew::SimulateSystem.simulating_or_running_on_linux?
+          resource_formula("3.0", linux_resource, unknown: unknown_identity)
+        else
+          requests
+        end
+      end
+      allow(Homebrew::Vulns::OSV).to receive(:query_batch) do |packages|
+        packages.map do |package|
+          if package[:name] == "certifi" && !Homebrew::SimulateSystem.simulating_or_running_on_linux?
+            [{ "id" => "CVE-certifi" }]
+          else
+            []
+          end
+        end
+      end
+      allow(Homebrew::Vulns::OSV).to receive(:vulnerability).with("CVE-certifi").and_return({
+        "id" => "CVE-certifi", "affected" => [{
+          "package" => { "ecosystem" => "PyPI", "name" => "certifi" },
+          "ranges"  => [{ "type" => "ECOSYSTEM", "events" => [{ "introduced" => "0" }, { "fixed" => "1.2" }] }],
+        }]
+      })
+      allow(Homebrew::Vulns::History).to receive(:new).and_return(history)
+      allow(history).to receive(:platform_independent?).and_return(false)
+      allow(history).to receive(:walk).with(anything, complete: true, reuse_platforms: true) do |_, **_, &block|
+        linux = Homebrew::SimulateSystem.simulating_or_running_on_linux?
+        resource_version = if linux
+          formerly_on_linux ? "1.0" : nil
+        else
+          "1.2"
+        end
+        block.call(resource_formula("2.0", resource_version))
+        block.call(resource_formula("1.0", linux ? nil : "1.0"))
+        :history_unavailable if linux && linux_history_unavailable
+      end
+    end
+
+    it "emits a macOS-only resource after proving its absence throughout Linux history" do
+      records = JSON.parse(capture_stdout { cmd_for("requests", "--json").run })
+
+      expect(records.fetch(0).dig("affected", 0, "ranges", 0, "events"))
+        .to eq [{ "introduced" => "1.0" }, { "fixed" => "2.0" }]
+    end
+
+    context "when Linux used to ship the resource" do
+      let(:formerly_on_linux) { true }
+
+      it "includes affected Linux history even though the current resource is absent" do
+        records = JSON.parse(capture_stdout { cmd_for("requests", "--json").run })
+
+        expect(records.fetch(0).dig("affected", 0, "ranges", 0, "events"))
+          .to eq [{ "introduced" => "1.0" }, { "fixed" => "3.0" }]
+      end
+    end
+
+    context "when Linux history is unavailable" do
+      let(:linux_history_unavailable) { true }
+
+      it "does not infer historical absence from the current formula" do
+        expect(JSON.parse(capture_stdout { cmd_for("requests", "--json").run })).to eq []
+      end
+    end
+
+    context "when the resource is present but its upstream match is missing" do
+      let(:linux_resource) { "1.0" }
+
+      it "holds the candidate instead of treating a missing query result as absence" do
+        expect(JSON.parse(capture_stdout { cmd_for("requests", "--json").run })).to eq []
+      end
+    end
+
+    context "when the resource's identity cannot be resolved" do
+      let(:linux_resource) { "1.0" }
+      let(:unknown_identity) { true }
+
+      it "holds the candidate instead of treating an unknown identity as absence" do
+        expect(JSON.parse(capture_stdout { cmd_for("requests", "--json").run })).to eq []
+      end
+    end
+  end
+
+  context "with complete split history for a new record" do
+    let(:final_fixed) { "2.31.0" }
+    let(:history) { instance_double(Homebrew::Vulns::History) }
+    let(:old_formulae) do
+      %w[2.30.0 2.29.0 2.28.0 2.27.0].map do |version|
+        formula("requests") do
+          T.bind(self, T.class_of(Formula))
+          url "https://files.pythonhosted.org/packages/aa/bb/cc/requests-#{version}.tar.gz"
+          head "https://github.com/psf/requests.git"
+        end
+      end
+    end
+
+    before do
+      stub_osv_hit("CVE-2024-1234", fixed: final_fixed)
+      allow(Homebrew::Vulns::OSV).to receive(:vulnerability).with("CVE-2024-1234").and_return({
+        "id" => "CVE-2024-1234", "affected" => [{
+          "package" => { "ecosystem" => "GIT", "name" => "https://github.com/psf/requests" },
+          "ranges"  => [{ "type" => "ECOSYSTEM", "events" => [
+            { "introduced" => "2.27.0" }, { "fixed" => "2.28.0" },
+            { "introduced" => "2.30.0" }, { "fixed" => final_fixed }
+          ] }],
+        }]
+      })
+      allow(Homebrew::Vulns::History).to receive(:new).and_return(history)
+      allow(history).to receive(:platform_independent?).and_return(false)
+      allow(history).to receive(:walk).with(anything, complete: true, reuse_platforms: true) do |_, **_, &block|
+        old_formulae.each { |old| block.call(old) }
+        nil
+      end
+    end
+
+    it "emits and preserves both closed intervals on repeated daily runs" do
+      Dir.mktmpdir do |dir|
+        cmd_for("requests", "--output", dir, "--new-history").run
+        path = File.join(dir, "BREW-requests-CVE-2024-1234.json")
+        first = File.read(path)
+        cmd_for("requests", "--output", dir, "--new-history").run
+
+        expect([JSON.parse(first).dig("affected", 0, "ranges", 0, "events"), File.read(path)]).to eq [
+          [{ "introduced" => "2.27.0" }, { "fixed" => "2.28.0" },
+           { "introduced" => "2.30.0" }, { "fixed" => "2.31.0" }], first
+        ]
+      end
+    end
+
+    it "holds a new record when a later platform's complete walk is unavailable" do
+      allow(history).to receive(:walk).with(anything, complete: true, reuse_platforms: true) do |_, **_, &block|
+        old_formulae.each { |old| block.call(old) }
+        :history_unavailable if Homebrew::SimulateSystem.simulating_or_running_on_linux?
+      end
+
+      expect(JSON.parse(capture_stdout { cmd_for("requests", "--json").run })).to eq []
+    end
+
+    context "when the final interval is open" do
+      let(:final_fixed) { "2.32.0" }
+
+      it "emits all events and derives fix metadata from the final interval" do
+        record = JSON.parse(capture_stdout { cmd_for("requests", "--json").run }).fetch(0)
+        affected = record.fetch("affected").fetch(0)
+
+        expect([affected.dig("ranges", 0, "events"), affected.fetch("ecosystem_specific")]).to eq [
+          [{ "introduced" => "2.27.0" }, { "fixed" => "2.28.0" }, { "introduced" => "2.30.0" }],
+          { "fix" => nil, "range_state" => "affected", "upstream_fixed_in" => "2.32.0" },
+        ]
+      end
+    end
+  end
+
   it "uses both historical boundaries for a new record with --new-history" do
     stub_osv_hit("CVE-2024-1234", fixed: "2.28.1")
     matcher = Homebrew::Vulns::Match.new
-    expect(matcher).to receive(:first_fixed_version).and_return("2.28.1")
-    expect(matcher).to receive(:first_introduced_version).with(requests, anything, first_fixed: "2.28.1")
-                                                         .and_return("2.27.0")
+    expect(matcher).to receive(:reconcile_history).exactly(4).times.and_return(history_result)
     allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
 
     Dir.mktmpdir do |dir|
       expect { cmd_for("requests", "--output", dir, "--new-history").run }
-        .to output(/2 history walks/).to_stdout
+        .to output(/4 history walks/).to_stdout
       path = File.join(dir, "BREW-requests-CVE-2024-1234.json")
       expect(JSON.parse(File.read(path)).dig("affected", 0, "ranges", 0, "events"))
         .to eq([{ "introduced" => "2.27.0" }, { "fixed" => "2.28.1" }])
@@ -1339,7 +1679,7 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
   it "repairs mixed ranges using an initial interval without reopening reviewed terminal ranges" do
     stub_osv_hit("CVE-2024-1234", fixed: "2.28.1")
     matcher = Homebrew::Vulns::Match.new
-    allow(matcher).to receive_messages(first_fixed_version: "2.28.1", first_introduced_version: "2.27.0")
+    allow(matcher).to receive(:reconcile_history).and_return(history_result(introduced: "2.27.0"))
     allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
 
     Dir.mktmpdir do |dir|
@@ -1370,13 +1710,15 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
   it "skips a new record when formula history is unavailable" do
     stub_osv_hit("CVE-2024-1234", fixed: "2.28.1")
     matcher = Homebrew::Vulns::Match.new
-    expect(matcher).to receive(:first_fixed_version).and_return(:history_unavailable)
+    expect(matcher).to receive(:reconcile_history).once
+                                                  .and_return(history_result(state:   :unresolved,
+                                                                             reasons: [:history_unavailable]))
     allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
 
     Dir.mktmpdir do |dir|
       expect do
         expect { cmd_for("requests", "--output", dir, "--new-history").run }
-          .to output(/formula history is unavailable; skipping automatic update/).to_stderr
+          .to output(/formula history is unavailable.*skipping automatic update/).to_stderr
       end.to output(/1 history-unavailable skips.*Unavailable history by formula:\n    requests: 1/m).to_stdout
       expect(Dir.glob(File.join(dir, "*.json"))).to be_empty
     end
@@ -1385,14 +1727,15 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
   it "does not emit a fixed record when its introduction cannot be established" do
     stub_osv_hit("CVE-2024-1234", fixed: "2.28.1")
     matcher = Homebrew::Vulns::Match.new
-    allow(matcher).to receive_messages(first_fixed_version: "2.28.1", first_introduced_version: :history_unavailable)
+    allow(matcher).to receive(:reconcile_history)
+      .and_return(history_result(state: :unresolved, reasons: [:history_unavailable]))
     allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
 
     Dir.mktmpdir do |dir|
       expect do
         expect { cmd_for("requests", "--output", dir, "--new-history").run }
-          .to output(/affected introduction cannot be established; skipping automatic update/).to_stderr
-      end.to output(/2 history walks, 1 history-unavailable skips/).to_stdout
+          .to output(/formula history is unavailable.*history_unavailable.*skipping automatic update/).to_stderr
+      end.to output(/1 history walks, 1 history-unavailable skips/).to_stdout
       expect(Dir.glob(File.join(dir, "*.json"))).to be_empty
     end
   end
@@ -1400,7 +1743,8 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
   it "does not emit an affected JSON record when its introduction cannot be established" do
     stub_osv_hit("CVE-2024-1234", fixed: "2.32.0")
     matcher = Homebrew::Vulns::Match.new
-    allow(matcher).to receive(:first_introduced_version).and_return(:history_unavailable)
+    allow(matcher).to receive(:reconcile_history)
+      .and_return(history_result(state: :unresolved, reasons: [:history_unavailable]))
     allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
 
     expect(JSON.parse(capture_stdout { cmd_for("requests", "--json").run })).to eq []
@@ -1499,6 +1843,11 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
     allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
 
     Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "BREW-requests-CVE-2024-1234.json"), JSON.generate({
+        "id" => "BREW-requests-CVE-2024-1234", "database_specific" => { "source" => "matched" },
+        "affected" => [{ "package" => { "ecosystem" => "Homebrew", "name" => "requests" },
+                         "ranges"  => [{ "type" => "ECOSYSTEM", "events" => [{ "introduced" => "0" }] }] }]
+      }))
       expect { cmd_for("requests", "--output", dir, "--new-history").run }
         .to raise_error(TypeError, /unexpected fixed-history result: :future_result/)
     end
@@ -1507,8 +1856,7 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
   it "walks history when an existing matched record has no ranges" do
     stub_osv_hit("CVE-2024-1234", fixed: "2.28.1")
     matcher = Homebrew::Vulns::Match.new
-    expect(matcher).to receive(:first_fixed_version).and_return("2.28.1")
-    expect(matcher).to receive(:first_introduced_version).and_return("2.27.0")
+    expect(matcher).to receive(:reconcile_history).exactly(4).times.and_return(history_result)
     allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
 
     Dir.mktmpdir do |dir|
@@ -1757,13 +2105,13 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
     stub_osv_hit("CVE-2024-1234", fixed: "2.32.0")
     matcher = Homebrew::Vulns::Match.new
     expect(matcher).not_to receive(:first_fixed_version)
-    expect(matcher).to receive(:first_introduced_version).with(requests, anything, first_fixed: nil)
-                                                         .and_return("2.30.0")
+    expect(matcher).to receive(:reconcile_history).exactly(4).times
+                                                  .and_return(history_result(introduced: "2.30.0", fixed: nil))
     allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
 
     Dir.mktmpdir do |dir|
       expect { cmd_for("requests", "--output", dir, "--new-history").run }
-        .to output(/1 history walks/).to_stdout
+        .to output(/4 history walks/).to_stdout
       path = File.join(dir, "BREW-requests-CVE-2024-1234.json")
       expect(JSON.parse(File.read(path)).dig("affected", 0, "ranges", 0, "events"))
         .to eq([{ "introduced" => "2.30.0" }])
@@ -2168,7 +2516,7 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
       it "writes only the selected formula without overrides" do
         stub_osv_hit("CVE-2024-1234", fixed: "2.28.1")
         matcher = Homebrew::Vulns::Match.new(bulk: true)
-        allow(matcher).to receive_messages(first_fixed_version: "2.28.1", first_introduced_version: "2.20.0")
+        allow(matcher).to receive(:reconcile_history).and_return(history_result(introduced: "2.20.0"))
         expect(Homebrew::Vulns::Match).to receive(:new)
           .with(repology: nil, overrides: nil, bulk: true, strict_upstream: false).and_return(matcher)
         expect(Formulary).to receive(:factory).with("requests").once.and_return(requests)
@@ -2238,6 +2586,193 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
     index = JSON.parse(output)
     expect(index.dig("requests", "git_repo")).to eq "https://github.com/psf/requests"
     expect(index.dig("requests", "primary_package", "ecosystem")).to eq "PyPI"
+  end
+
+  context "with --rejected-candidates" do
+    let(:dir) { Dir.mktmpdir }
+    let(:record_id) { "BREW-requests-CVE-2024-1234" }
+    let(:record_path) { File.join(dir, "#{record_id}.json") }
+    let(:rejected_path) { File.join(dir, "rejected-candidates.txt") }
+    let(:rejected_contents) { "#{record_id}\n" }
+    let(:history_option) { "--new-history" }
+    let(:command) do
+      cmd_for("requests", "--output", dir, history_option, "--rejected-candidates", rejected_path)
+    end
+    let(:matcher) { Homebrew::Vulns::Match.new }
+    let(:stored) do
+      hit = matcher.advisories_for(requests).fetch(0)
+      JSON.parse(JSON.generate(matcher.to_brew_record(requests, hit, now: Time.utc(2020))))
+    end
+
+    before do
+      stub_osv_hit("CVE-2024-1234", fixed: "2.28.1", aliases: ["GHSA-example"])
+      allow(matcher).to receive(:reconcile_history).and_return(history_result)
+      allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
+      File.write(rejected_path, rejected_contents)
+    end
+
+    after do
+      FileUtils.remove_entry(dir)
+    end
+
+    it "reports a rejected new candidate without extra platform queries or history" do
+      expect(matcher).not_to receive(:advisories_for)
+      expect(matcher).not_to receive(:reconcile_history)
+
+      output = capture_stdout { command.run }
+      expect([File.exist?(record_path), output]).to match [
+        false, a_string_matching(/1 rejected candidates skipped before history\n    #{record_id}\n/)
+      ]
+    end
+
+    it "processes an existing rejected record exactly as without the flag" do
+      stored["summary"] = "old summary"
+      original = JSON.generate(stored)
+      allow(Time).to receive(:now).and_return(Time.utc(2026))
+      File.write(record_path, original)
+      baseline_output = capture_stdout { cmd_for("requests", "--output", dir, "--new-history").run }
+      baseline = File.read(record_path)
+      File.write(record_path, original)
+
+      output = capture_stdout { command.run }
+      expect([File.read(record_path), output, JSON.parse(File.read(record_path))["summary"]])
+        .to eq [baseline, baseline_output, "s"]
+    end
+
+    it "does not skip an existing record with no reviewed range" do
+      stored.fetch("affected").fetch(0)["ranges"] = []
+      File.write(record_path, JSON.generate(stored))
+      expect(matcher).to receive(:reconcile_history).exactly(4).times.and_return(history_result)
+
+      output = capture_stdout { command.run }
+      expect([JSON.parse(File.read(record_path)).dig("affected", 0, "ranges", 0, "events"), output])
+        .to match [[{ "introduced" => "2.27.0" }, { "fixed" => "2.28.1" }], a_string_matching(/4 history walks/)]
+    end
+
+    it "does not skip an existing unreviewed alias of a rejected canonical ID" do
+      stored["id"] = "BREW-requests-GHSA-example"
+      stored.fetch("affected").fetch(0)["ranges"] = []
+      alias_path = File.join(dir, "#{stored.fetch("id")}.json")
+      File.write(alias_path, JSON.generate(stored))
+      expect(matcher).to receive(:reconcile_history).exactly(4).times.and_return(history_result)
+
+      command.run
+      expect(JSON.parse(File.read(alias_path)).dig("affected", 0, "ranges", 0, "events"))
+        .to eq [{ "introduced" => "2.27.0" }, { "fixed" => "2.28.1" }]
+    end
+
+    it "does not treat a listed non-canonical alias as a rejected record ID" do
+      File.write(rejected_path, "BREW-requests-GHSA-example\n")
+      expect(matcher).to receive(:reconcile_history).exactly(4).times.and_return(history_result)
+
+      command.run
+      expect(JSON.parse(File.read(record_path)).fetch("id")).to eq record_id
+    end
+
+    it "strips comments and whitespace and ignores blank lines and duplicate IDs" do
+      File.write(rejected_path,
+                 " # comment\n\n\t#{record_id} \t # trailing comment\r\n #{record_id} # duplicate\n \t\n")
+      expect { command.run }
+        .to output(/1 rejected candidates skipped before history\n    #{record_id}\n\z/).to_stdout
+    end
+
+    it "matches record IDs case-sensitively and without prefix matching" do
+      File.write(rejected_path, "#{record_id.downcase}\n#{record_id}-extra\n")
+      expect(matcher).to receive(:reconcile_history).exactly(4).times.and_return(history_result)
+
+      command.run
+      expect(File.exist?(record_path)).to be true
+    end
+
+    it "keeps the part-1 output and four-platform walk when the flag is absent" do
+      expect(matcher).to receive(:reconcile_history).exactly(4).times.and_return(history_result)
+
+      output = capture_stdout { cmd_for("requests", "--output", dir, "--new-history").run }
+      expect([JSON.parse(File.read(record_path)).dig("affected", 0, "ranges", 0, "events"), output])
+        .to match [[{ "introduced" => "2.27.0" }, { "fixed" => "2.28.1" }], a_string_matching(/4 history walks/)]
+      expect(output).not_to include("rejected candidates")
+    end
+
+    it "keeps full history for an allowed candidate when the rejected hit comes first" do
+      stub_osv_hit("CVE-2024-5678", fixed: "2.28.1")
+      ids = %w[CVE-2024-1234 CVE-2024-5678]
+      allow(Homebrew::Vulns::OSV).to receive(:query_batch).and_return([ids.map { |id| { "id" => id } }, []])
+      walked = []
+      allow(matcher).to receive(:reconcile_history) do |_, hit|
+        walked << hit.canonical_id
+        history_result
+      end
+      expect(matcher).to receive(:advisories_for).exactly(3).times.and_call_original
+
+      command.run
+      expect([Dir.glob(File.join(dir, "BREW-*.json")).map { |path| File.basename(path) }, walked])
+        .to eq [["BREW-requests-CVE-2024-5678.json"], Array.new(4, "CVE-2024-5678")]
+    end
+
+    it "keeps full history for an allowed candidate when the rejected hit comes last" do
+      stub_osv_hit("CVE-2024-5678", fixed: "2.28.1")
+      ids = %w[CVE-2024-5678 CVE-2024-1234]
+      allow(Homebrew::Vulns::OSV).to receive(:query_batch).and_return([ids.map { |id| { "id" => id } }, []])
+      walked = []
+      allow(matcher).to receive(:reconcile_history) do |_, hit|
+        walked << hit.canonical_id
+        history_result
+      end
+      expect(matcher).to receive(:advisories_for).exactly(3).times.and_call_original
+
+      command.run
+      expect([Dir.glob(File.join(dir, "BREW-*.json")).map { |path| File.basename(path) }, walked])
+        .to eq [["BREW-requests-CVE-2024-5678.json"], Array.new(4, "CVE-2024-5678")]
+    end
+
+    it "still reports malformed existing records during alias preparation" do
+      File.write(record_path, "{")
+      expect { command.run }.to output(/malformed alias/).to_stderr
+      expect([Homebrew.failed?, File.read(record_path)]).to eq [true, "{"]
+    end
+
+    it "fails when the rejection file is missing" do
+      File.unlink(rejected_path)
+      expect { command.run }.to raise_error(Errno::ENOENT)
+    end
+
+    it "fails when the rejection file is unreadable" do
+      allow(File).to receive(:readlines).with(rejected_path, chomp: true).and_raise(Errno::EACCES)
+      expect { command.run }.to raise_error(Errno::EACCES)
+    end
+
+    it "requires an output directory" do
+      expect { cmd_for("requests", "--rejected-candidates", rejected_path) }
+        .to raise_error(UsageError, /--rejected-candidates.*--output/)
+    end
+
+    context "with --no-history" do
+      let(:history_option) { "--no-history" }
+
+      it "leaves unchecked authoring unchanged" do
+        expect(matcher).not_to receive(:reconcile_history)
+        command.run
+        expect(File.exist?(record_path)).to be true
+      end
+    end
+
+    context "with --reconcile-history" do
+      let(:command) do
+        overrides_path = File.join(dir, "overrides.yml")
+        File.write(overrides_path, "{}")
+        cmd_for("requests", "--output", dir, "--reconcile-history", "--overrides", overrides_path,
+                "--rejected-candidates", rejected_path)
+      end
+
+      it "still reconciles an existing rejected record" do
+        File.write(record_path, JSON.generate(stored))
+        expect(matcher).to receive(:reconcile_history).exactly(4).times.and_return(history_result)
+
+        command.run
+        expect(JSON.parse(File.read(record_path)).dig("affected", 0, "ranges", 0, "events"))
+          .to eq [{ "introduced" => "2.27.0" }, { "fixed" => "2.28.1" }]
+      end
+    end
   end
 
   def capture_stdout
