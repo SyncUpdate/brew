@@ -341,6 +341,26 @@ RSpec.describe "Utils::Curl" do
     end
   end
 
+  it "preserves tool selection and the result after a failed download" do
+    selection_cache = HOMEBREW_CACHE/"tool-selection/curl"
+    selection_cache.dirname.mkpath
+    selection_cache.write "cached selection"
+    result = instance_double(SystemCommand::Result, success?: false, exit_status: 7)
+    allow(self).to receive(:system_command).and_return(result)
+
+    expect([curl_with_workarounds("https://example.com/"), selection_cache.exist?]).to eq([result, true])
+  end
+
+  it "preserves tool selection when a download times out" do
+    selection_cache = HOMEBREW_CACHE/"tool-selection/curl"
+    selection_cache.dirname.mkpath
+    selection_cache.write "cached selection"
+    allow(self).to receive(:system_command).and_raise(Timeout::Error)
+
+    expect { curl_with_workarounds("https://example.com/") }
+      .to raise_error(Timeout::Error) { expect(selection_cache).to exist }
+  end
+
   describe "::curl_args" do
     include Context
 
@@ -567,6 +587,63 @@ RSpec.describe "Utils::Curl" do
   end
 
   describe "::curl_version" do
+    before do
+      ENV.delete("HOMEBREW_CURL_VERSION")
+    end
+
+    it "reuses the Bash version for the same executable without probing curl" do
+      ENV["HOMEBREW_CURL"] = "/usr/bin/curl"
+      ENV["HOMEBREW_CURL_VERSION"] = "8.7.1"
+      ENV["HOMEBREW_CURL_VERSION_PATH"] = "/usr/bin/curl"
+      allow(self).to receive(:curl_path).and_return("/usr/bin/curl")
+      allow(self).to receive(:curl_output).and_raise("Unexpected version probe")
+
+      expect(curl_version).to eq(Version.new("8.7.1"))
+    end
+
+    it "probes a different executable instead of reusing another curl's version" do
+      ENV["HOMEBREW_CURL"] = "/another/curl"
+      ENV["HOMEBREW_CURL_VERSION"] = "8.7.1"
+      ENV["HOMEBREW_CURL_VERSION_PATH"] = "/usr/bin/curl"
+      allow(self).to receive(:curl_path).and_return("/another/curl")
+      allow(self).to receive(:curl_output).with("-V").and_return(
+        instance_double(SystemCommand::Result, success?: true, stdout: "curl 8.8.0"),
+      )
+
+      expect(curl_version).to eq(Version.new("8.8.0"))
+    end
+
+    it "ignores malformed version data from the environment" do
+      ENV["HOMEBREW_CURL_VERSION"] = "invalid version"
+      allow(self).to receive(:curl_output).with("-V").and_return(
+        instance_double(SystemCommand::Result, success?: true, stdout: "curl 8.8.0"),
+      )
+
+      expect(curl_version).to eq(Version.new("8.8.0"))
+    end
+
+    it "invalidates selection when the version probe fails and preserves the error" do
+      selection_cache = HOMEBREW_CACHE/"tool-selection/curl"
+      selection_cache.dirname.mkpath
+      selection_cache.write "cached selection"
+      error = ErrorDuringExecution.new(["curl", "-V"], status: 127)
+      result = instance_double(SystemCommand::Result, success?: false, stdout: "")
+      allow(result).to receive(:assert_success!).and_raise(error)
+      allow(self).to receive(:curl_output).with("-V").and_return(result)
+
+      expect { curl_version }.to raise_error(error).and change(selection_cache, :exist?).from(true).to(false)
+    end
+
+    it "invalidates selection when the version probe returns malformed output" do
+      selection_cache = HOMEBREW_CACHE/"tool-selection/curl"
+      selection_cache.dirname.mkpath
+      selection_cache.write "cached selection"
+      result = instance_double(SystemCommand::Result, success?: true, stdout: "invalid version", assert_success!: nil)
+      allow(self).to receive(:curl_output).with("-V").and_return(result)
+
+      expect { curl_version }.to raise_error(SystemExit).and change(selection_cache, :exist?).from(true).to(false)
+    end
+
     it "returns a curl version string" do
       expect(curl_version).to match(/^v?\d+(?:\.\d+)+$/)
     end
@@ -574,9 +651,21 @@ RSpec.describe "Utils::Curl" do
     it "only runs the curl subprocess on the first call" do
       allow(self).to receive(:curl_path).and_return("/usr/bin/curl")
       expect(self).to receive(:curl_output).once.and_return(
-        instance_double(SystemCommand::Result, stdout: "curl 8.7.1 (x86_64-apple-darwin)"),
+        instance_double(SystemCommand::Result, success?: true, stdout: "curl 8.7.1 (x86_64-apple-darwin)"),
       )
       2.times { expect(curl_version).to eq(Version.new("8.7.1")) }
+    end
+
+    it "discards the version when clearing the executable cache" do
+      allow(self).to receive(:curl_path).and_return("/usr/bin/curl")
+      allow(self).to receive(:curl_output).with("-V").and_return(
+        instance_double(SystemCommand::Result, success?: true, stdout: "curl 8.7.1"),
+        instance_double(SystemCommand::Result, success?: true, stdout: "curl 8.8.0"),
+      )
+      curl_version
+      clear_path_cache
+
+      expect(curl_version).to eq(Version.new("8.8.0"))
     end
   end
 
@@ -595,9 +684,47 @@ RSpec.describe "Utils::Curl" do
     end
   end
 
+  describe "setup_curl_args in utils/curl.sh" do
+    [
+      [nil, nil, nil, nil, %w[-q --retry 3]],
+      ["", "", "", "", %w[-q --retry 3]],
+      ["1", "10", "1", nil, %w[--retry 10 --verbose]],
+      ["/path with spaces/\n--insecure", "0", nil, nil, ["-q", "--config", "/path with spaces/\n--insecure"]],
+      [nil, "-1", nil, nil, %w[-q]],
+      [nil, "invalid", nil, nil, %w[-q]],
+      [nil, "08", nil, nil, %w[-q --retry 08]],
+      *%w[false NO off nil 0].map { |value| [nil, nil, value, value, %w[-q --retry 3]] },
+      ["1", "0", nil, "1", %w[--proto-redir =https]],
+      ["1", "0", nil, "yes", %w[--proto-redir =https]],
+      [nil, nil, "1", "1", %w[-q --retry 3 --verbose --proto-redir =https]],
+    ].each do |curlrc, retries, verbose, no_insecure_redirect, expected|
+      it "handles curlrc=#{curlrc.inspect}, retries=#{retries.inspect}, verbose=#{verbose.inspect}, " \
+         "no_insecure_redirect=#{no_insecure_redirect.inspect}" do
+        T.bind(self, RSpec::Core::ExampleGroup)
+
+        ENV["HOMEBREW_CURLRC"] = curlrc
+        ENV["HOMEBREW_CURL_RETRIES"] = retries
+        ENV["HOMEBREW_CURL_VERBOSE"] = verbose
+        ENV["HOMEBREW_NO_INSECURE_REDIRECT"] = no_insecure_redirect
+
+        expect(SystemCommand.run!("/bin/bash", args: [
+          "-c", 'source "$1"; setup_curl_args; printf "%s\0" "${CURL_DISABLE_CURLRC_ARGS[@]}"',
+          "--", HOMEBREW_LIBRARY_PATH/"utils/curl.sh"
+        ]).stdout.split("\0")).to eq(expected)
+      end
+    end
+  end
+
   describe "::curl_supports_tls13?" do
     it "returns `true` if curl command is successful" do
-      allow(SystemCommand).to receive(:quiet_system).and_return(true)
+      ENV["HOMEBREW_CURLRC"] = "/path with spaces/curlrc"
+      ENV["HOMEBREW_CURL_RETRIES"] = "10"
+      ENV["HOMEBREW_CURL_VERBOSE"] = "1"
+
+      allow(SystemCommand).to receive(:quiet_system)
+        .with(curl_executable, *curl_args("--tlsv1.3", "--head", "https://brew.sh/"))
+        .and_return(true)
+
       expect(curl_supports_tls13?).to be(true)
     end
 

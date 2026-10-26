@@ -183,6 +183,7 @@ A `Hash` (e.g. `=>`) adds information to a dependency. Given a string or symbol,
 * `:test` means this is only required when running `brew test`.
 * `:no_linkage` means the formula does not link against this dependency; it does not change when the dependency is required.
   All explicit declarations of the same dependency within a spec and platform must agree on `:no_linkage`; stable, HEAD and different platforms may differ.
+  On a `:build` dependency, such as a compiler, it also lets an outdated installed version be used when building from source, whatever its `compatibility_version`.
 * `:optional` (not allowed in `Homebrew/homebrew-core`) generates an implicit `with-foo` option for the formula. This means that, given `depends_on "foo" => :optional`, the user must pass `--with-foo` to use the dependency.
 * `:recommended` (not allowed in `Homebrew/homebrew-core`) generates an implicit `without-foo` option, meaning that the dependency is enabled by default and the user must pass `--without-foo` to disable this dependency. The default description can be overridden using the [`option`](/rubydoc/Formula.html#option-class_method) syntax (in this case, the [`option` declaration](#adding-optional-steps) must precede the dependency):
 
@@ -751,6 +752,8 @@ livecheck do
   regex(/href=.*?example[._-]v?(\d+(?:\.\d+)+)\.t/i)
 end
 ```
+
+Omit a `livecheck` block if a strategy automatically provides correct version information and no changes are needed.
 
 For `url`/`regex` guidelines and additional `livecheck` block examples, refer to the [`brew livecheck`](Brew-Livecheck.md) documentation. For more technical information on the methods used in a `livecheck` block, please refer to the [`Livecheck` class](/rubydoc/Livecheck.html) documentation.
 

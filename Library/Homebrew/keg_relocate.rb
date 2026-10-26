@@ -614,7 +614,8 @@ class Keg
       # Some binaries contain strings with lists of files
       # e.g. `/usr/local/lib/foo:/usr/local/share/foo:/usr/lib/foo`
       # Each item in the list should be checked separately
-      match.split(":").each do |sub_match|
+      # A high byte just before a path can be reported as part of the same run.
+      match.split(":").map { it.b.sub(%r{\A[\x80-\xFF]+(?=/)}n, "") }.each do |sub_match|
         # Not all items in the list may be matches
         next unless sub_match.match? path_regex
         next if linked_libraries.include? sub_match # Don't bother reporting a string if it was found by otool
@@ -648,7 +649,7 @@ class Keg
       return
     end
 
-    Utils.popen_read("strings", "-t", "x", "-", file.to_s) do |io|
+    Utils.popen_read("strings", *strings_encoding_args, "-t", "x", "-", file.to_s) do |io|
       until io.eof?
         line = io.readline.chomp
         offset, match = line.split(" ", 2)
@@ -742,9 +743,10 @@ class Keg
       end
 
       strings.filter_map do |offset, match|
-        next unless match.ascii_only?
+        match.force_encoding(Encoding::UTF_8)
+        next unless match.valid_encoding?
 
-        [offset.to_s(16), match.force_encoding(Encoding::UTF_8)]
+        [offset.to_s(16), match]
       end
     ensure
       stream.close
@@ -820,6 +822,11 @@ class Keg
 
   sig { params(_file: Pathname, _string: String).returns(T::Array[String]) }
   def self.file_linked_libraries(_file, _string)
+    []
+  end
+
+  sig { returns(T::Array[String]) }
+  def self.strings_encoding_args
     []
   end
 

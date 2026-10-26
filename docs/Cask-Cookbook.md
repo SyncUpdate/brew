@@ -126,7 +126,7 @@ An exception is `target:` which typically consists of short lines.
 ### Required stanzas
 
 Each cask requires the identity and download stanzas below.
-Submissions to `homebrew/cask` may require additional stanzas such as `livecheck`, `depends_on`, `uninstall` or `zap` when the package needs them.
+New submissions to `homebrew/cask` also require a [`zap`](#stanza-zap) stanza and may require additional stanzas such as `livecheck`, `depends_on` or `uninstall` when the package needs them.
 
 | name                               | multiple occurrences allowed? | value |
 | ---------------------------------- | :---------------------------: | ----- |
@@ -211,7 +211,7 @@ Allowing writes to a directory does not allow connections to sockets in it.
 | [`caveats`](#stanza-caveats)               | yes                           | String or Ruby block providing the user with cask-specific information at install time. |
 | [`livecheck`](#stanza-livecheck)           | no                            | Ruby block describing how to find updates when automatic detection is insufficient. It is not used with `version :latest` unless the block uses `skip`. |
 | [`depends_on`](#stanza-depends_on)         | yes                           | Dependencies and operating-system or architecture requirements for this cask. |
-| [`zap`](#stanza-zap)                       | no                            | Additional procedures for a more complete uninstall, including user files and shared resources. |
+| [`zap`](#stanza-zap)                       | no                            | Additional procedures for a more complete uninstall, including user files and shared resources. Required for new casks in `homebrew/cask`. |
 | [`deprecate!`](#stanza-deprecate--disable) | no                            | Date as a string in `YYYY-MM-DD` format and a string or symbol providing a reason. |
 | [`disable!`](#stanza-deprecate--disable)   | no                            | Date as a string in `YYYY-MM-DD` format and a string or symbol providing a reason. |
 | `preflight_steps`                          | yes                           | Declarative file preparation steps run before artifact installation. |
@@ -800,6 +800,8 @@ The `livecheck` stanza is used to automatically fetch the latest version of a ca
 
 Every `livecheck` block must contain a `url`, which can be either a string or a symbol pointing to other URLs in the cask (`:url` or `:homepage`).
 
+Omit a `livecheck` block if a strategy automatically provides correct version information and no changes are needed.
+
 Refer to the [`brew livecheck`](Brew-Livecheck.md) documentation for how to write a `livecheck` block.
 
 ### Stanza: `no_autobump!`
@@ -1321,11 +1323,21 @@ brew uninstall --zap --force firefox
 
 The form of the `zap` stanza follows the [`uninstall`](#stanza-uninstall) stanza. All the same directives are available. The `trash:` key is preferred over `delete:`.
 
+Use `zap :not_required` instead of directives when there is nothing to zap (see [`zap` creation](#zap-creation)).
+
 Example: [dropbox.rb](https://github.com/Homebrew/homebrew-cask/blob/974a55ade77bb4edc8bbb80ef72eec83ae0e76c0/Casks/d/dropbox.rb#L30-L68)
 
 #### `zap` creation
 
-The simplest method is to use `brew generate-zap`, which scans the system for associated files and directories to automatically generate the stanza. The target application should have been launched at least once so that preference files and caches exist on disk. In a few instances it may fail to pick up anything and manual creation may be required.
+The simplest method is to use `brew generate-zap`, which scans the system for associated files and directories to automatically generate the stanza:
+
+1. Install the cask with `HOMEBREW_NO_INSTALL_FROM_API=1 brew install --cask <token>`.
+2. Launch the app and use it briefly so that preference files and caches exist on disk, then quit it.
+3. Run `brew generate-zap <token>` and paste its output into the cask.
+
+`brew create --cask` runs `brew generate-zap` for you if the app is already installed in `/Applications`.
+CI also installs and launches the app on macOS, then reports any paths that the `zap` stanza misses.
+In a few instances `brew generate-zap` may fail to pick up anything and manual creation may be required.
 
 Manual creation can be facilitated with:
 
@@ -1333,11 +1345,14 @@ Manual creation can be facilitated with:
 * An uninstaller tool such as [AppCleaner](https://formulae.brew.sh/cask/appcleaner)
 * Inspection of the usual paths, i.e. `/Library/{'Application Support',LaunchAgents,LaunchDaemons,Frameworks,Logs,Preferences,PrivilegedHelperTools}` and `~/Library/{'Application Support',Caches,Containers,LaunchAgents,Logs,Preferences,'Saved Application State'}`
 
-If no additional files are discovered, instead of a zap stanza, include the following comment:
+If no additional files are discovered, declare that nothing needs to be zapped instead:
 
 ```ruby
-# No zap stanza required
+zap :not_required
 ```
+
+A cask that supports Linux and has its `zap` stanza inside an `on_macos` block also needs a `zap` stanza or `zap :not_required` inside its `on_linux` block.
+`brew generate-zap` only scans macOS paths, so write a Linux `zap` stanza by hand.
 
 ## Conditional statements
 
@@ -1421,8 +1436,8 @@ cask "calibre" do
     sha256 "a7ed19ae0526630ccb138b9afee6dc5169904180b02f7a3089e78d3e0022753b"
 
     livecheck do
-      url "https://github.com/kovidgoyal/calibre"
-      strategy :github_latest
+      url "https://calibre-ebook.com/dist/osx"
+      strategy :header_match
     end
   end
 end

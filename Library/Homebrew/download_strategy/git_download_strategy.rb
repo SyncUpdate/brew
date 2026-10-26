@@ -8,6 +8,8 @@ require "utils/timer"
 # @api public
 class GitDownloadStrategy < VCSDownloadStrategy
   MINIMUM_COMMIT_HASH_LENGTH = 7
+  NO_RECURSE_SUBMODULES = "--no-recurse-submodules"
+  private_constant :NO_RECURSE_SUBMODULES
 
   sig { params(url: String, name: String, version: T.nilable(T.any(String, Version)), meta: T.untyped).void }
   def initialize(url, name, version, **meta)
@@ -68,7 +70,8 @@ class GitDownloadStrategy < VCSDownloadStrategy
 
   sig { returns(T::Array[String]) }
   def clone_args
-    args = %w[clone]
+    # Fetch submodules separately without the top-level token, even when Git configuration enables recursion.
+    args = ["clone", NO_RECURSE_SUBMODULES]
 
     case @ref_type
     when :branch, :tag
@@ -82,32 +85,49 @@ class GitDownloadStrategy < VCSDownloadStrategy
     args << "--end-of-options" << @url << cached_location.to_s
   end
 
+  # Capture non-interactive Git output using the download environment and permissions.
+  sig {
+    params(sandbox: Sandbox, args: String, timeout: T.nilable(T.any(Float, Integer)))
+      .returns(SystemCommand::Result)
+  }
+  def self.sandboxed_git(sandbox, *args, timeout: nil)
+    require "utils/git"
+
+    sandbox.capture(
+      "/usr/bin/env",
+      args: [*sandboxed_env.map { |key, value| "#{key}=#{value}" }, Utils::Git.git, *args],
+      timeout:, must_succeed: false, print_stderr: false, debug: false, verbose: false
+    )
+  end
+
+  # Preserve user configuration, helper executables and SSH agents during downloads.
+  sig { returns(T::Hash[String, String]) }
+  def self.sandboxed_env
+    {
+      "GIT_TERMINAL_PROMPT" => "0",
+      "HOME"                => Dir.home(ENV.fetch("USER")),
+      "PATH"                => PATH.new(ENV.fetch("PATH"), ORIGINAL_PATHS).to_s,
+      "SSH_ASKPASS"         => "/usr/bin/false",
+      "SSH_ASKPASS_REQUIRE" => "force",
+    }.merge(ENV.slice("SSH_AUTH_SOCK"))
+  end
+
   private
 
   sig { override.returns(Symbol) }
   def fetch_home_read_exception = :git
 
-  sig { override.params(sandbox: Sandbox).void }
-  def allow_fetch_credentials(sandbox)
-    # Let Git and SSH resolve configuration, includes, URL rewrites and agent sockets.
-    sandbox.allow_network(path: "/", type: :subpath)
-  end
-
   # Read user Git config so credential helpers work for private downloads,
   # but never block on an interactive credential prompt.
-  sig { override.returns(T::Hash[String, String]) }
-  def env
+  sig { override.params(credential_lookup: T::Boolean).returns(T::Hash[String, String]) }
+  def env(credential_lookup: false)
     { "GIT_TERMINAL_PROMPT" => "0" }.tap do |env|
-      if fetching? && Sandbox.isolate_operation?
-        env["HOME"] = Dir.home(ENV.fetch("USER"))
-        env["PATH"] = PATH.new(ENV.fetch("PATH"), ORIGINAL_PATHS).to_s
-        env["SSH_ASKPASS"] = "/usr/bin/false"
-        env["SSH_ASKPASS_REQUIRE"] = "force"
-        if (socket = ENV.fetch("SSH_AUTH_SOCK", nil))
-          env["SSH_AUTH_SOCK"] = socket
-        end
-      end
-      next if !fetching? || !(token = Homebrew::EnvConfig.github_api_token) || !which("gh", ORIGINAL_PATHS)
+      env.merge!(self.class.sandboxed_env) if fetching? && Sandbox.isolate_operation?
+      next if !fetching? || !credential_lookup || !(gh = which("gh", ORIGINAL_PATHS))
+
+      token = Homebrew::EnvConfig.github_api_token
+      next if token.nil? && (!Sandbox.isolate_operation? ||
+                            [GitDownloadStrategy, GitHubGitDownloadStrategy].exclude?(self.class))
 
       env["PATH"] ||= PATH.new(ENV.fetch("PATH"), ORIGINAL_PATHS).to_s
       # Resolve rewrites and helpers with the same configuration Git will use.
@@ -118,7 +138,23 @@ class GitDownloadStrategy < VCSDownloadStrategy
 
       helpers = system_command("git", args: ["config", "--get-urlmatch", "credential.helper", remote.stdout.chomp],
                                       **git_options)
-      env["GH_TOKEN"] = token if helpers.success? && helpers.stdout.lines.last&.strip.present?
+      next if !helpers.success? || helpers.stdout.lines.last&.strip.blank?
+
+      if token
+        env["GH_TOKEN"] = token
+        next
+      end
+
+      remote_url = URI.parse(remote.stdout.chomp)
+      next if !remote_url.is_a?(URI::HTTPS) || remote_url.host != "github.com" ||
+              remote_url.port != URI::HTTPS::DEFAULT_PORT
+
+      credential_timeout = 10
+      if (token = GitHub::API.github_cli_token(executable: gh, timeout: credential_timeout))
+        env["GH_TOKEN"] = token
+      end
+    rescue URI::InvalidURIError, Timeout::Error
+      nil
     end
   end
 
@@ -129,7 +165,15 @@ class GitDownloadStrategy < VCSDownloadStrategy
   sig { returns(T::Hash[String, String]) }
   def local_git_env
     require "utils/git"
-    env.except("GH_TOKEN").merge(Utils::Git.no_global_config_env)
+    env.merge(Utils::Git.no_global_config_env)
+  end
+
+  sig { params(args: T::Array[String], timeout: T.nilable(Time)).returns(SystemCommand::Result) }
+  def git_download_command!(args:, timeout: nil)
+    download_env = env(credential_lookup: true)
+    system_command!("git", args:, chdir: (args.first == "clone") ? nil : cached_location,
+                          timeout: Utils::Timer.remaining(timeout), env: download_env,
+                          secrets: download_env.values_at("GH_TOKEN").compact, **command_output_options)
   end
 
   sig { override.returns(String) }
@@ -235,24 +279,13 @@ class GitDownloadStrategy < VCSDownloadStrategy
     return if @ref_type != :branch && ref?
 
     # Convert any shallow clone to full clone
-    if shallow_dir?
-      command! "git",
-               args:    ["fetch", "origin", "--unshallow"],
-               chdir:   cached_location,
-               timeout: Utils::Timer.remaining(timeout)
-    else
-      command! "git",
-               args:    ["fetch", "origin"],
-               chdir:   cached_location,
-               timeout: Utils::Timer.remaining(timeout)
-    end
+    git_download_command!(args:    ["fetch", NO_RECURSE_SUBMODULES, "origin", *("--unshallow" if shallow_dir?)],
+                          timeout:)
   end
 
   sig { override.params(timeout: T.nilable(Time)).void }
   def clone_repo(timeout: nil)
-    command! "git",
-             args:    clone_args,
-             timeout: Utils::Timer.remaining(timeout)
+    git_download_command!(args: clone_args, timeout:)
 
     command! "git",
              args:    ["config", "homebrew.cacheversion", cache_version],
@@ -268,7 +301,7 @@ class GitDownloadStrategy < VCSDownloadStrategy
   sig { params(timeout: T.nilable(Time)).void }
   def checkout(timeout: nil)
     ohai "Checking out #{@ref_type} #{@ref}" if @ref
-    command! "git", args: ["checkout", "-f", @ref, "--"], chdir: cached_location,
+    command! "git", args: ["checkout", NO_RECURSE_SUBMODULES, "-f", @ref, "--"], chdir: cached_location,
                     timeout: Utils::Timer.remaining(timeout)
   end
 
@@ -282,7 +315,7 @@ class GitDownloadStrategy < VCSDownloadStrategy
     end
 
     command! "git",
-             args:  ["reset", "--hard", *ref, "--"],
+             args:  ["reset", NO_RECURSE_SUBMODULES, "--hard", *ref, "--"],
              chdir: cached_location
   end
 

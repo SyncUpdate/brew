@@ -94,9 +94,15 @@ module Utils
 
     sig { void }
     def clear_path_cache
+      ENV.delete("HOMEBREW_CURL_VERSION")
+      ENV.delete("HOMEBREW_CURL_VERSION_PATH")
       @curl_path = nil
+      @curl_version = nil
+      @curl_supports_fail_with_body = nil
+      @curl_supports_tls13 = nil
     end
 
+    # Keep environment options in sync with setup_curl_args in utils/curl.sh.
     sig {
       params(
         extra_args:      String,
@@ -127,13 +133,14 @@ module Utils
     )
       args = []
 
-      # do not load .curlrc unless requested (must be the first argument)
+      # Personal curl defaults can change downloads or the output Homebrew parses.
+      # --disable must be first to ignore them, even when the shim adds certificate options.
       curlrc = Homebrew::EnvConfig.curlrc
       if curlrc&.start_with?("/")
-        # If the file exists, we still want to disable loading the default curlrc.
+        # Load only the explicit config; --config alone also loads the default curlrc.
         args << "--disable" << "--config" << curlrc
       elsif curlrc
-        # This matches legacy behavior: `HOMEBREW_CURLRC` was a bool,
+        # This matches legacy behaviour: `HOMEBREW_CURLRC` was a bool,
         # omitting `--disable` when present.
       else
         args << "--disable"
@@ -202,6 +209,7 @@ module Utils
       HTTPS_REDIRECT_CURL_ARGS
     end
 
+    # Keep redirect policy in sync with setup_curl_args in utils/curl.sh.
     sig { params(args: T::Array[String]).returns(T::Array[String]) }
     def no_insecure_redirect_curl_args(args)
       return args unless Homebrew::EnvConfig.no_insecure_redirect?
@@ -724,11 +732,22 @@ module Utils
 
     sig { returns(Version) }
     def curl_version
+      # setup_curl in utils/curl.sh passes the version for its selected executable.
+      if (version = ENV.fetch("HOMEBREW_CURL_VERSION", nil))&.match?(/\A\d+\.\d+(?:\.\d+)?\z/) &&
+         curl_path == ENV["HOMEBREW_CURL_VERSION_PATH"] && curl_path == ENV["HOMEBREW_CURL"]
+        return Version.new(version)
+      end
+
       @curl_version ||= T.let({}, T.nilable(T::Hash[String, Version]))
       @curl_version[curl_path] ||= begin
-        curl_v_stdout = curl_output("-V").stdout
-        version = curl_v_stdout[/curl (\d+(?:\.\d+)+)/, 1]
-        odie("Failed to parse curl version from #{curl_v_stdout}") if version.nil?
+        result = curl_output("-V")
+        version = result.stdout[/curl (\d+(?:\.\d+)+)/, 1]
+        if !result.success? || version.nil?
+          require "utils/tool"
+          Utils::Tool.invalidate_cache(:curl)
+          result.assert_success!
+          odie("Failed to parse curl version from #{result.stdout}")
+        end
         Version.new(version)
       end
     end
@@ -744,7 +763,7 @@ module Utils
     sig { returns(T::Boolean) }
     def curl_supports_tls13?
       @curl_supports_tls13 ||= T.let(Hash.new do |h, key|
-        h[key] = SystemCommand.quiet_system(curl_executable, "--tlsv1.3", "--head", "https://brew.sh/")
+        h[key] = SystemCommand.quiet_system(curl_executable, *curl_args("--tlsv1.3", "--head", "https://brew.sh/"))
       end, T.nilable(T::Hash[T.any(Pathname, String), T::Boolean]))
       @curl_supports_tls13[curl_path]
     end

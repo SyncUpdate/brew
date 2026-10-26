@@ -174,11 +174,25 @@ module Homebrew
         supported_configuration_checks + build_from_source_checks
       end
 
+      # Compares like {Tap.same_remote?}, e.g. treating SSH and HTTPS GitHub URLs as the same,
+      # but also allows a `.git` suffix or trailing slash on other hosts, e.g. mirrors.
+      sig { params(url: String, desired_origin: String).returns(T::Boolean) }
+      def desired_git_remote?(url, desired_origin)
+        Tap.same_remote?(url, desired_origin) || url.match?(%r{\A#{Regexp.escape(desired_origin)}(\.git|/)?\z}i)
+      end
+
       sig { params(repository_path: GitRepository, desired_origin: String).returns(T.nilable(Finding)) }
       def examine_git_origin(repository_path, desired_origin)
         return if !Utils::Git.available? || !repository_path.git_repository?
 
         current_origin = repository_path.origin_url
+        return if current_origin && desired_git_remote?(current_origin, desired_origin)
+
+        remotes = Utils.popen_read(Utils::Git.git, "-C", repository_path.pathname, "remote", "-v").lines
+        desired_remote, desired_remote_url = remotes.find do |line|
+          remote, url, direction = line.split
+          remote != "origin" && direction == "(fetch)" && url && desired_git_remote?(url, desired_origin)
+        end&.split
 
         if current_origin.nil?
           Finding.new(
@@ -197,7 +211,30 @@ module Homebrew
               ],
             ),
           )
-        elsif !current_origin.match?(%r{#{desired_origin}(\.git|/)?$}i)
+        elsif desired_remote
+          Finding.new(
+            <<~EOS,
+              The current git origin is:
+                #{current_origin}
+              but the `#{desired_remote}` remote is:
+                #{desired_remote_url}
+
+              With a non-standard origin, Homebrew won't update properly
+              and `--changed` options compare against the wrong branch.
+            EOS
+            remediation: Finding::Remediation.new(
+              text:     <<~EOS,
+                You can solve this by renaming the remotes:
+                  git -C "#{repository_path}" remote rename origin fork
+                  git -C "#{repository_path}" remote rename #{desired_remote} origin
+              EOS
+              commands: [
+                "git -C \"#{repository_path}\" remote rename origin fork",
+                "git -C \"#{repository_path}\" remote rename #{desired_remote} origin",
+              ],
+            ),
+          )
+        else
           Finding.new(
             <<~EOS,
               The current git origin is:
@@ -629,6 +666,54 @@ module Homebrew
         )
       end
 
+      sig { returns(T::Array[Finding]) }
+      def check_tools
+        require "utils/curl"
+        require "utils/tool"
+
+        %w[git curl].filter_map do |tool|
+          minimum = ENV.fetch("HOMEBREW_MINIMUM_#{tool.upcase}_VERSION")
+          if tool == "git"
+            Utils::Git.clear_available_cache
+          else
+            Utils::Curl.clear_path_cache
+          end
+          # Always probe the executable, then reselect and retry once on failure.
+          next if 2.times.any? do
+            begin
+              result = system_command "/bin/bash", args: ["-c", <<~SH], timeout: 10, print_stderr: false
+                source "${HOMEBREW_LIBRARY}/Homebrew/utils.sh"
+                source "${HOMEBREW_LIBRARY}/Homebrew/utils/#{tool}.sh"
+                setup_#{tool}
+                printf '%s\\0' "${HOMEBREW_SELECTED_TOOL}"
+                [[ -n "${HOMEBREW_SELECTED_TOOL}" ]] || exit 1
+                exec "${HOMEBREW_SELECTED_TOOL}" --version
+              SH
+              path, output = result.stdout.split("\0", 2)
+              version = output&.[](/^#{tool}(?: version)? (\d+(?:\.\d+)+)/, 1)
+              if result.success? && path.present? && version && Version.new(version) >= Version.new(minimum)
+                ENV["HOMEBREW_#{tool.upcase}"] = path
+                if tool == "curl"
+                  ENV["HOMEBREW_CURL_VERSION"] = version
+                  ENV["HOMEBREW_CURL_VERSION_PATH"] = path
+                end
+                next true
+              end
+            rescue Timeout::Error, SystemCallError
+              # A failed launch or hung version probe also invalidates selection.
+            end
+            Utils::Tool.invalidate_cache(tool.to_sym)
+            false
+          end
+
+          Finding.new(<<~EOS)
+            Homebrew could not find a working #{tool} after refreshing its cached selection.
+            Minimum required version: #{minimum}
+            Initial executable: #{ENV.fetch("HOMEBREW_#{tool.upcase}", tool)}
+          EOS
+        end
+      end
+
       sig { returns(T.nilable(Finding)) }
       def check_git_version
         minimum_version = ENV.fetch("HOMEBREW_MINIMUM_GIT_VERSION")
@@ -670,6 +755,61 @@ module Homebrew
             commands:,
           ),
         )
+      end
+
+      sig { returns(T.nilable(Finding)) }
+      def check_git_config_in_sandbox
+        require "download_strategy"
+
+        return unless Utils::Git.available?
+        return if Sandbox.nested_sandbox?
+        return unless Sandbox.use_for?("checking Git configuration", warn_without_sandbox: false)
+
+        sandbox = Sandbox.for_operation(home_read_exception: :git, network_access: true)
+        output = +""
+        begin
+          config = GitDownloadStrategy.sandboxed_git(
+            sandbox, "config", "--null", "--list", "--includes", timeout: 10
+          )
+          return if config.success?
+
+          output << config.stdout << "\0" << config.stderr
+          problem = "Git failed while reading configuration (#{config.status})."
+        rescue Timeout::Error
+          problem = "The Git configuration check timed out."
+        end
+
+        output.scrub!
+        paths = sandbox.denied_read_paths.select do |path|
+          output.match?(%r{#{Regexp.escape(path)}(?=/|[\s\0'"]|\z)})
+        end
+
+        remediation = <<~EOS
+          Check your global Git configuration and includes.
+          Correct unreadable paths or use files accessible to the sandbox.
+          Homebrew will not expand sandbox access for configured paths.
+          This check does not run credential helpers or verify authentication.
+        EOS
+        if paths.present?
+          remediation += append_indented_list(paths.map(&:inspect), <<~EOS)
+
+            Sandbox-restricted locations referenced by Git:
+          EOS
+        end
+
+        Finding.new(
+          <<~EOS,
+            Git checks failed inside Homebrew's download sandbox.
+            Git source downloads may also be affected.
+            #{problem}
+          EOS
+          remediation: Finding::Remediation.new(text: remediation),
+        )
+      rescue SystemCallError, RuntimeError
+        Finding.new(<<~EOS)
+          The Git configuration check could not run in Homebrew's download sandbox.
+          Check Homebrew's sandbox setup and temporary directory permissions.
+        EOS
       end
 
       sig { returns(T.nilable(Finding)) }

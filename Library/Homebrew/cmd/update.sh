@@ -13,6 +13,7 @@
 # shellcheck disable=SC2154
 source "${HOMEBREW_LIBRARY}/Homebrew/utils/cmd.sh"
 source "${HOMEBREW_LIBRARY}/Homebrew/utils/api.sh"
+source "${HOMEBREW_LIBRARY}/Homebrew/utils/curl.sh"
 source "${HOMEBREW_LIBRARY}/Homebrew/utils/lock.sh"
 
 macos_version_name() {
@@ -456,7 +457,7 @@ fetch_api_file() {
   local etag_path="${cache_path}.etag"
   local new_etag_path="${cache_path}.etag.new"
   local new_cache_path="${cache_path}.new"
-  local arg compare_etag_path curl_exit_code http_code json_url last_json_url
+  local compare_etag_path curl_exit_code http_code json_url last_json_url
   local -a etag_args conditional_args
   while read -r json_url
   do
@@ -471,10 +472,7 @@ fetch_api_file() {
     conditional_args=()
     if [[ -z "${last_json_url}" ]]
     then
-      while read -r arg
-      do
-        conditional_args+=("${arg}")
-      done < <(api_conditional_args "${cache_path}" "${compare_etag_path}" "${json_url}")
+      api_conditional_args "${cache_path}" "${compare_etag_path}" "${json_url}"
     fi
     rm -f "${new_cache_path}" "${new_etag_path}"
     http_code="$(api_curl_download "${json_url}" "${new_cache_path}" "${etag_args[@]}" "${conditional_args[@]}")"
@@ -550,7 +548,6 @@ fetch_api_file() {
 }
 
 homebrew-update() {
-  local arg
   local option
   local DIR
   local UPSTREAM_BRANCH
@@ -644,27 +641,16 @@ EOS
   fi
 
   # we may want to use a Homebrew curl
-  if [[ -n "${HOMEBREW_FORCE_BREWED_CURL}" && ! -x "${HOMEBREW_PREFIX}/opt/curl/bin/curl" ]]
+  if [[ -n "${HOMEBREW_FORCE_BREWED_CURL}" && "${HOMEBREW_CURL}" != "${HOMEBREW_PREFIX}/opt/curl/bin/curl" ]]
   then
-    # we cannot install a Homebrew cURL if homebrew/core is unavailable.
-    if [[ -z "${HOMEBREW_CORE_AVAILABLE}" ]] || ! brew install curl
-    then
-      odie "'curl' must be installed and in your PATH!"
-    fi
-
-    setup_curl
+    install_tool curl "${HOMEBREW_MINIMUM_CURL_VERSION}"
   fi
 
   if ! (git --version) &>/dev/null ||
-     [[ -n "${HOMEBREW_FORCE_BREWED_GIT}" && ! -x "${HOMEBREW_PREFIX}/opt/git/bin/git" ]]
+     [[ -n "${HOMEBREW_FORCE_BREWED_GIT}" && "${HOMEBREW_GIT}" != "${HOMEBREW_PREFIX}/opt/git/bin/git" ]]
   then
     # Keep Git bootstrapping in sync with utils/git.rb.
-    if [[ -z "${HOMEBREW_CORE_AVAILABLE}" ]] || ! brew install git
-    then
-      odie "'git' must be installed and in your PATH!"
-    fi
-
-    setup_git
+    install_tool git "${HOMEBREW_MINIMUM_GIT_VERSION}"
   fi
 
   shallow_repository "${HOMEBREW_CORE_REPOSITORY}" && HOMEBREW_CORE_SHALLOW=1
@@ -720,12 +706,7 @@ EOS
     QUIET_ARGS=()
   fi
 
-  # HOMEBREW_CURLRC is optionally defined in the user environment.
-  CURL_DISABLE_CURLRC_ARGS=()
-  while read -r arg
-  do
-    CURL_DISABLE_CURLRC_ARGS+=("${arg}")
-  done < <(api_curlrc_args)
+  setup_curl_args
 
   # only allow one instance of brew update
   lock update

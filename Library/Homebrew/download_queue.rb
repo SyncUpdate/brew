@@ -165,7 +165,9 @@ module Homebrew
           end
 
           @failed_downloads << downloadable
-          ofail "#{downloadable.download_queue_type} reports different checksum: #{e.expected}"
+          actual_message, expected_message = align_checksum_mismatch_message(downloadable.download_queue_message)
+          ofail "#{actual_message} #{e.expected}"
+          puts "#{expected_message} #{e.actual}"
           # Remove the known-bad download so it can never be staged later.
           unlink_cached_download(downloadable)
         rescue
@@ -184,6 +186,15 @@ module Homebrew
         resolution = Concurrent::Event.new
         fetchable_downloads.each_value { |future| future.on_resolution! { resolution.set } }
 
+        # `WINCH` is `SIGWINCH` (window change), which Ruby names without the
+        # `SIG` prefix. The kernel sends it to the foreground process group
+        # when the terminal is resized. Without this handler `Tty.width` keeps
+        # the width brew started with, so progress lines wrap after the
+        # terminal narrows and the redraw, which moves the cursor up by lines
+        # rather than rows, starts lower each time. `Tty.size_stale!` only
+        # marks the cached size as stale so it is safe to call from a handler.
+        trap(:WINCH) { Tty.size_stale! }
+        frame_width = Tty.width if tty_with_cursor_move_support?
         begin
           stdout_print_and_flush_if_tty Tty.hide_cursor
 
@@ -207,7 +218,8 @@ module Homebrew
             elsif future.rejected?
               if exception.is_a?(ChecksumMismatchError)
                 @failed_downloads << downloadable
-                actual_message, expected_message = align_checksum_mismatch_message(downloadable.download_queue_type)
+                actual_message, expected_message =
+                  align_checksum_mismatch_message(downloadable.download_queue_message)
 
                 report_or_defer_failure do
                   ofail "#{actual_message} #{exception.expected}"
@@ -245,6 +257,11 @@ module Homebrew
           until remaining_downloads.empty?
             begin
               stdout_print_and_flush_if_tty Tty.begin_synchronized_update
+              # Terminals rewrap the frame already on screen when their width
+              # changes, so clear any rows the next frame won't overwrite.
+              if frame_width && (width = Tty.width) && width != frame_width && (frame_width = width)
+                stdout_print_and_flush Tty.clear_to_end_of_screen
+              end
 
               finished_states = [:fulfilled, :rejected]
 
@@ -480,9 +497,9 @@ module Homebrew
       end
     end
 
-    sig { params(downloadable_type: String).returns([String, String]) }
-    def align_checksum_mismatch_message(downloadable_type)
-      actual_checksum_output = "#{downloadable_type} reports different checksum:"
+    sig { params(downloadable_message: String).returns([String, String]) }
+    def align_checksum_mismatch_message(downloadable_message)
+      actual_checksum_output = "#{downloadable_message} reports different checksum:"
       expected_checksum_output = "SHA-256 checksum of downloaded file:"
 
       # `.max` returns `T.nilable(Integer)`, use `|| 0` to pass the typecheck

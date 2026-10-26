@@ -3524,12 +3524,13 @@ resolved from the cask's `app` artifact.
 The target application should have been launched at least once so that
 preference files and caches exist on disk.
 
-Outputs `trash`, `delete`, and `rmdir` directives suitable for pasting into a
-cask definition.
+Outputs `trash`, `delete` and `rmdir` directives suitable for pasting into a
+cask definition, or `zap :not_required` if nothing is found.
 
 `--name`
 
-: Treat the argument as a raw application name instead of a cask token.
+: Treat the argument as a raw application name instead of a cask token. Also
+  matches the app's bundle identifier if it is installed in `/Applications`.
 
 ### `install-bundler-gems` \[`--groups=`\] \[`--add-groups=`\]
 
@@ -4439,6 +4440,12 @@ prefix-specific files take precedence over system-wide files (unless
 Note that these files do not support shell variable expansion (e.g. `$HOME`) or
 command execution (e.g. `$(cat file)`).
 
+For MDM configuration, package restrictions and policy ownership, see:
+
+[Homebrew for Mac Admins][1]
+
+[Homebrew Package Policies][2]
+
 `HOMEBREW_API_AUTO_UPDATE_SECS`
 
 : Check Homebrew's API for new formulae or cask data every
@@ -4684,14 +4691,14 @@ command execution (e.g. `$(cat file)`).
 
 : If set to an absolute path (i.e. beginning with `/`), pass it with `--config`
   when invoking `curl`(1). If set but *not* a valid path, do not pass
-  `--disable`, which disables the use of `.curlrc`.
+  `--disable`, which disables the use of `.curlrc`. Git operations, including
+  repository fetches in `brew update`, do not use this file because Git uses its
+  own transport and configuration.
 
 `HOMEBREW_CURL_PATH`
 
-: Linux only: Set this value to a new enough `curl` executable for Homebrew to
-  use.
-  
-  *Default:* `curl`.
+: Suggest a `curl` executable for Homebrew to use. Homebrew may prefer another
+  executable for security or reliability.
 
 `HOMEBREW_CURL_RETRIES`
 
@@ -4828,13 +4835,13 @@ command execution (e.g. `$(cat file)`).
 
 `HOMEBREW_FORCE_BREWED_CURL`
 
-: If set, always use a Homebrew-installed `curl`(1) rather than the system
-  version. Automatically set if the system version of `curl` is too old.
+: If set, prefer a Homebrew-installed `curl`(1), installing it if needed.
+  Automatically set if no suitable `curl` is available.
 
 `HOMEBREW_FORCE_BREWED_GIT`
 
-: If set, always use a Homebrew-installed `git`(1) rather than the system
-  version. Automatically set if the system version of `git` is too old.
+: If set, prefer a Homebrew-installed `git`(1), installing it if needed.
+  Automatically set if no suitable `git` is available.
 
 `HOMEBREW_FORCE_VENDOR_RUBY`
 
@@ -4902,10 +4909,8 @@ command execution (e.g. `$(cat file)`).
 
 `HOMEBREW_GIT_PATH`
 
-: Linux only: Set this value to a new enough `git` executable for Homebrew to
-  use.
-  
-  *Default:* `git`.
+: Suggest a `git` executable for Homebrew to use. Homebrew may prefer another
+  executable for security or reliability.
 
 `HOMEBREW_INSTALL_BADGE`
 
@@ -5110,10 +5115,8 @@ command execution (e.g. `$(cat file)`).
 
 `HOMEBREW_SVN`
 
-: Use this as the `svn`(1) binary.
-  
-  *Default:* A Homebrew-built Subversion (if installed), or the system-provided
-  binary.
+: Suggest an `svn`(1) executable for Homebrew to use. Homebrew may prefer
+  another executable for security or reliability.
 
 `HOMEBREW_SYSTEM_ENV_TAKES_PRIORITY`
 
@@ -5211,6 +5214,8 @@ Homebrew Documentation: <https://docs.brew.sh>
 
 Homebrew API: <https://docs.brew.sh/rubydoc/>
 
+[Homebrew for teams at work][3]
+
 `git`(1), `git-log`(1)
 
 ## AUTHORS
@@ -5242,3 +5247,8 @@ See our issues on GitHub:
 
 : <https://github.com/Homebrew/homebrew-cask/issues>
 
+
+
+[1]: https://docs.brew.sh/Homebrew-for-Mac-Admins
+[2]: https://docs.brew.sh/Homebrew-Package-Policies
+[3]: https://docs.brew.sh/Homebrew-for-Teams

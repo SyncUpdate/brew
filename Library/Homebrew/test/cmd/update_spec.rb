@@ -33,7 +33,7 @@ RSpec.describe Homebrew::Cmd::Update do
   def setup_update_utils
     (test_root/"Library/Homebrew/utils").mkpath
     FileUtils.ln_s repository_root/"Library/Homebrew/utils.sh", test_root/"Library/Homebrew/utils.sh"
-    %w[api cmd curl executables formatter lock tty].each do |name|
+    %w[api cmd curl executables formatter lock tool tty].each do |name|
       FileUtils.ln_s repository_root/"Library/Homebrew/utils/#{name}.sh",
                      test_root/"Library/Homebrew/utils/#{name}.sh"
     end
@@ -78,6 +78,64 @@ RSpec.describe Homebrew::Cmd::Update do
     expect([status.exitstatus, stdout, stderr]).to eq([0, "install git\ngit-ready\n", ""])
   end
 
+  test_each(%w[git curl]) do |tool|
+    it "keeps #{tool} selection after an ordinary command failure" do
+      setup_update_utils
+      executable = test_root/tool
+      executable.write "#!/bin/bash\necho original-error >&2\nexit 128\n"
+      executable.chmod(0755)
+      selection_cache = test_root/"cache/tool-selection"/tool
+      selection_cache.dirname.mkpath
+      selection_cache.write "cached selection"
+
+      _stdout, stderr, status = run_update_shell(
+        <<~SH,
+          source "#{update_script}"
+          #{tool}
+        SH
+        {
+          "#{tool.upcase}_EXECUTABLE" => executable.to_s,
+          "HOMEBREW_LIBRARY"          => (test_root/"Library").to_s,
+          "HOMEBREW_CACHE"            => (test_root/"cache").to_s,
+        },
+      )
+
+      expect([status.exitstatus, stderr, selection_cache.exist?]).to eq([128, "original-error\n", true])
+    end
+
+    it "installs forced #{tool} when its installed executable was rejected" do
+      setup_update_utils
+      installed_tool = test_root/"opt"/tool/"bin"/tool
+      installed_tool.dirname.mkpath
+      installed_tool.write "#!/bin/bash\nexit 1\n"
+      installed_tool.chmod(0755)
+
+      stdout, stderr, status = run_update_shell(
+        <<~SH,
+          source "#{update_script}"
+          git() { return 0; }
+          brew() { echo "$*"; }
+          setup_#{tool}() { echo ready; exit 0; }
+          git_init_if_necessary() { exit 2; }
+          homebrew-update
+        SH
+        {
+          "HOMEBREW_CELLAR"                       => (test_root/"Cellar").to_s,
+          "HOMEBREW_PREFIX"                       => test_root.to_s,
+          "HOMEBREW_FORCE_BREWED_CA_CERTIFICATES" => nil,
+          "HOMEBREW_FORCE_BREWED_CURL"            => (tool == "curl") ? "1" : nil,
+          "HOMEBREW_FORCE_BREWED_GIT"             => (tool == "git") ? "1" : nil,
+          "HOMEBREW_LIBRARY"                      => (test_root/"Library").to_s,
+          "HOMEBREW_NO_INSTALL_FROM_API"          => nil,
+          "HOMEBREW_REPOSITORY"                   => test_root.to_s,
+          "HOMEBREW_#{tool.upcase}"               => "/usr/bin/#{tool}",
+        },
+      )
+
+      expect([status.exitstatus, stdout, stderr]).to eq([0, "install #{tool}\nready\n", ""])
+    end
+  end
+
   it "detects shallow clones and their linked worktrees but not full clones" do
     setup_update_utils
     FileUtils.ln_s repository_root/"Library/Homebrew/shims", test_root/"Library/Homebrew/shims"
@@ -114,6 +172,41 @@ RSpec.describe Homebrew::Cmd::Update do
     expect([status.success?, stdout]).to eq(
       [true, "full: full\nshallow: shallow\nshallow-worktree: shallow\nmissing: full\n"],
     ), stderr
+  end
+
+  it "uses the configured curl options for API downloads" do
+    setup_update_utils
+
+    stdout, stderr, status = run_update_shell(
+      <<~SH,
+        source "#{update_script}"
+        git() { return 0; }
+        shallow_repository() { return 1; }
+        lock() { :; }
+        curl() { printf '%s\\0' "$@"; }
+        git_init_if_necessary() {
+          api_curl_download https://formulae.example/api/formula.jws.json /dev/null
+          exit
+        }
+        homebrew-update
+      SH
+      {
+        "HOMEBREW_CELLAR"                       => (test_root/"Cellar").to_s,
+        "HOMEBREW_CURLRC"                       => "/path with spaces/\n--insecure",
+        "HOMEBREW_CURL_RETRIES"                 => "10",
+        "HOMEBREW_CURL_VERBOSE"                 => "1",
+        "HOMEBREW_FORCE_BREWED_CA_CERTIFICATES" => nil,
+        "HOMEBREW_FORCE_BREWED_CURL"            => nil,
+        "HOMEBREW_FORCE_BREWED_GIT"             => nil,
+        "HOMEBREW_LIBRARY"                      => (test_root/"Library").to_s,
+        "HOMEBREW_NO_INSECURE_REDIRECT"         => "1",
+        "HOMEBREW_REPOSITORY"                   => test_root.to_s,
+      },
+    )
+
+    expect([status.success?, stderr, stdout.split("\0").first(8)])
+      .to eq([true, "", ["-q", "--config", "/path with spaces/\n--insecure", "--retry", "10", "--verbose",
+                         "--proto-redir", "=https"]])
   end
 
   it "retries a failed conditional API download without the time condition" do
@@ -158,9 +251,10 @@ RSpec.describe Homebrew::Cmd::Update do
   end
 
   describe "API ETag revalidation" do
-    let(:cache_path) { test_root/"cache/api/formula.jws.json" }
-    let(:etag_path) { test_root/"cache/api/formula.jws.json.etag" }
-    let(:new_etag_path) { test_root/"cache/api/formula.jws.json.etag.new" }
+    let(:cache_dir) { test_root/"cache directory/\n--insecure" }
+    let(:cache_path) { cache_dir/"api/formula.jws.json" }
+    let(:etag_path) { Pathname("#{cache_path}.etag") }
+    let(:new_etag_path) { Pathname("#{cache_path}.etag.new") }
     let(:args_file) { test_root/"curl-args.txt" }
     let(:update_failed_file) { test_root/"update_failed.txt" }
 
@@ -177,7 +271,7 @@ RSpec.describe Homebrew::Cmd::Update do
         <<~SH,
           source "#{update_script}"
           curl() {
-            printf '%s\\n' "$@" >> "#{args_file}"
+            printf '%s\\0' "$@" >> "#{args_file}"
             [[ "${!#}" == "#{api_domain}/"* ]] && return 22
             local output etag_save
             while [[ $# -gt 0 ]]
@@ -198,7 +292,7 @@ RSpec.describe Homebrew::Cmd::Update do
         {
           "HOMEBREW_API_DEFAULT_DOMAIN"  => "https://formulae.example/api",
           "HOMEBREW_API_DOMAIN"          => api_domain,
-          "HOMEBREW_CACHE"               => (test_root/"cache").to_s,
+          "HOMEBREW_CACHE"               => cache_dir.to_s,
           "HOMEBREW_CURL_SPEED_LIMIT"    => "100",
           "HOMEBREW_CURL_SPEED_TIME"     => "5",
           "HOMEBREW_CURL_SUPPORTS_ETAGS" => curl_supports_etags,
@@ -211,7 +305,7 @@ RSpec.describe Homebrew::Cmd::Update do
       conditional_flags = %w[--etag-compare --etag-save --time-cond]
       {
         success:   status.success? && stderr.empty? && !update_failed_file.exist?,
-        curl_args: args_file.read.lines(chomp: true).each_cons(2).filter_map do |flag, value|
+        curl_args: args_file.read.split("\0").each_cons(2).filter_map do |flag, value|
           [flag, value] if conditional_flags.include?(flag)
         end,
         body:      cache_path.read,
@@ -324,6 +418,7 @@ RSpec.describe Homebrew::Cmd::Update do
       SH
       {
         "HOMEBREW_CURL_SUPPORTS_ETAGS" => "1",
+        "HOMEBREW_CURL_VERSION"        => nil,
         "HOMEBREW_LIBRARY"             => (test_root/"Library").to_s,
       },
     )

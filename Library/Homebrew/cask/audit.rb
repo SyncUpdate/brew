@@ -358,6 +358,23 @@ module Cask
     end
 
     sig { void }
+    def audit_zap_required
+      return unless new_cask?
+      return unless cask.tap&.official?
+      return if cask.artifacts.any?(Artifact::Zap)
+
+      zap_suggestion = if Homebrew::SimulateSystem.simulating_or_running_on_linux?
+        "Add one"
+      else
+        # `brew generate-zap` only scans macOS paths.
+        "Generate one with `brew generate-zap #{cask.token}`"
+      end
+      add_error "New casks must have a `zap` stanza for every OS and architecture they support. " \
+                "#{zap_suggestion} or use `zap :not_required` only if there is nothing to zap. " \
+                "See #{Formatter.url("https://docs.brew.sh/Cask-Cookbook#stanza-zap")}"
+    end
+
+    sig { void }
     def audit_description
       # Fonts seldom benefit from descriptions and requiring them disproportionately
       # increases the maintenance burden.
@@ -718,7 +735,7 @@ module Cask
 
           signing_failure_message = <<~EOS
             Signature verification failed for #{path.relative_path_from(tmpdir)}:
-            #{result.merged_output}
+            #{result.merged_output.gsub(%r{\r?Progress: \d+/\d+\n?}, "")}
           EOS
 
           if cask.tap&.official?
@@ -806,10 +823,8 @@ module Cask
     def audit_rosetta
       return if (url = cask.url).nil?
       return unless online?
-      # Rosetta 2 is only for ARM-capable macOS versions, which are Big Sur (11.x) and later
+      return unless Homebrew::SimulateSystem.simulating_or_running_on_macos?
       return if Homebrew::SimulateSystem.current_arch != :arm
-      return if MacOSVersion::SYMBOLS.fetch(Homebrew::SimulateSystem.current_os, "10") < "11"
-      return if cask.depends_on.macos&.maximum_version.to_s < "11"
 
       odebug "Auditing Rosetta 2 requirement"
 
@@ -866,7 +881,9 @@ module Cask
         end
 
         if any_requires_rosetta
-          if !mentions_rosetta && !requires_intel
+          if new_cask?
+            add_error "New casks must not require Rosetta 2!", location: url.location
+          elsif !mentions_rosetta && !requires_intel
             add_error "At least one artifact requires Rosetta 2 but this is not indicated by the caveats!",
                       location: url.location
           end
@@ -1214,6 +1231,7 @@ module Cask
     def audit_livecheck_required
       return unless new_cask?
       return unless cask.tap&.official?
+      return if cask.version&.latest?
 
       livecheck_required_problem = SharedAudits.livecheck_required_problem(cask)
       add_error livecheck_required_problem if livecheck_required_problem

@@ -22,8 +22,8 @@ RSpec.describe Homebrew::DevCmd::GenerateZap do
     CoreCaskTap.instance.clear_cache
 
     expect { brew "generate-zap", caskfile }
-      .to output(/Scanning for files matching.*No zap stanza required/m).to_stdout
-      .and output(/No files found matching/).to_stderr
+      .to output(/Scanning for files matching.*zap :not_required/m).to_stdout
+      .and output(/No files found matching.*Only use `zap :not_required` if the app has been launched/m).to_stderr
       .and be_a_success
   end
 
@@ -42,6 +42,19 @@ RSpec.describe Homebrew::DevCmd::GenerateZap do
         generate_zap.run
       end.to raise_error(SystemExit)
         .and output(/Full Disk Access/).to_stderr
+    end
+
+    it "also matches the bundle identifier of an installed app with `--name`" do
+      generate_zap = described_class.new(["--name", "Test"])
+
+      allow(generate_zap).to receive_messages(scan_directories: [], scan_home_root: [])
+      allow(generate_zap).to receive(:patterns_from_app_paths)
+        .with([Pathname.new("/Applications/Test.app")])
+        .and_return(["Test", "com.example.test"])
+
+      expect { generate_zap.run }
+        .to output(/Scanning for files matching "Test" and "com.example.test"/).to_stdout
+        .and output.to_stderr
     end
   end
 

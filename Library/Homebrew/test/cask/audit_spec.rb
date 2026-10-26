@@ -1014,6 +1014,14 @@ RSpec.describe Cask::Audit, :cask do
           expect(run).to error_with(%r{Signature verification failed for Audit Suite/Bad\.app:})
         end
 
+        it "omits gktool progress from the error" do
+          (suite/"Bad.app").mkpath
+          allow(failed_result).to receive(:merged_output)
+            .and_return("\rProgress: 0/2\rProgress: 6/6\nScan completed, but failed because it is not signed.\n")
+          stub_check("gktool", "scan", suite/"Bad.app")
+          expect(run).to error_with(/Bad\.app:\nScan completed, but failed/)
+        end
+
         context "when the suite contains a .bundle directory" do
           let(:bundle) { suite/".install4j/Messages.bundle" }
 
@@ -1762,6 +1770,88 @@ RSpec.describe Cask::Audit, :cask do
           run
         end
       end
+
+      context "when the cask uses `version :latest`" do
+        let(:cask) do
+          Cask::Cask.new("livecheck-required", tap: CoreCaskTap.instance) do
+            version :latest
+            sha256 :no_check
+            url "https://brew.sh/livecheck-required.dmg"
+            homepage "https://brew.sh"
+          end
+        end
+
+        it "does not check for a working livecheck" do
+          expect(SharedAudits).not_to receive(:livecheck_required_problem)
+          run
+        end
+      end
+    end
+
+    describe "zap required" do
+      subject(:run) { Homebrew::SimulateSystem.with(os:) { audit.run! } }
+
+      let(:only) { ["zap_required"] }
+      let(:new_cask) { true }
+      let(:os) { :sequoia }
+      let(:message) { /New casks must have a `zap` stanza/ }
+      let(:tap) { CoreCaskTap.instance }
+      let(:stanzas) { nil }
+      let(:cask) do
+        extra_stanzas = stanzas
+        Cask::Cask.new("zap-required", tap:) do
+          version "1.0"
+          sha256 :no_check
+          url "https://brew.sh/zap-required.dmg"
+          homepage "https://brew.sh"
+
+          instance_eval(&extra_stanzas) if extra_stanzas
+        end
+      end
+
+      context "when the cask has no zap stanza" do
+        it do
+          expect(run).to error_with(
+            /Generate one with `brew generate-zap zap-required` or use `zap :not_required`/,
+          )
+        end
+      end
+
+      context "when the cask is not new" do
+        let(:new_cask) { false }
+
+        it { is_expected.not_to error_with(message) }
+      end
+
+      context "when the cask is not in an official tap" do
+        let(:tap) { nil }
+
+        it { is_expected.not_to error_with(message) }
+      end
+
+      context "when the cask has `zap :not_required`" do
+        let(:stanzas) { proc { zap :not_required } }
+
+        it { is_expected.not_to error_with(message) }
+      end
+
+      context "when the cask only has a zap stanza on macOS" do
+        let(:stanzas) do
+          proc do
+            on_macos do
+              zap trash: "~/Library/Preferences/sh.brew.zap-required.plist"
+            end
+          end
+        end
+
+        it { is_expected.not_to error_with(message) }
+
+        context "when auditing Linux" do
+          let(:os) { :linux }
+
+          it { is_expected.to error_with(/Add one or use `zap :not_required`/) }
+        end
+      end
     end
 
     describe "GitHub repository notability" do
@@ -1836,6 +1926,46 @@ RSpec.describe Cask::Audit, :cask do
 
       it "recognizes a suppressed requires_rosetta caveat" do
         expect(run).to pass
+      end
+
+      context "when the cask is new" do
+        let(:new_cask) { true }
+
+        it "rejects artifacts that require Rosetta 2" do
+          expect(run).to error_with("New casks must not require Rosetta 2!")
+        end
+      end
+
+      context "when the cask does not depend on a macOS version" do
+        let(:cask) do
+          Cask::Cask.new("rosetta-audit") do
+            version "1.0"
+            sha256 :no_check
+            url "https://brew.sh/rosetta-audit.zip"
+            name "Rosetta Audit"
+            homepage "https://brew.sh/"
+
+            binary "rosetta-audit"
+          end
+        end
+
+        it "detects artifacts that require Rosetta 2" do
+          expect(run).to error_with(/requires Rosetta 2 but this is not indicated by the caveats/)
+        end
+      end
+
+      context "when auditing for Linux" do
+        let(:new_cask) { true }
+
+        around do |example|
+          Homebrew::SimulateSystem.with(os: :linux, arch: :arm) do
+            example.run
+          end
+        end
+
+        it "skips the audit" do
+          expect(run).to pass
+        end
       end
     end
 

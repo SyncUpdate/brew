@@ -2519,7 +2519,10 @@ class Formula
   sig { params(targets: T.nilable(T.any(Pathname, String))).void }
   def deuniversalize_machos(*targets)
     if targets.none?
-      targets = any_installed_keg&.mach_o_files&.select do |file|
+      # Prefer `prefix` to `any_installed_keg`: during an upgrade the latter
+      # is the old opt-linked keg rather than the keg being installed.
+      keg = prefix.directory? ? Keg.new(prefix) : any_installed_keg
+      targets = keg&.mach_o_files&.select do |file|
         file.arch == :universal && file.archs.include?(Hardware::CPU.arch)
       end
     end
@@ -4715,6 +4718,14 @@ class Formula
     #
     # ```ruby
     # depends_on "python@3.14" => :no_linkage
+    # ```
+    #
+    # On a `:build` dependency, such as a compiler, `:no_linkage` also lets an
+    # outdated installed version be used when building from source, whatever
+    # its `compatibility_version`.
+    #
+    # ```ruby
+    # depends_on "llvm" => [:build, :no_linkage]
     # ```
     #
     # `:recommended` dependencies are built by default.

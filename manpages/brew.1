@@ -2217,10 +2217,10 @@ Accepts a cask token (e\.g\. \fBfirefox\fP) or, with \fB\-\-name\fP, a raw appli
 .P
 The target application should have been launched at least once so that preference files and caches exist on disk\.
 .P
-Outputs \fBtrash\fP, \fBdelete\fP, and \fBrmdir\fP directives suitable for pasting into a cask definition\.
+Outputs \fBtrash\fP, \fBdelete\fP and \fBrmdir\fP directives suitable for pasting into a cask definition, or \fBzap :not_required\fP if nothing is found\.
 .TP
 \fB\-\-name\fP
-Treat the argument as a raw application name instead of a cask token\.
+Treat the argument as a raw application name instead of a cask token\. Also matches the app\[u2019]s bundle identifier if it is installed in \fB/Applications\fP\&\.
 .SS "\fBinstall\-bundler\-gems\fP \fR[\fB\-\-groups=\fP] \fR[\fB\-\-add\-groups=\fP]"
 Install Homebrew\[u2019]s Bundler gems\.
 .TP
@@ -2814,6 +2814,16 @@ Note that environment variables must have a value set to be detected\. For examp
 User\-specific environment files take precedence over prefix\-specific files and prefix\-specific files take precedence over system\-wide files (unless \fB$HOMEBREW_SYSTEM_ENV_TAKES_PRIORITY\fP is set, see below)\.
 .P
 Note that these files do not support shell variable expansion (e\.g\. \fB$HOME\fP) or command execution (e\.g\. \fB$(cat file)\fP)\.
+.P
+For MDM configuration, package restrictions and policy ownership, see:
+.P
+.UR https://docs\.brew\.sh/Homebrew\-for\-Mac\-Admins
+Homebrew for Mac Admins
+.UE
+.P
+.UR https://docs\.brew\.sh/Homebrew\-Package\-Policies
+Homebrew Package Policies
+.UE
 .TP
 \fBHOMEBREW_API_AUTO_UPDATE_SECS\fP
 Check Homebrew\[u2019]s API for new formulae or cask data every \fB$HOMEBREW_API_AUTO_UPDATE_SECS\fP seconds\. Alternatively, disable API auto\-update checks entirely with \fB$HOMEBREW_NO_AUTO_UPDATE\fP\&\.
@@ -2992,14 +3002,10 @@ Use this URL as the Homebrew/homebrew\-core \fBgit\fP(1) remote\.
 .RE
 .TP
 \fBHOMEBREW_CURLRC\fP
-If set to an absolute path (i\.e\. beginning with \fB/\fP), pass it with \fB\-\-config\fP when invoking \fBcurl\fP(1)\. If set but \fInot\fP a valid path, do not pass \fB\-\-disable\fP, which disables the use of \fB\&\.curlrc\fP\&\.
+If set to an absolute path (i\.e\. beginning with \fB/\fP), pass it with \fB\-\-config\fP when invoking \fBcurl\fP(1)\. If set but \fInot\fP a valid path, do not pass \fB\-\-disable\fP, which disables the use of \fB\&\.curlrc\fP\&\. Git operations, including repository fetches in \fBbrew update\fP, do not use this file because Git uses its own transport and configuration\.
 .TP
 \fBHOMEBREW_CURL_PATH\fP
-Linux only: Set this value to a new enough \fBcurl\fP executable for Homebrew to use\.
-.RS
-.P
-\fIDefault:\fP \fBcurl\fP\&\.
-.RE
+Suggest a \fBcurl\fP executable for Homebrew to use\. Homebrew may prefer another executable for security or reliability\.
 .TP
 \fBHOMEBREW_CURL_RETRIES\fP
 Pass the given retry count to \fB\-\-retry\fP when invoking \fBcurl\fP(1)\.
@@ -3101,10 +3107,10 @@ If set, update the Homebrew API formula or cask data even if \fB$HOMEBREW_NO_AUT
 If set, always use a Homebrew\-installed \fBca\-certificates\fP rather than the system version\.
 .TP
 \fBHOMEBREW_FORCE_BREWED_CURL\fP
-If set, always use a Homebrew\-installed \fBcurl\fP(1) rather than the system version\. Automatically set if the system version of \fBcurl\fP is too old\.
+If set, prefer a Homebrew\-installed \fBcurl\fP(1), installing it if needed\. Automatically set if no suitable \fBcurl\fP is available\.
 .TP
 \fBHOMEBREW_FORCE_BREWED_GIT\fP
-If set, always use a Homebrew\-installed \fBgit\fP(1) rather than the system version\. Automatically set if the system version of \fBgit\fP is too old\.
+If set, prefer a Homebrew\-installed \fBgit\fP(1), installing it if needed\. Automatically set if no suitable \fBgit\fP is available\.
 .TP
 \fBHOMEBREW_FORCE_VENDOR_RUBY\fP
 If set, always use Homebrew\[u2019]s vendored, relocatable Ruby version even if the system version of Ruby is new enough\.
@@ -3148,11 +3154,7 @@ Set the Git author name and, if \fB$HOMEBREW_GIT_COMMITTER_EMAIL\fP is unset, co
 Set the Git author name and, if \fB$HOMEBREW_GIT_COMMITTER_NAME\fP is unset, committer name to this value\.
 .TP
 \fBHOMEBREW_GIT_PATH\fP
-Linux only: Set this value to a new enough \fBgit\fP executable for Homebrew to use\.
-.RS
-.P
-\fIDefault:\fP \fBgit\fP\&\.
-.RE
+Suggest a \fBgit\fP executable for Homebrew to use\. Homebrew may prefer another executable for security or reliability\.
 .TP
 \fBHOMEBREW_INSTALL_BADGE\fP
 Print this text before the installation summary of each successful build\.
@@ -3294,11 +3296,7 @@ If set, Homebrew will use the given config file instead of \fB~/\.ssh/config\fP 
 If set, Homebrew will use the \fB$SUDO_USER\fP environment variable to define the user to \fBsudo\fP(8) through when running \fBsudo\fP(8)\.
 .TP
 \fBHOMEBREW_SVN\fP
-Use this as the \fBsvn\fP(1) binary\.
-.RS
-.P
-\fIDefault:\fP A Homebrew\-built Subversion (if installed), or the system\-provided binary\.
-.RE
+Suggest an \fBsvn\fP(1) executable for Homebrew to use\. Homebrew may prefer another executable for security or reliability\.
 .TP
 \fBHOMEBREW_SYSTEM_ENV_TAKES_PRIORITY\fP
 If set in Homebrew\[u2019]s system\-wide environment file (\fB/etc/homebrew/brew\.env\fP), the system\-wide environment file will be loaded last to override any prefix or user settings\.
@@ -3372,6 +3370,10 @@ Homebrew Documentation:
 .P
 Homebrew API: 
 .UR https://docs\.brew\.sh/rubydoc/
+.UE
+.P
+.UR https://docs\.brew\.sh/Homebrew\-for\-Teams
+Homebrew for teams at work
 .UE
 .P
 \fBgit\fP(1), \fBgit\-log\fP(1)
