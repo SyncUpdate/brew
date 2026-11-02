@@ -71,7 +71,7 @@ module Homebrew
       @problems = T.let([], T::Array[T.any(String, T::Hash[Symbol, T.untyped])])
       @new_formula_problems = T.let([], T::Array[T.any(String, T::Hash[Symbol, T.untyped])])
       @text = T.let(formula.path.open("rb", &:read), String)
-      @specs = T.let(%w[stable head].filter_map { |s| formula.public_send(s) }, T::Array[SoftwareSpec])
+      @specs = T.let([formula.stable, formula.head].compact, T::Array[SoftwareSpec])
       @spdx_license_data = spdx_license_data
       @spdx_exception_data = spdx_exception_data
       @tap_audit = tap_audit
@@ -651,11 +651,7 @@ module Homebrew
       github_runner = GitHub::Actions.env_set? && !ENV["GITHUB_ACTIONS_HOMEBREW_SELF_HOSTED"]
       return if homepage.match?(%r{^https?://www\.(?:non)?gnu\.org/.+}) && github_runner
 
-      use_homebrew_curl = [:stable, :head].any? do |spec_name|
-        next false unless (spec = formula.public_send(spec_name))
-
-        spec.using == :homebrew_curl
-      end
+      use_homebrew_curl = @specs.any? { |spec| spec.using == :homebrew_curl }
 
       if (http_content_problem = curl_check_http_content(
         homepage,
@@ -893,10 +889,10 @@ module Homebrew
     def audit_specs
       problem "HEAD-only (no stable download)" if head_only?(formula) && @core_tap
 
-      %w[Stable HEAD].each do |name|
-        spec_name = name.downcase.to_sym
-        next unless (spec = formula.public_send(spec_name))
+      { "Stable" => formula.stable, "HEAD" => formula.head }.each do |name, spec|
+        next unless spec
 
+        spec_name = name.downcase.to_sym
         except = @except.to_a
         if spec_name == :head &&
            formula.tap&.audit_exception(:head_non_default_branch_allowlist, formula.name, spec.specs[:branch])
@@ -1150,6 +1146,10 @@ module Homebrew
 
       compatibility_increment = current_compatibility_version - previous_compatibility_version
       return if compatibility_increment.zero?
+
+      # Tabs from before a first `compatibility_version` can't match it, so adding one alone rebuilds nothing.
+      first_compatibility_version = base_ref_version_info[:compatibility_version].nil?
+      return if first_compatibility_version && base_ref_version_info[:version] == formula.stable&.version
       return unless formula.valid_platform?
 
       dependent_revision_bumps = changed_formulae_paths(tap).filter_map do |path|
@@ -1174,6 +1174,25 @@ module Homebrew
               "`revision` by 1 in this PR. Only bump `compatibility_version` when at least one recursive " \
               "dependent needs a `revision` bump. " \
               "See #{Formatter.url("https://docs.brew.sh/Formula-Cookbook#compatibility_version")}."
+    end
+
+    sig { void }
+    def audit_dependencies_compatibility_version
+      return if !formula.core_formula? || (!@git && !@new_formula_inclusive)
+
+      _, base_ref_version_info = committed_version_info
+      previous_dependency_names = base_ref_version_info.fetch(:dependency_names, [])
+      formula.deps.each do |dep|
+        next if dep.implicit? || previous_dependency_names.include?(dep.name)
+
+        dependency = dep.to_formula
+        next if !dependency.core_formula? || dependency.compatibility_version
+
+        problem "`#{dependency.name}` should define `compatibility_version 1` now that `#{formula.name}` " \
+                "depends on it. See #{Formatter.url("https://docs.brew.sh/Formula-Cookbook#compatibility_version")}."
+      rescue FormulaUnavailableError
+        next
+      end
     end
 
     sig { void }
@@ -1360,6 +1379,7 @@ module Homebrew
             base_ref_version_info[:revision] ||= previous_version_info[:revision]
             base_ref_version_info[:version_scheme] ||= previous_version_info[:version_scheme]
             base_ref_version_info[:compatibility_version] ||= previous_version_info[:compatibility_version]
+            base_ref_version_info[:dependency_names] ||= f.deps.map(&:name)
           end
         rescue MacOSVersion::Error, LegacyDSLError
           break

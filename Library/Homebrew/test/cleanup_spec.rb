@@ -238,7 +238,7 @@ RSpec.describe Homebrew::Cleanup do
       cache_file.write "cached"
       (HOMEBREW_CELLAR/"untrusted/1.0").mkpath
 
-      expect(Formulary).to receive(:from_rack).with(HOMEBREW_CELLAR/"untrusted")
+      expect(Formulary).to receive(:from_rack).with(HOMEBREW_CELLAR/"untrusted", from_cache: true)
                                               .and_raise(Homebrew::UntrustedTapError)
 
       expect { cleanup.cleanup_cache([{ path: cache_file, type: nil }]) }
@@ -385,6 +385,39 @@ RSpec.describe Homebrew::Cleanup do
     end
   end
 
+  describe "#cleanup_formula" do
+    it "preserves .DS_Store files during a dry run" do
+      formula = Testball.new
+      metadata = formula.rack/".DS_Store"
+      metadata.dirname.mkpath
+      metadata.write "metadata"
+
+      described_class.new(dry_run: true).cleanup_formula(formula, quiet: true)
+
+      expect(metadata).to exist
+    end
+
+    it "preserves cache database files during a dry run" do
+      cache_files = %w[desc_cache.json linkage.db linkage.db.db].map { |name| HOMEBREW_CACHE/name }
+      cache_files.each { |path| path.write "cache" }
+
+      described_class.new(dry_run: true).cleanup_formula(Testball.new, quiet: true)
+
+      expect(cache_files).to all(exist)
+    end
+
+    it "preserves linkage cache entries during a dry run" do
+      formula = Testball.new
+      cache_file = HOMEBREW_CACHE/"linkage.json"
+      cached_linkage = { (formula.rack/"0.1").to_s => { "keg_files_dylibs" => {} } }
+      cache_file.write cached_linkage.to_json
+
+      described_class.new(dry_run: true).cleanup_formula(formula, quiet: true)
+
+      expect(JSON.parse(cache_file.read)).to eq(cached_linkage)
+    end
+  end
+
   specify "::cleanup_formula" do
     f1 = Class.new(Testball) do
       version "1.0"
@@ -487,6 +520,21 @@ RSpec.describe Homebrew::Cleanup do
     end
   end
 
+  it "preserves cask .DS_Store files during a dry run" do
+    cask = Cask::Cask.new("cleanup-dry-run") do
+      version "1.0"
+      sha256 :no_check
+      url "https://example.com/cleanup-dry-run-1.0.zip"
+    end
+    metadata = cask.caskroom_path/".DS_Store"
+    metadata.dirname.mkpath
+    metadata.write "metadata"
+
+    described_class.new(dry_run: true).cleanup_cask(cask)
+
+    expect(metadata).to exist
+  end
+
   describe "#cleanup_cask", :cask do
     before do
       Cask::Cache.path.mkpath
@@ -547,7 +595,7 @@ RSpec.describe Homebrew::Cleanup do
                                caskroom_path:     Cask::Caskroom.path/"trailing-comma")
         download = Cask::Cache.path/"#{cask.token}--#{cask.version}.zip"
 
-        allow(Cask::CaskLoader).to receive(:load).with(cask.token, warn: false).and_return(cask)
+        allow(Cask::CaskLoader).to receive(:load_from_name).with(cask.token, warn: false).and_return(cask)
         FileUtils.touch download
 
         cleanup.cleanup_cask(cask)
@@ -564,7 +612,7 @@ RSpec.describe Homebrew::Cleanup do
                                caskroom_path:     Cask::Caskroom.path/"macos-only")
         download = Cask::Cache.path/"#{cask.token}--1.0.AppImage"
 
-        allow(Cask::CaskLoader).to receive(:load).with(cask.token, warn: false).and_return(cask)
+        allow(Cask::CaskLoader).to receive(:load_from_name).with(cask.token, warn: false).and_return(cask)
         FileUtils.touch download
 
         cleanup.cleanup_cask(cask)
@@ -658,6 +706,56 @@ RSpec.describe Homebrew::Cleanup do
   end
 
   describe "::cleanup_cache" do
+    context "with cask cache names", :cask do
+      before do
+        Cask::Cache.path.mkpath
+      end
+
+      test_each([false, true]) do |dry_run|
+        it "does not evaluate cask source in cache names with dry_run=#{dry_run}" do
+          [
+            'cask "cache-name" do HOMEBREW_CACHE.join("evaluated").write("yes") end',
+            "cask('cache-name') { HOMEBREW_CACHE.join('evaluated').write('yes') }",
+            ' cask "cache-name" do; HOMEBREW_CACHE.join("evaluated").write("yes"); end ',
+          ].each { |name| FileUtils.touch Cask::Cache.path/"#{name}--1.0.zip" }
+
+          described_class.new(dry_run:).cleanup_cache
+
+          expect(HOMEBREW_CACHE/"evaluated").not_to exist
+        end
+
+        it "does not load a relative Ruby file named by a cache entry with dry_run=#{dry_run}" do
+          source = mktmpdir/"cache-name.rb"
+          source.write 'cask "cache-name" do HOMEBREW_CACHE.join("evaluated").write("yes") end'
+          FileUtils.touch Cask::Cache.path/"#{source.basename}--1.0.zip"
+
+          source.dirname.cd { described_class.new(dry_run:).cleanup_cache }
+
+          expect(HOMEBREW_CACHE/"evaluated").not_to exist
+        end
+
+        it "preserves current downloads and only removes outdated downloads with dry_run=#{dry_run}" do
+          cask = Cask::CaskLoader.load("local-transmission")
+          current = Cask::Cache.path/"#{cask.token}--#{cask.version}.dmg"
+          outdated = Cask::Cache.path/"#{cask.token}--0.0.dmg"
+          [current, outdated].each { |path| FileUtils.touch path }
+
+          described_class.new(dry_run:).cleanup_cache
+
+          expect([current.exist?, outdated.exist?]).to eq([true, dry_run])
+        end
+      end
+
+      it "preserves downloads for unavailable casks" do
+        download = Cask::Cache.path/"removed-cask--1.0.zip"
+        FileUtils.touch download
+
+        cleanup.cleanup_cache
+
+        expect(download).to exist
+      end
+    end
+
     it "removes legacy cask downloads during full cache cleanup", :cask do
       cask = Cask::CaskLoader.load("local-transmission")
       download = Cask::Cache.path/"transmission-2.61.dmg--7.8.9.dmg"
@@ -953,6 +1051,83 @@ RSpec.describe Homebrew::Cleanup do
       expect(source_file).not_to exist
     end
 
+    context "with formula cache names", :no_api do
+      def cleanup_cache_file(cache_file, dry_run:)
+        described_class.new(dry_run:).cleanup_cache([{ path: cache_file, type: nil }], cleanup_unreferenced: false)
+      end
+
+      test_each([false, true].product(%w[
+        ..--1.0.tar.gz .--1.0.tar.gz
+        .._bottle_manifest--1.0.bottle_manifest.json ._bottle_manifest--1.0.bottle_manifest.json
+      ])) do |(dry_run, name)|
+        it "keeps #{name} with dry_run=#{dry_run}" do
+          cache_file = HOMEBREW_CACHE/name
+          (HOMEBREW_CELLAR/"invalid-dot-rack").mkpath
+          FileUtils.touch cache_file
+
+          expect { cleanup_cache_file(cache_file, dry_run:) }.not_to change(cache_file, :exist?)
+        end
+      end
+
+      test_each([false, true]) do |dry_run|
+        it "does not load a local bottle from a cache name with dry_run=#{dry_run}" do
+          fixture_dir = mktmpdir
+          bottle_name = "cache_name.arm64_sonoma.bottle.tar.gz"
+          FileUtils.touch fixture_dir/bottle_name
+          cache_file = HOMEBREW_CACHE/"#{bottle_name}--1.0.tar.gz"
+          FileUtils.touch cache_file
+
+          expect(Formulary::FromBottleLoader).not_to receive(:try_new)
+          Dir.chdir(fixture_dir) { cleanup_cache_file(cache_file, dry_run:) }
+        end
+      end
+
+      context "when a local formula has the cache name" do
+        let(:fixture_dir) { mktmpdir }
+        let(:marker) { fixture_dir/"evaluated" }
+
+        before do
+          (fixture_dir/"cache-name.rb").write <<~RUBY
+            File.write(#{marker.to_s.inspect}, "evaluated")
+            class CacheName < Formula
+              url "https://example.com/cache-name-1.0.tar.gz"
+              sha256 "#{"0" * 64}"
+            end
+          RUBY
+        end
+
+        test_each([false, true]) do |dry_run|
+          it "does not evaluate a local formula with dry_run=#{dry_run}" do
+            cache_file = HOMEBREW_CACHE/"cache-name.rb--1.0.tar.gz"
+            FileUtils.touch cache_file
+
+            Dir.chdir(fixture_dir) do
+              expect { cleanup_cache_file(cache_file, dry_run:) }.not_to change(marker, :exist?)
+            end
+          end
+
+          it "does not evaluate a local formula through a bottle manifest with dry_run=#{dry_run}" do
+            cache_file = HOMEBREW_CACHE/"cache-name.rb_bottle_manifest--1.0.bottle_manifest.json"
+            FileUtils.touch cache_file
+
+            Dir.chdir(fixture_dir) do
+              expect { cleanup_cache_file(cache_file, dry_run:) }.not_to change(marker, :exist?)
+            end
+          end
+
+          it "does not evaluate a local formula through an installed keg with dry_run=#{dry_run}" do
+            (HOMEBREW_CELLAR/"cache-name.rb/1.0").mkpath
+            cache_file = HOMEBREW_CACHE/"cache-name.rb--1.0.tar.gz"
+            FileUtils.touch cache_file
+
+            Dir.chdir(fixture_dir) do
+              expect { cleanup_cache_file(cache_file, dry_run:) }.not_to change(marker, :exist?)
+            end
+          end
+        end
+      end
+    end
+
     context "when cleaning old files in HOMEBREW_CACHE" do
       let(:bottle) { HOMEBREW_CACHE/"testball--0.0.1.tag.bottle.tar.gz" }
       let(:testball) { HOMEBREW_CACHE/"testball--0.0.1" }
@@ -1002,10 +1177,12 @@ RSpec.describe Homebrew::Cleanup do
       end
 
       it "does not remove the file when bottle resource version is nil" do
-        allow(Formulary).to receive(:from_rack).with(HOMEBREW_CELLAR/"testball_bottle_manifest").and_return(nil)
+        allow(Formulary).to receive(:from_rack).with(HOMEBREW_CELLAR/"testball_bottle_manifest", from_cache: true)
+                                               .and_return(nil)
         allow(Formulary).to receive(:from_rack).and_call_original
-        allow(Formulary).to receive(:from_rack).with(HOMEBREW_CELLAR/"testball").and_wrap_original do |m, *args|
-          formula = m.call(*args)
+        allow(Formulary).to receive(:from_rack).with(HOMEBREW_CELLAR/"testball", from_cache: true)
+                                               .and_wrap_original do |m, *args, **kwargs|
+          formula = m.call(*args, **kwargs)
           if formula
             bottle_nil_version = instance_double(Bottle,
                                                  resource: instance_double(Resource, version: nil),
@@ -1021,10 +1198,12 @@ RSpec.describe Homebrew::Cleanup do
       it "removes the file when path version differs from bottle version_rebuild" do
         pathname_mismatch = (HOMEBREW_CACHE/"testball_bottle_manifest--2.0.bottle_manifest.json")
         FileUtils.touch pathname_mismatch
-        allow(Formulary).to receive(:from_rack).with(HOMEBREW_CELLAR/"testball_bottle_manifest").and_return(nil)
+        allow(Formulary).to receive(:from_rack).with(HOMEBREW_CELLAR/"testball_bottle_manifest", from_cache: true)
+                                               .and_return(nil)
         allow(Formulary).to receive(:from_rack).and_call_original
-        allow(Formulary).to receive(:from_rack).with(HOMEBREW_CELLAR/"testball").and_wrap_original do |m, *args|
-          formula = m.call(*args)
+        allow(Formulary).to receive(:from_rack).with(HOMEBREW_CELLAR/"testball", from_cache: true)
+                                               .and_wrap_original do |m, *args, **kwargs|
+          formula = m.call(*args, **kwargs)
           if formula
             bottle_double = instance_double(Bottle,
                                             resource: instance_double(Resource, version: Version.new("1.0")),

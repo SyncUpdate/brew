@@ -58,7 +58,8 @@ homebrew-as-user() {
   fi
   [[ -n "${selected_home}" ]] || odie "Could not determine home directory for user: ${selected_user}"
 
-  local user_command=()
+  # Avoid changing the launchd domain for same-user services without sudo routing.
+  local user_command=() sudo_user="${HOMEBREW_SUDO_USER:-${HOMEBREW_SUDO_THROUGH_SUDO_USER:+$(id -un)}}"
   if [[ "${command_name}" == as-console-user && -z "${HOMEBREW_NO_SUDO:-}" ]] || [[ "$(id -un)" != "${selected_user}" ]]
   then
     # `HOMEBREW_LIBRARY` is set by brew.sh, so ShellCheck cannot follow it.
@@ -67,6 +68,7 @@ homebrew-as-user() {
     if homebrew-sudo-available
     then
       user_command=(sudo -H -u "${selected_user}")
+      sudo_user="${sudo_user:-$(id -un)}"
     elif [[ "$(id -u)" != 0 ]]
     then
       odie "Cannot switch to ${selected_user} with sudo disabled. Log in as ${selected_user} instead."
@@ -78,24 +80,14 @@ homebrew-as-user() {
     fi
   fi
 
-  (
-    if [[ "${command_name}" == as-brew-user ]]
-    then
-      # Expand HOME only after switching to the prefix owner.
-      # shellcheck disable=SC2016
-      set -- /bin/bash -c 'cd -- "$HOME" && exec "$@"' -- "${HOMEBREW_BREW_FILE}" "$@"
-    else
-      cd "${selected_home}" &>/dev/null || odie "Failed to cd to ${selected_home}!"
-      set -- "${HOMEBREW_BREW_FILE}" "$@"
-    fi
-
-    "${user_command[@]}" /usr/bin/env -i \
-      "HOME=${selected_home}" \
-      "USER=${selected_user}" \
-      "LOGNAME=${selected_user}" \
-      "PWD=${selected_home}" \
-      "PATH=/usr/bin:/bin:/usr/sbin:/sbin" \
-      ${HOMEBREW_NO_SUDO:+"HOMEBREW_NO_SUDO=${HOMEBREW_NO_SUDO}"} \
-      "$@"
-  )
+  "${user_command[@]}" /usr/bin/env -i \
+    "HOME=${selected_home}" \
+    "USER=${selected_user}" \
+    "LOGNAME=${selected_user}" \
+    "PWD=${PWD}" \
+    "PATH=/usr/bin:/bin:/usr/sbin:/sbin" \
+    ${sudo_user:+"SUDO_USER=${sudo_user}"} \
+    ${HOMEBREW_NO_SUDO:+"HOMEBREW_NO_SUDO=${HOMEBREW_NO_SUDO}"} \
+    ${HOMEBREW_SUDO_THROUGH_SUDO_USER:+"HOMEBREW_SUDO_THROUGH_SUDO_USER=${HOMEBREW_SUDO_THROUGH_SUDO_USER}"} \
+    "${HOMEBREW_BREW_FILE}" "$@"
 }

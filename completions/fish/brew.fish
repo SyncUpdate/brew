@@ -1192,8 +1192,17 @@ __fish_brew_complete_arg 'generate-advisories-api' -l verbose -d 'Make some outp
 
 complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'generate-analytics-api' -d 'Generates analytics API data files for https://formulae.brew.sh'
 __fish_brew_complete_arg 'generate-analytics-api' -l debug -d 'Display any debugging information'
+__fish_brew_complete_arg 'generate-analytics-api' -l formula-history -d 'Generate only formula version history, resuming its persistent Git checkpoint'
+__fish_brew_complete_arg 'generate-analytics-api' -l github-packages -d 'Generate only package downloads, using existing 30-day install analytics'
+__fish_brew_complete_arg 'generate-analytics-api' -l github-packages-limit -d 'Fetch downloads for the top number of formulae by install analytics (1-1000; default: 1000)'
 __fish_brew_complete_arg 'generate-analytics-api' -l help -d 'Show this message'
+__fish_brew_complete_arg 'generate-analytics-api' -l history -d 'Reuse completed-year aggregates from this JSON file'
+__fish_brew_complete_arg 'generate-analytics-api' -l homebrew-site -d 'Read brew.sh release announcements and security disclosures from this Git checkout'
+__fish_brew_complete_arg 'generate-analytics-api' -l influx -d 'Generate only InfluxDB analytics, without local Git histories or GitHub queries'
+__fish_brew_complete_arg 'generate-analytics-api' -l legacy-homebrew -d 'Include the legacy Homebrew repository at this path in repository analytics'
 __fish_brew_complete_arg 'generate-analytics-api' -l quiet -d 'Make some output more quiet'
+__fish_brew_complete_arg 'generate-analytics-api' -l releases -d 'Generate only brew release analytics from local Git history and tags'
+__fish_brew_complete_arg 'generate-analytics-api' -l repositories -d 'Generate only repository and catalogue analytics from local Git history and GitHub'
 __fish_brew_complete_arg 'generate-analytics-api' -l verbose -d 'Make some output more verbose'
 
 
@@ -1240,6 +1249,18 @@ __fish_brew_complete_arg 'generate-formula-api' -l dry-run -d 'Generate API data
 __fish_brew_complete_arg 'generate-formula-api' -l help -d 'Show this message'
 __fish_brew_complete_arg 'generate-formula-api' -l quiet -d 'Make some output more quiet'
 __fish_brew_complete_arg 'generate-formula-api' -l verbose -d 'Make some output more verbose'
+
+
+complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'generate-formula-feeds' -d 'Generate recent formula additions and updates for https://formulae.brew.sh feeds'
+__fish_brew_complete_arg 'generate-formula-feeds' -l debug -d 'Display any debugging information'
+__fish_brew_complete_arg 'generate-formula-feeds' -l help -d 'Show this message'
+__fish_brew_complete_arg 'generate-formula-feeds' -l new-limit -d 'Maximum number of new formula entries (default: 50). Use 0 for none'
+__fish_brew_complete_arg 'generate-formula-feeds' -l output -d 'Write JSON to this path instead of `_data/formula_feeds.json`'
+__fish_brew_complete_arg 'generate-formula-feeds' -l quiet -d 'Make some output more quiet'
+__fish_brew_complete_arg 'generate-formula-feeds' -l repository -d 'Read formula history from this Git repository instead of `homebrew/core`'
+__fish_brew_complete_arg 'generate-formula-feeds' -l revision -d 'Read history ending at this revision instead of `HEAD`'
+__fish_brew_complete_arg 'generate-formula-feeds' -l updated-limit -d 'Maximum number of updated formula entries (default: 500). Use 0 for none'
+__fish_brew_complete_arg 'generate-formula-feeds' -l verbose -d 'Make some output more verbose'
 
 
 complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'generate-internal-api' -d 'Generate internal API data files for https://formulae.brew.sh'
@@ -2256,7 +2277,7 @@ __fish_brew_complete_arg 'update-reset' -l quiet -d 'Make some output more quiet
 __fish_brew_complete_arg 'update-reset' -l verbose -d 'Make some output more verbose'
 
 
-complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'update-sponsors' -d 'Update the list of GitHub Sponsors in the `Homebrew/brew` README'
+complete -f -c brew -n 'not __fish_brew_command; and set -q HOMEBREW_DEVELOPER' -a 'update-sponsors' -d 'Update the list of sponsors in the `Homebrew/brew` README'
 __fish_brew_complete_arg 'update-sponsors' -l debug -d 'Display any debugging information'
 __fish_brew_complete_arg 'update-sponsors' -l help -d 'Show this message'
 __fish_brew_complete_arg 'update-sponsors' -l quiet -d 'Make some output more quiet'

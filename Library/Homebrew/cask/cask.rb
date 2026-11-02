@@ -85,8 +85,8 @@ module Cask
       tokens_and_files += Tap.reject(&:core_cask_tap?).flat_map(&:cask_files)
                              .then { |files| Homebrew::Trust.trusted_cask_files(files) }
       tokens_and_files.filter_map do |token_or_file|
-        CaskLoader.load(token_or_file)
-      rescue CaskUnreadableError, CaskInvalidError => e
+        token_or_file.is_a?(String) ? CaskLoader.load_from_name(token_or_file) : CaskLoader.load(token_or_file)
+      rescue CaskUnavailableError, CaskInvalidError => e
         # Don't let one broken cask break commands. But do complain.
         opoo e.message
 
@@ -878,6 +878,10 @@ module Cask
       short_comparison = compare_version_strings(installed_short_version, tap_short_version)
       return true if short_comparison == -1
       return false if short_comparison == 1
+
+      # A short version still matching Homebrew's installation record means a
+      # different non-CSV tap version is outdated, as for casks without `auto_updates`.
+      return true if version.csv.one? && installed_short_version && installed_short_version == installed_version
 
       build_comparisons = version.csv.filter_map do |candidate|
         compare_version_strings(installed_bundle_version, candidate.to_s)

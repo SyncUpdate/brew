@@ -158,6 +158,11 @@ module Homebrew
         end
       end
 
+      sig { params(name: String).returns(T::Boolean) }
+      def valid_cache_formula_name?(name)
+        %w[. ..].exclude?(name) && name.match?(/\A#{HOMEBREW_TAP_FORMULA_NAME_REGEX}\z/o)
+      end
+
       sig { params(pathname: Pathname, scrub: T::Boolean).returns(T::Boolean) }
       def stale_formula?(pathname, scrub)
         return false unless HOMEBREW_CELLAR.directory?
@@ -174,9 +179,10 @@ module Homebrew
         unless (formula_name = basename_str[/\A(.*?)(?:--.*?)*--?(?:#{Regexp.escape(version.to_s)})/, 1])
           return false
         end
+        return false unless valid_cache_formula_name?(formula_name)
 
         formula = begin
-          Formulary.from_rack(HOMEBREW_CELLAR/formula_name)
+          Formulary.from_rack(HOMEBREW_CELLAR/formula_name, from_cache: true)
         rescue Homebrew::UntrustedTapError
           opoo "Skipping #{formula_name}: tap formula is not trusted"
           nil
@@ -186,8 +192,10 @@ module Homebrew
 
         formula_excluded_versions_from_cleanup = nil
         if formula.blank? && formula_name.delete_suffix!("_bottle_manifest")
+          return false unless valid_cache_formula_name?(formula_name)
+
           formula = begin
-            Formulary.from_rack(HOMEBREW_CELLAR/formula_name)
+            Formulary.from_rack(HOMEBREW_CELLAR/formula_name, from_cache: true)
           rescue Homebrew::UntrustedTapError
             opoo "Skipping #{formula_name}: tap formula is not trusted"
             nil
@@ -247,7 +255,7 @@ module Homebrew
         return false unless (name = basename.to_s[/\A(.*?)--/, 1])
 
         cask = begin
-          Cask::CaskLoader.load(name, warn: false)
+          Cask::CaskLoader.load_from_name(name, warn: false)
         rescue Cask::CaskError
           nil
         end
@@ -886,6 +894,8 @@ module Homebrew
 
     sig { params(rack: T.nilable(Pathname)).void }
     def cleanup_cache_db(rack = nil)
+      return if dry_run?
+
       FileUtils.rm_rf [
         cache/"desc_cache.json",
         cache/"linkage.db",
@@ -910,6 +920,8 @@ module Homebrew
 
     sig { params(dirs: T.nilable(T::Array[Pathname])).void }
     def rm_ds_store(dirs = nil)
+      return if dry_run?
+
       dirs ||= Keg.must_exist_directories + [
         HOMEBREW_PREFIX/"Caskroom",
       ]

@@ -28,7 +28,9 @@ RSpec.describe Homebrew::Bundle::Installer do
                                                       installable_or_upgradable?:     true,
                                                       preinstall!:                    true)
     allow(Homebrew::Bundle::Tap).to receive_messages(preinstall!: true, install!: true, installed_taps: [])
-    allow(Formula).to receive(:[]) { |name| instance_double(Formula, full_name: name, tap: CoreTap.instance) }
+    allow(Formula).to receive(:[]) { |name|
+      instance_double(Formula, full_name: name, tap: CoreTap.instance, conflicts: [])
+    }
     allow(::Cask::CaskLoader).to receive(:load)
       .and_return(instance_double(::Cask::Cask, full_name: "google-chrome",
                                                 tap:       CoreCaskTap.instance))
@@ -92,7 +94,8 @@ RSpec.describe Homebrew::Bundle::Installer do
     expect(Homebrew::Trust).to receive(:trust!).with(:formula, "thirdparty/tap/bar").ordered.and_return(true)
     expect(Formula).to receive(:[]).with("thirdparty/tap/bar").ordered
                                    .and_return(instance_double(Formula, full_name: "thirdparty/tap/bar",
-                                                                        tap:       Tap.fetch("thirdparty/tap")))
+                                                                        tap:       Tap.fetch("thirdparty/tap"),
+                                                                        conflicts: []))
 
     described_class.install!([trusted_formula_entry], quiet: true)
   end
@@ -242,6 +245,170 @@ RSpec.describe Homebrew::Bundle::Installer do
       described_class.install!([formula_entry], quiet: true)
     end
 
+    context "with formula conflicts" do
+      let(:conflicting_formula) do
+        formula("mysql", tap: CoreTap.instance) do
+          T.bind(self, T.class_of(Formula))
+          url "mysql-1.0"
+          conflicts_with "mysql@8.4"
+        end
+      end
+      let(:unrelated_formula) do
+        formula("redis", tap: CoreTap.instance) do
+          T.bind(self, T.class_of(Formula))
+          url "redis-1.0"
+        end
+      end
+
+      before do
+        Homebrew::Bundle::Brew.reset!
+        allow(Formula).to receive(:installed).and_return([])
+        allow(Formula).to receive(:[]).with("mysql").and_return(conflicting_formula)
+        allow(Formula).to receive(:[]).with("redis").and_return(unrelated_formula)
+        allow(Homebrew::Bundle::Brew).to receive(:install!).and_call_original
+      end
+
+      it "batches a formula whose conflicts are neither installed nor requested" do
+        expect(Homebrew::Bundle).to receive(:brew)
+          .with("install", "homebrew/core/mysql", "homebrew/core/redis", verbose: false)
+          .and_return(true)
+
+        described_class.install!([formula_entry, second_formula_entry], quiet: true)
+      end
+
+      it "keeps batching when an unrelated formula has install arguments" do
+        entry_with_args = Homebrew::Bundle::Dsl::Entry.new(:brew, "redis", { args: ["build-from-source"] })
+
+        expect(Homebrew::Bundle).to receive(:brew)
+          .with("install", "homebrew/core/mysql", verbose: false)
+          .and_return(true)
+
+        described_class.install!([formula_entry, entry_with_args], quiet: true)
+      end
+
+      it "unlinks installed conflicts before installing a formula" do
+        (HOMEBREW_CELLAR/"mysql@8.4/8.4").mkpath
+
+        expect(Homebrew::Bundle).to receive(:brew).with("unlink", "mysql@8.4", verbose: false)
+                                                  .ordered.and_return(true)
+        expect(Homebrew::Bundle).to receive(:brew).with("install", "--formula", "mysql", verbose: false)
+                                                  .ordered.and_return(true)
+
+        described_class.install!([formula_entry], quiet: true)
+      end
+
+      it "unlinks a conflicting formula requested through an alias before installing a formula" do
+        requested_formula = formula("mysql@8.4", tap: CoreTap.instance) do
+          T.bind(self, T.class_of(Formula))
+          url "mysql-8.4"
+        end
+        allow(Formula).to receive(:[]).with("mysql-lts").and_return(requested_formula)
+
+        expect(Homebrew::Bundle).to receive(:brew).with("install", "homebrew/core/mysql@8.4", verbose: false)
+                                                  .ordered do
+          requested_formula.prefix.mkpath
+          true
+        end
+        expect(Homebrew::Bundle).to receive(:brew).with("unlink", "mysql@8.4", verbose: false)
+                                                  .ordered.and_return(true)
+        expect(Homebrew::Bundle).to receive(:brew).with("install", "--formula", "mysql", verbose: false)
+                                                  .ordered.and_return(true)
+
+        described_class.install!([Homebrew::Bundle::Dsl::Entry.new(:brew, "mysql-lts"), formula_entry], quiet: true)
+      end
+
+      it "expands dependencies once when checking multiple formulae for conflicts" do
+        second_formula = formula("redis", tap: CoreTap.instance) do
+          T.bind(self, T.class_of(Formula))
+          url "redis-1.0"
+          conflicts_with "valkey"
+        end
+        allow(Formula).to receive(:[]).with("redis").and_return(second_formula)
+
+        expect(described_class).to receive(:formula_names_with_dependencies).once.and_call_original
+
+        described_class.install!([formula_entry, second_formula_entry], quiet: true)
+      end
+    end
+
+    context "with conflicts introduced by dependencies" do
+      let(:conflicting_formula) do
+        formula("ctags", tap: CoreTap.instance) do
+          T.bind(self, T.class_of(Formula))
+          url "ctags-1.0"
+          conflicts_with "universal-ctags"
+        end
+      end
+      let(:dependency_formula) do
+        formula("universal-ctags") do
+          T.bind(self, T.class_of(Formula))
+          url "universal-ctags-1.0"
+        end
+      end
+
+      before do
+        Homebrew::Bundle::Brew.reset!
+        allow(Formula).to receive(:installed).and_return([])
+        allow(Formula).to receive(:[]).with("ctags").and_return(conflicting_formula)
+        allow(Homebrew::Bundle::Brew).to receive(:install!).and_call_original
+      end
+
+      it "unlinks conflicts from transitive optional formula dependencies" do
+        requested_formula = formula("ctags-lsp", tap: CoreTap.instance) do
+          T.bind(self, T.class_of(Formula))
+          url "ctags-lsp-1.0"
+          depends_on "backend"
+        end
+        stub_formula_loader(formula("backend") do
+          T.bind(self, T.class_of(Formula))
+          url "backend-1.0"
+          depends_on "universal-ctags" => :optional
+        end)
+        stub_formula_loader(dependency_formula)
+        allow(Formula).to receive(:[]).with("ctags-lsp").and_return(requested_formula)
+
+        expect(Homebrew::Bundle).to receive(:brew).with("install", "homebrew/core/ctags-lsp", verbose: false)
+                                                  .ordered do
+          dependency_formula.prefix.mkpath
+          true
+        end
+        expect(Homebrew::Bundle).to receive(:brew).with("unlink", "universal-ctags", verbose: false)
+                                                  .ordered.and_return(true)
+        expect(Homebrew::Bundle).to receive(:brew).with("install", "--formula", "ctags", verbose: false)
+                                                  .ordered.and_return(true)
+
+        described_class.install!([
+          Homebrew::Bundle::Dsl::Entry.new(:brew, "ctags-lsp"),
+          Homebrew::Bundle::Dsl::Entry.new(:brew, "ctags"),
+        ], quiet: true)
+      end
+
+      it "unlinks conflicts installed by a cask before installing a formula" do
+        requested_cask = ::Cask::Cask.new("editor", tap: CoreCaskTap.instance) do
+          version "1.0"
+          url "https://example.com/editor.zip"
+          depends_on formula: "universal-ctags"
+        end
+        allow(Formula).to receive(:[]).with("universal-ctags").and_return(dependency_formula)
+        allow(::Cask::CaskLoader).to receive(:load).with("editor").and_return(requested_cask)
+
+        expect(Homebrew::Bundle).to receive(:brew).with("install", "--adopt", "homebrew/cask/editor", verbose: false)
+                                                  .ordered do
+          dependency_formula.prefix.mkpath
+          true
+        end
+        expect(Homebrew::Bundle).to receive(:brew).with("unlink", "universal-ctags", verbose: false)
+                                                  .ordered.and_return(true)
+        expect(Homebrew::Bundle).to receive(:brew).with("install", "--formula", "ctags", verbose: false)
+                                                  .ordered.and_return(true)
+
+        described_class.install!([
+          Homebrew::Bundle::Dsl::Entry.new(:cask, "editor"),
+          Homebrew::Bundle::Dsl::Entry.new(:brew, "ctags"),
+        ], quiet: true)
+      end
+    end
+
     it "keeps an already up-to-date entry out of the batch but still finishes it" do
       allow(Homebrew::Bundle::Brew).to receive(:preinstall!).with("mysql", any_args).and_return(false)
 
@@ -280,7 +447,8 @@ RSpec.describe Homebrew::Bundle::Installer do
 
     it "uses the resolved formula name when batching an alias" do
       allow(Formula).to receive(:[]).with("mysql").and_return(instance_double(Formula, full_name: "mysql@9.7",
-                                                                                       tap:       CoreTap.instance))
+                                                                                       tap:       CoreTap.instance,
+                                                                                       conflicts: []))
 
       expect(Homebrew::Bundle).to receive(:brew)
         .with("install", "homebrew/core/mysql@9.7", verbose: false)
@@ -292,7 +460,8 @@ RSpec.describe Homebrew::Bundle::Installer do
     it "preserves third-party tap names in a mixed batch" do
       allow(Formula).to receive(:[]).with("mysql")
                                     .and_return(instance_double(Formula, full_name: "thirdparty/tap/mysql",
-                                                                         tap:       Tap.fetch("thirdparty/tap")))
+                                                                         tap:       Tap.fetch("thirdparty/tap"),
+                                                                         conflicts: []))
       allow(::Cask::CaskLoader).to receive(:load)
         .and_return(instance_double(::Cask::Cask, full_name: "thirdparty/tap/google-chrome",
                                                   tap:       Tap.fetch("thirdparty/tap")))
@@ -311,7 +480,8 @@ RSpec.describe Homebrew::Bundle::Installer do
         entry = Homebrew::Bundle::Dsl::Entry.new(type, "local")
         if type == :brew
           allow(Formula).to receive(:[]).with("local")
-                                        .and_return(instance_double(Formula, full_name: "local", tap: nil))
+                                        .and_return(instance_double(Formula, full_name: "local", tap: nil,
+                                                                             conflicts: []))
         else
           allow(::Cask::CaskLoader).to receive(:load).with("local")
                                                      .and_return(instance_double(::Cask::Cask, full_name: "local",
@@ -379,7 +549,8 @@ RSpec.describe Homebrew::Bundle::Installer do
       (tap.cask_dir/"collision.rb").write('raise "Do not load this cask"')
       allow(Homebrew::Bundle::Tap).to receive(:installed_taps).and_return([tap.name])
       allow(Formula).to receive(:[]).with("thirdparty/tap/collision")
-                                    .and_return(instance_double(Formula, full_name: "thirdparty/tap/collision", tap:))
+                                    .and_return(instance_double(Formula, full_name: "thirdparty/tap/collision", tap:,
+                                                                         conflicts: []))
       allow(Homebrew::Bundle::Brew).to receive(:install!).and_call_original
       allow(Homebrew::Bundle::Brew).to receive_messages(formula_installed?: false, formulae_by_full_name: nil,
                                                         installed_formulae: [])
@@ -491,6 +662,126 @@ RSpec.describe Homebrew::Bundle::Installer do
 
       expect(order).to include("gh")
       expect(order.index("gh")).to be < order.index("install")
+    end
+  end
+
+  describe "extension installation errors" do
+    let(:failed_entry) { Homebrew::Bundle::Dsl::Entry.new(:npm, "example-tool") }
+    let(:installed_entry) { Homebrew::Bundle::Dsl::Entry.new(:npm, "installed-tool") }
+    let(:actionable_entry) { Homebrew::Bundle::Dsl::Entry.new(:npm, "other-tool") }
+    let(:independent_batch_entry) { Homebrew::Bundle::Dsl::Entry.new(:cargo, "later-tool") }
+    let(:later_entry) { Homebrew::Bundle::Dsl::Entry.new(:krew, "last-tool") }
+    let(:entries) { [failed_entry, independent_batch_entry, later_entry] }
+    let(:inventory_error) do
+      ErrorDuringExecution.new(["example-tool", "list"], status: 2,
+                                                         output: [[:stderr, "inventory unavailable"]])
+    end
+
+    before do
+      allow(Homebrew::Bundle::Npm).to receive_messages(installed_packages: [], preinstall!: true, install!: true,
+                                                       install_batch!: true, reset!: nil)
+      allow(Homebrew::Bundle::Cargo).to receive_messages(preinstall!: true, install_batch!: true, reset!: nil)
+      allow(Homebrew::Bundle::Krew).to receive_messages(preinstall!: true, install!: true)
+    end
+
+    def expect_failure_and_continuation
+      expect(Homebrew::Bundle::Cargo).to receive(:install_batch!).with([independent_batch_entry], verbose: false)
+      expect(Homebrew::Bundle::Krew).to receive(:install!)
+        .with("last-tool", preinstall: true, no_upgrade: false, verbose: false, force: false)
+
+      expect do
+        expect(described_class.install!(entries, quiet: true)).to be(false)
+      end.to output(
+        /Failed to install example-tool:.*inventory unavailable.*1 Brewfile dependency failed/m,
+      ).to_stderr
+    end
+
+    context "when choosing the installation verb fails" do
+      it "reports the failure and continues independent entries" do
+        allow(Homebrew::Bundle::Npm).to receive(:installed_packages).and_raise(inventory_error)
+        expect(Homebrew::Bundle::Npm).not_to receive(:install_batch!)
+
+        expect_failure_and_continuation
+      end
+    end
+
+    context "when native batch preparation fails" do
+      before do
+        allow(Homebrew::Bundle::Npm).to receive(:preinstall!)
+          .with("example-tool", any_args).and_raise(inventory_error)
+        allow(Homebrew::Bundle::Npm).to receive(:preinstall!).with("installed-tool", any_args).and_return(false)
+      end
+
+      context "with no actionable entries" do
+        let(:entries) { [installed_entry, failed_entry, independent_batch_entry, later_entry] }
+
+        it "counts the failed entry without installing the batch" do
+          expect(Homebrew::Bundle::Npm).not_to receive(:install_batch!)
+
+          expect_failure_and_continuation
+        end
+      end
+
+      test_each([true, false]) do |batch_succeeded|
+        describe "when the remaining batch succeeds: #{batch_succeeded}" do
+          let(:entries) { [installed_entry, failed_entry, actionable_entry, independent_batch_entry, later_entry] }
+
+          it "preserves the preparation failure and installs only actionable entries" do
+            expect(Homebrew::Bundle::Npm).to receive(:install_batch!)
+              .with([actionable_entry], verbose: false).and_return(batch_succeeded)
+
+            expect_failure_and_continuation
+          end
+        end
+      end
+    end
+
+    test_each([:preinstall!, :install!]) do |method|
+      describe "when #{method} fails during a native batch retry" do
+        let(:entries) { [failed_entry, actionable_entry, independent_batch_entry, later_entry] }
+
+        it "counts the failed retry and continues other retries and entries" do
+          allow(Homebrew::Bundle::Npm).to receive(:install_batch!) do
+            allow(Homebrew::Bundle::Npm).to receive(method).with("example-tool", any_args).and_raise(inventory_error)
+            false
+          end
+          expect(Homebrew::Bundle::Npm).to receive(:install!)
+            .with("other-tool", preinstall: true, no_upgrade: false, verbose: false, force: false)
+
+          expect_failure_and_continuation
+        end
+      end
+
+      describe "when #{method} fails for a single entry" do
+        let(:failed_entry) { Homebrew::Bundle::Dsl::Entry.new(:krew, "example-tool") }
+
+        it "reports the failure and continues independent entries" do
+          allow(Homebrew::Bundle::Krew).to receive(method).with("example-tool", any_args).and_raise(inventory_error)
+
+          expect_failure_and_continuation
+        end
+      end
+    end
+
+    test_each([RuntimeError, Errno::EIO]) do |error|
+      describe "when inventory raises #{error}" do
+        let(:failed_entry) { Homebrew::Bundle::Dsl::Entry.new(:krew, "example-tool") }
+
+        it "reports the failure and continues independent entries" do
+          allow(Homebrew::Bundle::Krew).to receive(:preinstall!)
+            .with("example-tool", any_args).and_raise(error, "inventory unavailable")
+
+          expect_failure_and_continuation
+        end
+      end
+    end
+
+    test_each([Interrupt, SystemExit].product([:install_verb, :preinstall!, :install!])) do |error, method|
+      it "propagates #{error} from #{method}" do
+        allow(Homebrew::Bundle::Krew).to receive(method).and_raise(error)
+
+        expect { described_class.install!([later_entry], quiet: true) }.to raise_error(error)
+      end
     end
   end
 

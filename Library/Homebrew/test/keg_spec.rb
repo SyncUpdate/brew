@@ -39,6 +39,44 @@ RSpec.describe Keg do
     expect(described_class.all).to eq([keg])
   end
 
+  describe "#formula_preserve_rpath?" do
+    let(:fallback_formula) do
+      formula("foo") do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+      end
+    end
+
+    before { stub_formula_loader(fallback_formula, "foo", call_original: true) }
+
+    test_each([true, false]) do |preserve_rpath|
+      it "uses preserve_rpath=#{preserve_rpath} from the installed formula" do
+        allow(fallback_formula).to receive(:preserve_rpath?).and_return(!preserve_rpath)
+        (keg/".brew").mkpath
+        (keg/".brew/foo.rb").write <<~RUBY
+          class Foo < Formula
+            url "foo-1.0"
+            preserve_rpath value: #{preserve_rpath}
+          end
+        RUBY
+
+        expect(keg.formula_preserve_rpath?).to be(preserve_rpath)
+      end
+    end
+
+    it "falls back to the current formula when the installed formula is missing" do
+      allow(fallback_formula).to receive(:preserve_rpath?).and_return(true)
+
+      expect(keg.formula_preserve_rpath?).to be(true)
+    end
+
+    it "returns false when neither formula is available" do
+      allow(Formulary).to receive(:factory).with("foo").and_raise(FormulaUnavailableError.new("foo"))
+
+      expect(keg.formula_preserve_rpath?).to be(false)
+    end
+  end
+
   it "checks existing Python site-packages directories without running Python" do
     site_packages = HOMEBREW_PREFIX/"lib/python3.14/site-packages"
     site_packages.mkpath
@@ -290,6 +328,30 @@ RSpec.describe Keg do
       expect(link.lstat).to be_a_directory
     end
 
+    it "merges directories when the prefix is a symlink" do
+      physical_prefix = HOMEBREW_PREFIX.parent/"physical-prefix"
+      prefix_moved = false
+      HOMEBREW_PREFIX.rename physical_prefix
+      prefix_moved = true
+      HOMEBREW_PREFIX.make_symlink physical_prefix
+
+      other_keg = setup_test_keg("bar", "1.0")
+      FileUtils.rm_r other_keg/"bin"
+      header = other_keg/"include/aws/s3/header.h"
+      header.dirname.mkpath
+      touch header
+      (keg/"include/aws/auth").mkpath
+      other_keg.link
+      keg.link
+
+      expect(HOMEBREW_PREFIX/"include/aws/s3/header.h").to exist
+    ensure
+      if prefix_moved
+        HOMEBREW_PREFIX.unlink if HOMEBREW_PREFIX.symlink?
+        physical_prefix.rename HOMEBREW_PREFIX
+      end
+    end
+
     specify "symlinks are linked directly" do
       link = HOMEBREW_PREFIX/"lib"/"pkgconfig"
 
@@ -476,6 +538,13 @@ RSpec.describe Keg do
     end
   end
 
+  describe "#aliases" do
+    it "ignores tab aliases that would escape `opt`" do
+      (keg/"INSTALL_RECEIPT.json").write({ aliases: ["../bin/hiworld", "..", ".", "", "foo@1.0"] }.to_json)
+      expect(keg.aliases).to eq(["foo@1.0"])
+    end
+  end
+
   describe "#optlink" do
     it "removes a stale versioned alias link" do
       setup_test_keg("foo", "0.9")
@@ -551,6 +620,22 @@ RSpec.describe Keg do
       keg.relativize_prefix_symlinks!(prefix: "/build/prefix", cellar: "/build/prefix/Cellar")
 
       expect((keg_path/"bin/built").readlink).to eq Pathname("hiworld")
+    end
+  end
+
+  describe "#absolute_symlinks?" do
+    let(:keg_path) { HOMEBREW_CELLAR/"foo/1.0" }
+
+    it "is true with an absolute symlink" do
+      ln_s "/usr/bin/true", keg_path/"bin/system"
+
+      expect(keg.absolute_symlinks?).to be true
+    end
+
+    it "is false with only relative symlinks" do
+      ln_s "hiworld", keg_path/"bin/self"
+
+      expect(keg.absolute_symlinks?).to be false
     end
   end
 

@@ -85,6 +85,8 @@ brew as-brew-user install wget
 ```
 
 The command uses the owner's home and a clean environment, switching accounts through sudo when necessary.
+It preserves the caller's working directory, so relative paths resolve as usual.
+The owner must have access to the working directory and any files used by the command.
 When sudo is disabled or unavailable, an already-root process switches through macOS `login` or Linux `runuser` instead.
 These commands use the selected account's primary and supplementary groups.
 Without permission to switch accounts, log in as the owner instead.
@@ -92,6 +94,24 @@ No console login is needed for `as-brew-user`.
 A root-owned prefix is rejected; directory ownership is not changed.
 User services, caches and personal configuration belong to the managing account.
 Run `brew doctor` as that account and check group permissions and access control lists before sharing the installation.
+
+#### Casks requiring sudo
+
+`as-brew-user` and `as-console-user` run Homebrew and its subsequent sudo calls as the selected account, including when installing or upgrading casks through `brew bundle`.
+By default, those sudo calls authenticate the selected account, even if a different account authenticated the initial user switch.
+
+`HOMEBREW_SUDO_THROUGH_SUDO_USER=1` makes Homebrew invoke sudo through the account recorded in `SUDO_USER` before running the privileged command with sudo.
+Both sudo calls must be permitted by sudoers, including their authentication requirements.
+The first still authenticates the selected account by default, so setting this variable alone does not resolve password failures.
+
+Both commands preserve this setting and the original sudo user, falling back to the calling account for sudo routing even when no account switch is needed.
+You can also enable the setting in the selected account's `brew.env`.
+For example, with the required sudoers policy already configured:
+
+```sh
+HOMEBREW_SUDO_THROUGH_SUDO_USER=1 brew as-brew-user bundle \
+  --file="$(realpath Brewfile)"
+```
 
 ### Running as the console user
 
@@ -102,6 +122,7 @@ brew as-console-user install wget
 ```
 
 The command uses that user's home and a clean environment.
+Like `as-brew-user`, it preserves the caller's working directory, which the selected user must be able to access.
 An already-root process can switch users even when sudo is disabled or unavailable, using the same fallback as `as-brew-user`.
 Other accounts need sudo access to switch users.
 It fails if no supported console user is logged in.
@@ -117,7 +138,15 @@ export HOMEBREW_CORE_GIT_REMOTE="..."  # put your Git mirror of Homebrew/homebre
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
 
-The default Git remote will be used if the corresponding environment variable is unset and works best for most users.
+During installation, the default Git remote will be used if the corresponding environment variable is unset and works best for most users.
+After installation, `brew update` preserves the configured remotes when these variables are unset.
+To reset existing repositories to the default Git remotes, set the URLs explicitly:
+
+```bash
+HOMEBREW_BREW_GIT_REMOTE="https://github.com/Homebrew/brew" \
+HOMEBREW_CORE_GIT_REMOTE="https://github.com/Homebrew/homebrew-core" \
+  brew update
+```
 
 **Note:** if you set these variables you are granting these repositories the same level of trust you currently grant to Homebrew itself. You should be extremely confident that these repositories will not be compromised.
 

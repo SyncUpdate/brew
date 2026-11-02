@@ -993,6 +993,27 @@ RSpec.describe Formula do
     end
   end
 
+  describe "#latest_head_pkg_version" do
+    it "returns the installed version when the head spec is not a VCS" do
+      f = formula do
+        T.bind(self, T.class_of(Formula))
+        url "foo"
+        version "2.0"
+        head "foo.tar.gz"
+      end
+
+      prefix = f.rack/"HEAD"
+      prefix.mkpath
+
+      tab = Tab.empty
+      tab.tabfile = prefix/AbstractTab::FILENAME
+      tab.source["versions"] = { "stable" => "1.0" }
+      tab.write
+
+      expect(f.latest_head_pkg_version).to eq(PkgVersion.new(Version.new("HEAD"), 0))
+    end
+  end
+
   specify "equality" do
     x = Testball.new
     y = Testball.new
@@ -1093,6 +1114,22 @@ RSpec.describe Formula do
         yz
         cd
       EOS
+    end
+  end
+
+  describe "::rack_installed?" do
+    it "is true when the rack has a keg" do
+      (HOMEBREW_CELLAR/"foo/1.0").mkpath
+      expect(described_class.rack_installed?("homebrew/core/foo")).to be(true)
+    end
+
+    it "is false when the rack is empty" do
+      (HOMEBREW_CELLAR/"foo").mkpath
+      expect(described_class.rack_installed?("foo")).to be(false)
+    end
+
+    it "is false when there is no rack" do
+      expect(described_class.rack_installed?("foo")).to be(false)
     end
   end
 
@@ -1203,6 +1240,7 @@ RSpec.describe Formula do
     expect(f.pkg_version.to_s).to eq("1.0_1")
 
     expect { f.active_spec = :head }.to raise_error(FormulaSpecificationError)
+    expect { f.active_spec = :name }.to raise_error(FormulaSpecificationError)
   end
 
   specify "class specs are always initialized" do

@@ -200,13 +200,14 @@ module Homebrew
         requirement.instance_of?(MacOSRequirement) || requirement.instance_of?(LinuxRequirement)
       end
 
-      sig { params(installed_count: Integer, total_count: Integer).returns(String) }
-      def self.dependency_status_counts(installed_count, total_count)
+      sig { params(installed_count: Integer, total_count: Integer, mark_uninstalled: T::Boolean).returns(String) }
+      def self.dependency_status_counts(installed_count, total_count, mark_uninstalled: true)
         missing_count = total_count - installed_count
         return "all installed #{Formatter.success("✔")}" if missing_count.zero?
 
+        missing_status = mark_uninstalled ? "missing #{Formatter.error("✘")}" : "not installed"
         "#{installed_count} installed #{Formatter.success("✔")}, " \
-          "#{missing_count} missing #{Formatter.error("✘")}"
+          "#{missing_count} #{missing_status}"
       end
 
       sig { params(full_name: String, name: String).returns(T::Array[String]) }
@@ -551,6 +552,11 @@ module Homebrew
         end
 
         tab_runtime_deps = kegs.last&.runtime_dependencies
+        runtime_deps = if outdated
+          formula.runtime_dependencies(read_from_tab: false, undeclared: false).map { { "full_name" => it.name } }
+        else
+          tab_runtime_deps
+        end
         installed_dependents = if $stdout.tty? && kegs.any?
           self.class.installed_dependent_names(formula.full_name, formula.name)
         else
@@ -571,7 +577,7 @@ module Homebrew
             "#{decorate_dependencies(deps, tab_runtime_deps: tab_deps, mark_uninstalled:,
                                      formula_outdated: outdated, missing_library_deps:)}"
         end
-        if dependency_lines.present? || tab_runtime_deps.present? || installed_dependents.any?
+        if dependency_lines.present? || missing_libraries.any? || runtime_deps.present? || installed_dependents.any?
           ohai "Dependencies"
           puts dependency_lines
           missing_library_names = missing_libraries.map { |lib| File.basename(lib) }.uniq
@@ -579,16 +585,16 @@ module Homebrew
             decorated = missing_library_names.map { |lib| pretty_uninstalled(lib, bold: false) }.join(", ")
             puts "Missing libraries (#{missing_library_names.count}): #{decorated}"
           end
-          if tab_runtime_deps.present?
-            installed_count = tab_runtime_deps.count do |dep|
+          if runtime_deps.present?
+            installed_count = runtime_deps.count do |dep|
               dep_name = dep["full_name"]&.then { Utils.name_from_full_name(it) }
               next false unless dep_name
 
-              rack = HOMEBREW_CELLAR/dep_name
-              rack.directory? && !rack.subdirs.empty?
+              Formula.rack_installed?(dep_name)
             end
-            puts "Recursive Runtime (#{tab_runtime_deps.count}): " \
-                 "#{self.class.dependency_status_counts(installed_count, tab_runtime_deps.count)}"
+            puts "Recursive Runtime (#{runtime_deps.count}): " \
+                 "#{self.class.dependency_status_counts(installed_count, runtime_deps.count,
+                                                        mark_uninstalled: !outdated)}"
           end
           if installed_dependents.any?
             if args.verbose?
@@ -877,8 +883,7 @@ module Homebrew
             name == dep.name || name&.then { Utils.name_from_full_name(it) } == dep.name
           end
           full_name = matching_tab_dep&.fetch("full_name") || dep.name
-          rack = HOMEBREW_CELLAR/Utils.name_from_full_name(full_name)
-          installed = T.let(rack.directory? && !rack.subdirs.empty?, T::Boolean)
+          installed = Formula.rack_installed?(full_name)
           formula = begin
             dep.to_formula
           rescue FormulaUnavailableError, TapFormulaAmbiguityError

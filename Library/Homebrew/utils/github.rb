@@ -230,6 +230,18 @@ module GitHub
     API.open_rest(url, request_method: :GET)
   end
 
+  sig {
+    params(user: String, repo: String, tag: String).returns(T.nilable(T::Hash[String, T.untyped]))
+  }
+  def self.get_draft_release(user, repo, tag)
+    url = "#{API_URL}/repos/#{user}/#{repo}/releases"
+    API.paginate_rest(url) do |releases|
+      draft_release = releases.find { |release| release["draft"] && release["tag_name"] == tag }
+      return draft_release if draft_release
+    end
+    nil
+  end
+
   sig { params(user: String, repo: String).returns(T::Hash[String, T.untyped]) }
   def self.get_latest_release(user, repo)
     url = "#{API_URL}/repos/#{user}/#{repo}/releases/latest"
@@ -420,14 +432,43 @@ module GitHub
     result["organization"]["team"]["members"]["nodes"].to_h { |member| [member["login"], member["name"]] }
   end
 
+  # Return published tiers with one-time prices expressed as monthly amounts.
+  sig { params(user: String).returns(T::Array[{ description: String, monthly_amount: Integer }]) }
+  def self.sponsorship_tiers(user)
+    query = <<~EOS
+      query($user: String!) {
+        organization(login: $user) {
+          sponsorsListing {
+            tiers(first: 100, includeUnpublished: false) {
+              nodes {
+                description
+                monthlyPriceInDollars
+                isOneTime
+              }
+            }
+          }
+        }
+      }
+    EOS
+    result = API.open_graphql(query, variables: { user: }, scopes: ["user"])
+    Array(result.dig("organization", "sponsorsListing", "tiers", "nodes")).filter_map do |tier|
+      next if tier.nil?
+
+      months = tier["isOneTime"] ? 12 : 1
+      { description: tier.fetch("description"), monthly_amount: tier.fetch("monthlyPriceInDollars") / months }
+    end
+  end
+
   sig {
     params(user: String)
       .returns(
         T::Array[{
-          closest_tier_monthly_amount: Integer,
-          login:                       String,
-          monthly_amount:              Integer,
-          name:                        String,
+          login:            String,
+          monthly_amount:   Integer,
+          name:             String,
+          type:             String,
+          tier_description: String,
+          started_at:       String,
         }],
       )
   }
@@ -440,13 +481,15 @@ module GitHub
               endCursor
             }
             nodes {
+              isOneTimePayment
+              tierSelectedAt
+              createdAt
               tier {
                 monthlyPriceInDollars
-                closestLesserValueTier {
-                  monthlyPriceInDollars
-                }
+                description
               }
               sponsorEntity {
+                __typename
                 ... on Organization { login name }
                 ... on User { login name }
               }
@@ -480,18 +523,19 @@ module GitHub
     # Only raise errors if we didn't get any sponsorships.
     raise API::Error, errors.map { |e| e["message"] }.join("\n") if sponsorships.blank? && errors.present?
 
-    sponsorships.map do |sponsorship|
+    sponsorships.filter_map do |sponsorship|
+      next if sponsorship["isOneTimePayment"]
+
       sponsor = sponsorship["sponsorEntity"]
       tier = sponsorship["tier"].presence || {}
-      monthly_amount = tier["monthlyPriceInDollars"].presence || 0
-      closest_tier = tier["closestLesserValueTier"].presence || {}
-      closest_tier_monthly_amount = closest_tier["monthlyPriceInDollars"].presence || 0
 
       {
-        name:                        sponsor["name"].presence || sponsor["login"],
-        login:                       sponsor["login"],
-        monthly_amount:,
-        closest_tier_monthly_amount:,
+        name:             sponsor["name"].presence || sponsor["login"],
+        login:            sponsor["login"],
+        type:             sponsor["__typename"],
+        monthly_amount:   tier.fetch("monthlyPriceInDollars", 0),
+        tier_description: tier.fetch("description", ""),
+        started_at:       (sponsorship["tierSelectedAt"] || sponsorship["createdAt"]).to_s,
       }
     end
   end

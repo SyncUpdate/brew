@@ -52,24 +52,32 @@ RSpec.describe Homebrew::Cmd::AsBrewUser do
 
   it "runs directly as the prefix owner without sudo" do
     brew_file = test_root/"brew"
-    brew_file.write "#!/bin/bash\nprintf '%s\\n' \"$USER|$HOME|$*|$HOMEBREW_NO_SUDO\"\n"
+    brew_file.write <<~SH
+      #!/bin/bash
+      printf '%s\\n' "$USER|$HOME|$PWD|$*|$HOMEBREW_NO_SUDO|$SUDO_USER|$HOMEBREW_SUDO_THROUGH_SUDO_USER"
+    SH
     brew_file.chmod(0755)
-    stdout, = run_as_brew_user_shell(
-      <<~SH,
-        source "#{as_brew_user_script}"
-        stat() { echo brewer; }
-        id() {
-          [[ "$1" == -un ]] && { echo brewer; return; }
-          printf 'brewer:*:503:20::0:0:Brewer:#{test_root}:/bin/zsh\\n'
-        }
-        sudo() { echo unexpected-sudo; exit 1; }
-        homebrew-as-brew-user list
-      SH
-      macos_env.merge("HOMEBREW_PREFIX" => "/opt/homebrew", "HOMEBREW_NO_SUDO" => "1",
-                      "HOMEBREW_BREW_FILE" => brew_file.to_s),
-    )
-
-    expect(stdout).to eq("brewer|#{test_root}|list|1\n")
+    expect([["1", "operator", "1"], ["", "", "1"], ["", "", ""]].map do |no_sudo, sudo_user, sudo_setting|
+      run_as_brew_user_shell(
+        <<~SH,
+          source "#{as_brew_user_script}"
+          stat() { echo brewer; }
+          id() {
+            [[ "$1" == -un ]] && { echo brewer; return; }
+            printf 'brewer:*:503:20::0:0:Brewer:#{test_root}:/bin/zsh\\n'
+          }
+          sudo() { echo unexpected-sudo; exit 1; }
+          homebrew-as-brew-user list
+        SH
+        macos_env.merge("HOMEBREW_PREFIX" => "/opt/homebrew", "HOMEBREW_NO_SUDO" => no_sudo,
+                        "HOMEBREW_SUDO_USER" => sudo_user, "HOMEBREW_SUDO_THROUGH_SUDO_USER" => sudo_setting,
+                        "HOMEBREW_BREW_FILE" => brew_file.to_s),
+      ).first
+    end).to eq([
+      "brewer|#{test_root}|#{Dir.pwd}|list|1|operator|1\n",
+      "brewer|#{test_root}|#{Dir.pwd}|list||brewer|1\n",
+      "brewer|#{test_root}|#{Dir.pwd}|list|||\n",
+    ])
   end
 
   it "rejects a root-owned prefix" do
@@ -85,9 +93,9 @@ RSpec.describe Homebrew::Cmd::AsBrewUser do
     expect(stderr).to include("The Homebrew prefix owner must not be root.")
   end
 
-  it "enters the owner's home after switching users" do
+  it "preserves the working directory and relative paths after switching users" do
     brew_file = test_root/"brew"
-    brew_file.write "#!/bin/bash\nprintf '%s\\n' \"$PWD\"\n"
+    brew_file.write "#!/bin/bash\nprintf '%s\\n' \"$PWD\" \"$@\"\n"
     brew_file.chmod(0755)
     stdout, = run_as_brew_user_shell(
       <<~SH,
@@ -97,14 +105,13 @@ RSpec.describe Homebrew::Cmd::AsBrewUser do
           [[ "$1" == -un ]] && { echo operator; return; }
           printf 'brewer:*:503:20::0:0:Brewer:#{test_root}:/bin/zsh\\n'
         }
-        cd() { return 1; }
         sudo() { shift 3; "$@"; }
-        homebrew-as-brew-user list
+        homebrew-as-brew-user bundle --file ./Brewfile
       SH
       macos_env.merge("HOMEBREW_PREFIX" => "/opt/homebrew", "HOMEBREW_BREW_FILE" => brew_file.to_s),
     )
 
-    expect(stdout).to eq("#{test_root}\n")
+    expect(stdout).to eq("#{Dir.pwd}\nbundle\n--file\n./Brewfile\n")
   end
 
   it "selects the prefix owner on Linux" do

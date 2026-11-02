@@ -290,6 +290,7 @@ __brew_internal_commands() {
       'generate-cask-api:Generate `homebrew/cask` API data files for https://formulae.brew.sh'
       'generate-cask-ci-matrix:Generate a GitHub Actions matrix for a given pull request URL or list of cask names'
       'generate-formula-api:Generate `homebrew/core` API data files for https://formulae.brew.sh'
+      'generate-formula-feeds:Generate recent formula additions and updates for https://formulae.brew.sh feeds'
       'generate-internal-api:Generate internal API data files for https://formulae.brew.sh'
       'generate-vulns-advisories:Generate OSV-schema advisory records for the `Homebrew` ecosystem from `homebrew/core` formula patch `resolves` annotations, for https://github.com/Homebrew/advisory-database'
       'pr-automerge:Find pull requests that can be automatically merged using `brew pr-publish`'
@@ -301,7 +302,7 @@ __brew_internal_commands() {
       'update-maintainers:Update the list of maintainers in the `Homebrew/brew` README'
       'update-portable-ruby:Update the vendored `portable-ruby` from the current `portable-ruby` formula: write the version files and bottle checksums, run `brew vendor-install ruby`, then sync `utils/ruby.sh`, vendored gems and RBI files to the bundler shipped by the new ruby'
       'update-report:The Ruby implementation of `brew update`'
-      'update-sponsors:Update the list of GitHub Sponsors in the `Homebrew/brew` README'
+      'update-sponsors:Update the list of sponsors in the `Homebrew/brew` README'
       'vendor-install:Install Homebrew'\''s portable Ruby'
     )
   fi
@@ -1564,8 +1565,17 @@ _brew_generate_advisories_api() {
 _brew_generate_analytics_api() {
   _arguments \
     '--debug[Display any debugging information]' \
+    '(--influx --repositories --releases --github-packages)--formula-history[Generate only formula version history, resuming its persistent Git checkpoint]' \
+    '(--influx --repositories --formula-history --releases)--github-packages[Generate only package downloads, using existing 30-day install analytics]' \
+    '--github-packages-limit[Fetch downloads for the top number of formulae by install analytics (1-1000; default: 1000)]' \
     '--help[Show this message]' \
+    '--history[Reuse completed-year aggregates from this JSON file]' \
+    '--homebrew-site[Read brew.sh release announcements and security disclosures from this Git checkout]' \
+    '(--repositories --formula-history --releases --github-packages)--influx[Generate only InfluxDB analytics, without local Git histories or GitHub queries]' \
+    '--legacy-homebrew[Include the legacy Homebrew repository at this path in repository analytics]' \
     '--quiet[Make some output more quiet]' \
+    '(--influx --repositories --formula-history --github-packages)--releases[Generate only brew release analytics from local Git history and tags]' \
+    '(--influx --formula-history --releases --github-packages)--repositories[Generate only repository and catalogue analytics from local Git history and GitHub]' \
     '--verbose[Make some output more verbose]'
 }
 
@@ -1623,6 +1633,20 @@ _brew_generate_formula_api() {
     '--dry-run[Generate API data without writing it to files]' \
     '--help[Show this message]' \
     '--quiet[Make some output more quiet]' \
+    '--verbose[Make some output more verbose]'
+}
+
+# brew generate-formula-feeds
+_brew_generate_formula_feeds() {
+  _arguments \
+    '--debug[Display any debugging information]' \
+    '--help[Show this message]' \
+    '--new-limit[Maximum number of new formula entries (default: 50). Use 0 for none]' \
+    '--output[Write JSON to this path instead of `_data/formula_feeds.json`]' \
+    '--quiet[Make some output more quiet]' \
+    '--repository[Read formula history from this Git repository instead of `homebrew/core`]' \
+    '--revision[Read history ending at this revision instead of `HEAD`]' \
+    '--updated-limit[Maximum number of updated formula entries (default: 500). Use 0 for none]' \
     '--verbose[Make some output more verbose]'
 }
 

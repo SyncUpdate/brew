@@ -73,6 +73,14 @@ class Keg
     relativize_prefix_symlinks!
   end
 
+  sig { returns(T::Boolean) }
+  def formula_preserve_rpath?
+    installed_formula = path/".brew/#{name}.rb"
+    Formula[installed_formula.file? ? installed_formula : name].preserve_rpath?
+  rescue FormulaUnavailableError
+    false
+  end
+
   # Relocation never rewrites symlink targets, so make absolute symlinks into
   # the given prefix or cellar relative to keep them resolving anywhere.
   sig { params(prefix: String, cellar: String).void }
@@ -93,6 +101,13 @@ class Keg
       file.unlink
       FileUtils.ln_s(new_src, file)
     end
+  end
+
+  # Whether the keg has any absolute symlinks, the only ones
+  # {#relativize_prefix_symlinks!} might rewrite.
+  sig { returns(T::Boolean) }
+  def absolute_symlinks?
+    symlink_files.any? { |file| file.readlink.absolute? }
   end
 
   sig {

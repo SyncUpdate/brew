@@ -71,11 +71,14 @@ module Homebrew
           cls = Homebrew::Bundle.installable(type)
           next if cls.nil? || !cls.install_supported?
 
-          installable_brewfile_entries << entry
           installable_entries << InstallableEntry.new(
             entry:, verb: cls.install_verb(name, options), cls:,
             install_name: T.cast(options.fetch(:full_name, name), String)
           )
+          installable_brewfile_entries << entry
+        rescue => e
+          report_install_error(entry.name, e)
+          failure += 1
         end
 
         # Apply `trusted: true` Brewfile options before anything loads the entries.
@@ -97,8 +100,9 @@ module Homebrew
         installed_taps = ensure_entry_taps_installed!(pending_entries, tap_entries:)
         prepare_attestation_verification!(pending_entries)
 
+        formula_names = Set.new
         batchable, remaining = pending_entries.partition do |entry|
-          homebrew_batchable?(entry, entries: installable_entries, installed_taps:)
+          homebrew_batchable?(entry, entries: installable_entries, installed_taps:, formula_names:)
         end
 
         if batchable.present?
@@ -238,9 +242,10 @@ module Homebrew
           entry:          InstallableEntry,
           entries:        T::Array[InstallableEntry],
           installed_taps: T::Array[String],
+          formula_names:  T::Set[String],
         ).returns(T::Boolean)
       }
-      def self.homebrew_batchable?(entry, entries:, installed_taps:)
+      def self.homebrew_batchable?(entry, entries:, installed_taps:, formula_names:)
         case entry.cls.name
         when "Homebrew::Bundle::Brew"
           return false if (entry.options.keys - BATCHABLE_OPTION_KEYS).any?
@@ -254,7 +259,16 @@ module Homebrew
 
         package = if entry.cls == Brew
           require "formula"
-          Formula[entry.full_name]
+          formula = Formula[entry.full_name]
+          conflicts = formula.conflicts.map(&:name)
+          if conflicts.present?
+            return false if conflicts.any? { |name| Brew.formula_installed?(name) }
+
+            formula_names.merge(formula_names_with_dependencies(entries)) if formula_names.empty?
+            return false if conflicts.any? { |name| formula_names.include?(Formula[name].full_name) }
+          end
+
+          formula
         else
           require "cask/cask_loader"
           ::Cask::CaskLoader.load(entry.full_name)
@@ -273,6 +287,20 @@ module Homebrew
         false
       end
       private_class_method :homebrew_batchable?
+
+      # Returns the requested formula names, including optional formula and cask dependencies.
+      sig { params(entries: T::Array[InstallableEntry]).returns(T::Set[String]) }
+      def self.formula_names_with_dependencies(entries)
+        require "formula"
+
+        formula_names = Brew.formula_names_with_dependencies(
+          entries.filter_map { |entry| Formula[entry.full_name] if entry.cls == Brew },
+        )
+        formula_names += Cask.formula_dependencies(
+          entries.filter_map { |entry| entry.full_name if entry.cls == Cask }, recursive: true
+        )
+        formula_names.to_set
+      end
 
       sig {
         params(
@@ -341,6 +369,7 @@ module Homebrew
       }
       def self.batch_install_package_type!(entries, no_upgrade:, verbose:, force:, quiet:)
         cls = entries.fetch(0).cls
+        failure = 0
         actionable = entries.select do |entry|
           if cls.preinstall!(entry.name, **entry.options, no_upgrade:, verbose:)
             puts Formatter.success("#{entry.verb} #{entry.name}")
@@ -349,8 +378,12 @@ module Homebrew
             puts "Using #{entry.name}" unless quiet
             false
           end
+        rescue => e
+          report_install_error(entry.name, e)
+          failure += 1
+          false
         end
-        return [entries.length, 0] if actionable.empty?
+        return [entries.length - failure, failure] if actionable.empty?
 
         batch_succeeded = begin
           cls.install_batch!(actionable.map(&:entry), verbose:)
@@ -359,21 +392,19 @@ module Homebrew
           false
         end
         cls.reset!
-        return [entries.length, 0] if batch_succeeded
+        return [entries.length - failure, failure] if batch_succeeded
 
-        success = entries.length - actionable.length
-        failure = 0
         actionable.each do |entry|
-          entry_succeeded = !cls.preinstall!(entry.name, **entry.options, no_upgrade:, verbose: false) ||
-                            cls.install!(entry.name, **entry.options, preinstall: true, no_upgrade:, verbose:, force:)
-          if entry_succeeded
-            success += 1
-          else
-            $stderr.puts Formatter.error("#{entry.verb} #{entry.name} has failed!")
-            failure += 1
-          end
+          next unless cls.preinstall!(entry.name, **entry.options, no_upgrade:, verbose: false)
+          next if cls.install!(entry.name, **entry.options, preinstall: true, no_upgrade:, verbose:, force:)
+
+          $stderr.puts Formatter.error("#{entry.verb} #{entry.name} has failed!")
+          failure += 1
+        rescue => e
+          report_install_error(entry.name, e)
+          failure += 1
         end
-        [success, failure]
+        [entries.length - failure, failure]
       end
       private_class_method :batch_install_package_type!
 
@@ -407,8 +438,17 @@ module Homebrew
           $stderr.puts Formatter.error("#{verb} #{name} has failed!")
           false
         end
+      rescue => e
+        report_install_error(entry.name, e)
+        false
       end
       private_class_method :install_entry!
+
+      sig { params(name: String, error: StandardError).void }
+      def self.report_install_error(name, error)
+        $stderr.puts Formatter.error("Failed to install #{name}: #{error}")
+      end
+      private_class_method :report_install_error
     end
   end
 end

@@ -296,8 +296,6 @@ class Formula
     @revision = T.let(self.class.revision || 0, Integer)
     @version_scheme = T.let(self.class.version_scheme || 0, Integer)
     @compatibility_version = T.let(self.class.compatibility_version, T.nilable(Integer))
-    @head = T.let(nil, T.nilable(SoftwareSpec))
-    @stable = T.let(nil, T.nilable(SoftwareSpec))
 
     @autobump = T.let(true, T::Boolean)
     @no_autobump_message = T.let(nil, T.nilable(T.any(String, Symbol)))
@@ -316,9 +314,8 @@ class Formula
     @full_name = T.let(full_name_with_optional_tap(name), String)
     @full_alias_name = T.let((full_name_with_optional_tap(@alias_name) if @alias_name), T.nilable(String))
 
-    self.class.spec_syms.each do |sym|
-      spec_eval sym
-    end
+    @stable = T.let(spec_eval(self.class.stable, :stable), T.nilable(SoftwareSpec))
+    @head = T.let(spec_eval(self.class.head, :head), T.nilable(SoftwareSpec))
 
     @active_spec = T.let(determine_active_spec(spec), SoftwareSpec)
     @active_spec_sym = T.let(head? ? :head : :stable, Symbol)
@@ -334,7 +331,10 @@ class Formula
 
   sig { params(spec_sym: Symbol).void }
   def active_spec=(spec_sym)
-    spec = send(spec_sym)
+    spec = case spec_sym
+    when :stable then stable
+    when :head then head
+    end
     raise FormulaSpecificationError, "#{spec_sym} spec is not available for #{full_name}" unless spec
 
     old_spec_sym = @active_spec_sym
@@ -433,9 +433,9 @@ class Formula
     end
   end
 
-  sig { params(name: T.any(String, Symbol)).void }
-  def spec_eval(name)
-    spec = self.class.public_send(name).dup
+  sig { params(class_spec: SoftwareSpec, name: Symbol).returns(T.nilable(SoftwareSpec)) }
+  def spec_eval(class_spec, name)
+    spec = class_spec.dup
     return unless spec.url
 
     spec.owner = self
@@ -447,7 +447,7 @@ class Formula
             "#{full_name}: conflicting :no_linkage declarations for #{dep_name.inspect} in the #{name} spec"
     end
     add_global_deps_to_spec(spec)
-    instance_variable_set(:"@#{name}", spec)
+    spec
   end
 
   sig { params(spec: SoftwareSpec).void }
@@ -455,7 +455,7 @@ class Formula
 
   sig { params(requested: T.any(String, Symbol)).returns(SoftwareSpec) }
   def determine_active_spec(requested)
-    spec = send(requested) || stable || head
+    spec = (requested.to_sym == :head) ? head || stable : stable || head
     spec || raise(FormulaSpecificationError, "#{full_name}: formula requires at least a URL")
   end
 
@@ -1060,6 +1060,8 @@ class Formula
     raise FormulaSpecificationError, "#{full_name} has a HEAD version installed but no head spec" if head_spec.nil?
 
     downloader = head_spec.downloader
+    return latest_version unless downloader.is_a?(VCSDownloadStrategy)
+
     with_context quiet: true do
       PkgVersion.new(Version.new("HEAD-#{downloader.last_commit}"), revision)
     end
@@ -2783,6 +2785,13 @@ class Formula
     end
   end
 
+  # Whether the rack for a formula name, with or without a tap prefix, holds a keg.
+  sig { params(name: String).returns(T::Boolean) }
+  def self.rack_installed?(name)
+    rack = HOMEBREW_CELLAR/Utils.name_from_full_name(name)
+    rack.directory? && !rack.subdirs.empty?
+  end
+
   # An array of all currently installed formula names.
   sig { returns(T::Array[String]) }
   def self.installed_formula_names
@@ -3354,9 +3363,7 @@ class Formula
 
   sig { returns(T::Array[T::Hash[String, T.untyped]]) }
   def serialized_requirements
-    requirements = self.class.spec_syms.to_h do |sym|
-      [sym, send(sym)&.requirements]
-    end
+    requirements = { stable: stable&.requirements, head: head&.requirements }
 
     merge_spec_dependables(requirements).map do |data|
       req = data[:dependable]
@@ -3387,9 +3394,7 @@ class Formula
   sig { returns(T::Hash[String, T.untyped]) }
   def dependencies_hash
     # Create a hash of spec names (stable/head) to the list of dependencies under each
-    dependencies = self.class.spec_syms.to_h do |sym|
-      [sym, send(sym)&.declared_deps]
-    end
+    dependencies = { stable: stable&.declared_deps, head: head&.declared_deps }
 
     # Implicit dependencies are only needed when installing from source
     # since they are only used to download and unpack source files.
@@ -4419,11 +4424,7 @@ class Formula
 
     # A list of the {.stable} and {.head} {SoftwareSpec}s.
     sig { returns(T::Array[SoftwareSpec]) }
-    def specs
-      spec_syms.map do |sym|
-        send(sym)
-      end.freeze
-    end
+    def specs = [stable, head].freeze
 
     # The URL used to download the source for the {.stable} version of the formula.
     # We prefer `https` for security and proxy reasons.
