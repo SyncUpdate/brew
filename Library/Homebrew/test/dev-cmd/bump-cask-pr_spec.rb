@@ -107,7 +107,7 @@ RSpec.describe Homebrew::DevCmd::BumpCaskPr do
           end
         end
       RUBY
-      cask = Cask::CaskLoader.load(cask_path)
+      cask = Cask::CaskLoader.from_path(cask_path)
       command = described_class.new([
         "--write-only", "--no-audit", "--no-style", "--version=1.2.4", "--sha256=:no_check", "test"
       ])
@@ -118,7 +118,7 @@ RSpec.describe Homebrew::DevCmd::BumpCaskPr do
 
       command.run
 
-      expect(Cask::CaskLoader.load(cask_path).version.to_s).to eq("1.2.4")
+      expect(Cask::CaskLoader.from_path(cask_path).version.to_s).to eq("1.2.4")
     end
 
     it "updates a cask disabled only on the current OS" do
@@ -134,7 +134,7 @@ RSpec.describe Homebrew::DevCmd::BumpCaskPr do
           end
         end
       RUBY
-      cask = Cask::CaskLoader.load(cask_path)
+      cask = Cask::CaskLoader.from_path(cask_path)
       command = described_class.new([
         "--write-only", "--no-audit", "--no-style", "--version=1.2.4", "--sha256=:no_check", "test"
       ])
@@ -145,7 +145,7 @@ RSpec.describe Homebrew::DevCmd::BumpCaskPr do
 
       command.run
 
-      expect(Cask::CaskLoader.load(cask_path).version.to_s).to eq("1.2.4")
+      expect(Cask::CaskLoader.from_path(cask_path).version.to_s).to eq("1.2.4")
     end
   end
 
@@ -385,7 +385,7 @@ RSpec.describe Homebrew::DevCmd::BumpCaskPr do
       path = mktmpdir/"foo.rb"
       path.write(contents)
       Homebrew::SimulateSystem.with(os: newest_macos, arch: :arm) do
-        Cask::CaskLoader.load(path)
+        Cask::CaskLoader.from_path(path)
       end
     end
 
@@ -814,26 +814,9 @@ RSpec.describe Homebrew::DevCmd::BumpCaskPr do
         end
       end
     end
-    let(:c_throttle_rate_and_days) do
-      Cask::Cask.new("throttle-rate-and-days-test") do
-        version "1.2.3"
-
-        url "https://brew.sh/test-#{version}.dmg"
-        name "Test"
-        desc "Test cask"
-        homepage "https://brew.sh"
-
-        livecheck do
-          throttle 5, days: 1
-        end
-      end
-    end
     let(:new_version) { Homebrew::BumpVersionParser.new(general: "1.2.5") }
     let(:throttle_error) { "Error: throttle-test should only be updated every 5 releases on multiples of 5\n" }
     let(:throttle_days_error) { "Error: throttle-days-test should only be updated every 1 day\n" }
-    let(:throttle_rate_days_error) do
-      "Error: throttle-rate-and-days-test should only be updated every 5 releases on multiples of 5 or 1 day\n"
-    end
     let(:tap) { Tap.fetch("test", "tap") }
 
     context "when cask is not in a tap" do
@@ -883,32 +866,6 @@ RSpec.describe Homebrew::DevCmd::BumpCaskPr do
         rescue SystemExit
           next
         end.to output(throttle_error).to_stderr
-      end
-    end
-
-    context "when patch version is not a multiple and throttle days are set" do
-      let(:new_version_indivisible) { Homebrew::BumpVersionParser.new(general: "1.2.4") }
-
-      before do
-        allow(c_throttle_rate_and_days).to receive(:tap).and_return(tap)
-      end
-
-      it "throttles version when throttle interval has not elapsed" do
-        allow(Homebrew::Livecheck).to receive(:throttle_interval_elapsed?).and_return(false)
-
-        expect do
-          bump_cask_pr.check_throttle(c_throttle_rate_and_days, new_version: new_version_indivisible)
-        rescue SystemExit
-          next
-        end.to output(throttle_rate_days_error).to_stderr
-      end
-
-      it "does not throttle when throttle interval has elapsed" do
-        allow(Homebrew::Livecheck).to receive(:throttle_interval_elapsed?).and_return(true)
-
-        expect do
-          bump_cask_pr.check_throttle(c_throttle_rate_and_days, new_version: new_version_indivisible)
-        end.not_to output.to_stderr
       end
     end
 

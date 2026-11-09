@@ -48,7 +48,7 @@ RSpec.describe Homebrew::Livecheck::SkipConditions do
           end
         RUBY
 
-        Formulary.factory(path)
+        Formulary.from_path(path)
       end.call,
       partially_disabled_os:   lambda do
         path = mktmpdir/"test_partially_disabled_os.rb"
@@ -63,7 +63,7 @@ RSpec.describe Homebrew::Livecheck::SkipConditions do
           end
         RUBY
 
-        Formulary.factory(path)
+        Formulary.from_path(path)
       end.call,
       head_only:               formula("test_head_only") do
         T.bind(self, T.class_of(Formula))
@@ -154,7 +154,7 @@ RSpec.describe Homebrew::Livecheck::SkipConditions do
 
         disable! date: "2020-06-25", because: :discontinued
       end,
-      partially_disabled_arch:               Cask::CaskLoader.load(<<~RUBY),
+      partially_disabled_arch:               Cask::CaskLoader.from_content(<<~RUBY),
         cask "test_partially_disabled_arch" do
           version "0.0.1"
           sha256 :no_check
@@ -169,7 +169,7 @@ RSpec.describe Homebrew::Livecheck::SkipConditions do
           end
         end
       RUBY
-      partially_disabled_os:                 Cask::CaskLoader.load(<<~RUBY),
+      partially_disabled_os:                 Cask::CaskLoader.from_content(<<~RUBY),
         cask "test_partially_disabled_os" do
           version "0.0.1"
           sha256 :no_check

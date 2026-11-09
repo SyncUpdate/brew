@@ -117,7 +117,12 @@ module Homebrew
 
             os_arch_combinations.each do |os, arch|
               SimulateSystem.with(os:, arch:) do
-                formula = Formulary.factory(ref, args.HEAD? ? :head : :stable)
+                spec = args.HEAD? ? :head : :stable
+                formula = if ref.is_a?(Pathname)
+                  Formulary.from_path(ref, spec)
+                else
+                  Formulary.factory(ref, spec)
+                end
 
                 formula.print_tap_action verb: "Fetching"
 
@@ -208,7 +213,11 @@ module Homebrew
         cask_combinations.each do |os, arch|
           SimulateSystem.with(os:, arch:) do
             loaded_cask = begin
-              Cask::CaskLoader.load(ref)
+              if ref.is_a?(Pathname)
+                Cask::CaskLoader.from_path(ref)
+              else
+                Cask::CaskLoader.load(ref)
+              end
             rescue Cask::CaskInvalidError, Cask::CaskUnreadableError
               raise unless cask.on_system_blocks_exist?
             end
@@ -225,7 +234,11 @@ module Homebrew
               if language
                 # Reload per language: `Cask::Download` reads `sha256`/`url`
                 # lazily, so each download needs its own cask instance.
-                localized_cask = Cask::CaskLoader.load(ref)
+                localized_cask = if ref.is_a?(Pathname)
+                  Cask::CaskLoader.from_path(ref)
+                else
+                  Cask::CaskLoader.load(ref)
+                end
                 localized_cask.config = localized_cask.config.merge(
                   Cask::Config.new(explicit: { languages: [language] }),
                 )
@@ -261,7 +274,7 @@ module Homebrew
           next Dependable::PRUNE if dependency.test? && !dependency.build?
         end.map(&:to_formula).reject(&:any_version_installed?)
         if missing_dependencies.present?
-          opoo <<~EOS
+          odebug <<~EOS
             Not running #{formula.full_name}'s `fetch` as these dependencies are not installed:
               #{missing_dependencies.map(&:full_name).join(", ")}
             Install them first with:

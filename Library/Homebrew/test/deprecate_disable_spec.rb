@@ -97,7 +97,11 @@ RSpec.describe DeprecateDisable do
               #{disable_stanzas}
             end
           RUBY
-          package = (type == :formula) ? Formulary.factory(path) : Cask::CaskLoader.load(path)
+          package = if type == :formula
+            Formulary.from_path(path)
+          else
+            Cask::CaskLoader.from_path(path)
+          end
           described_class.disabled_on_all_platforms?(package)
         end
       end
@@ -169,6 +173,12 @@ RSpec.describe DeprecateDisable do
       allow(Date).to receive(:today).and_return(deprecate_date + 1)
       expect(described_class.message(deprecated_formula_with_date))
         .to eq "deprecated because it does not build! It will be disabled on #{disable_date}."
+    end
+
+    it "omits an estimated disable date that has passed" do
+      allow(Date).to receive(:today).and_return(disable_date + 1)
+      expect(described_class.message(deprecated_formula_with_date))
+        .to eq "deprecated because it does not build!"
     end
 
     it "returns a disable message with a custom reason" do

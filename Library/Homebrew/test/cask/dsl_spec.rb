@@ -154,6 +154,28 @@ RSpec.describe Cask::DSL, :cask, :no_api do
       end
     end
 
+    context "with a checksum for only one architecture" do
+      it "stores a lone intel checksum" do
+        Homebrew::SimulateSystem.with(os: :macos, arch: :intel) do
+          cask = Cask::Cask.new("checksum-cask") do
+            sha256 intel: "imasha2intel"
+          end
+
+          expect(cask.sha256).to eq("imasha2intel")
+        end
+      end
+
+      it "stores a lone x86_64 checksum" do
+        Homebrew::SimulateSystem.with(os: :macos, arch: :intel) do
+          cask = Cask::Cask.new("checksum-cask") do
+            sha256 x86_64: "imasha2intel"
+          end
+
+          expect(cask.sha256).to eq("imasha2intel")
+        end
+      end
+    end
+
     context "with checksums for only one OS" do
       it "has no checksum on macOS when only Linux checksums are set" do
         Homebrew::SimulateSystem.with(os: :macos, arch: :arm) do
@@ -245,19 +267,9 @@ RSpec.describe Cask::DSL, :cask, :no_api do
         end
       RUBY
 
-      expect { Cask::CaskLoader.load(caskfile) }.to raise_error(Cask::CaskUnreadableError, /'because' argument/)
-    end
-
-    it "rejects the removed reason in a current cask loaded from a URI", :needs_utils_curl do
-      caskfile = mktmpdir/"test-cask.rb"
-      caskfile.write <<~RUBY
-        cask "test-cask" do
-          no_autobump! because: :requires_manual_review
-        end
-      RUBY
-
-      expect { Cask::CaskLoader.load("file://#{caskfile}") }
-        .to raise_error(Cask::CaskUnreadableError, /'because' argument/)
+      expect do
+        Cask::CaskLoader.from_path(caskfile)
+      end.to raise_error(Cask::CaskUnreadableError, /'because' argument/)
     end
 
     context "when no_autobump! is set" do
@@ -711,11 +723,11 @@ RSpec.describe Cask::DSL, :cask, :no_api do
 
   describe "conflicts_with cask" do
     let(:local_caffeine) do
-      Cask::CaskLoader.load(cask_path("local-caffeine"))
+      Cask::CaskLoader.from_path(cask_path("local-caffeine"))
     end
 
     let(:with_conflicts_with) do
-      Cask::CaskLoader.load(cask_path("with-conflicts-with"))
+      Cask::CaskLoader.from_path(cask_path("with-conflicts-with"))
     end
 
     it "raises an error when a conflicting cask is already installed" do

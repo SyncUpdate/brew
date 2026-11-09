@@ -37,6 +37,19 @@ RSpec.describe Homebrew::Install do
     end
   end
 
+  test_each([false, true]) do |on_request|
+    it "preserves on_request: #{on_request} when preparing to reinstall a formula as a dependency" do
+      installed_formula = Testball.new
+      installed_formula.prefix.mkpath
+      tab = Tab.create(installed_formula)
+      tab.installed_on_request = on_request
+      tab.write
+
+      expect(described_class.formula_installers([installed_formula], installed_on_request: false)
+                            .map(&:installed_on_request?)).to eq([on_request])
+    end
+  end
+
   describe "::fetch_formulae" do
     it "skips formulae whose fetch steps raise and continues with the rest" do
       good_fi = FormulaInstaller.new(formula("good-bottle") do
@@ -57,6 +70,61 @@ RSpec.describe Homebrew::Install do
       expect do
         expect(described_class.fetch_formulae([good_fi, bad_fi])).to eq([good_fi])
       end.to output(/Error: bad-bottle: unexpected failure/).to_stderr
+    end
+
+    context "when listing attestations" do
+      sig { returns(Formula) }
+      let(:bottled_formula) do
+        formula("bottled") do
+          T.bind(self, T.class_of(Formula))
+          url "foo-1.0"
+          bottle do
+            sha256 cellar: :any, Utils::Bottles.tag.to_sym => "0" * 64
+          end
+        end
+      end
+
+      it "lists the formulae's bottle attestations before their prelude fetch" do
+        formula_installer = FormulaInstaller.new(bottled_formula)
+        download_queue = instance_double(Homebrew::DownloadQueue)
+        calls = []
+        allow(Homebrew::Attestation).to receive(:prefetch) { |formulae| calls << [:prefetch, formulae] }
+        allow(formula_installer).to receive(:prelude_fetch) { calls << :prelude_fetch }
+
+        described_class.prelude_fetch_formulae([formula_installer], download_queue:)
+
+        expect(calls).to eq([[:prefetch, [bottled_formula]], :prelude_fetch])
+      end
+
+      it "does not list attestations for a metadata-only prelude fetch" do
+        formula_installer = FormulaInstaller.new(bottled_formula)
+        download_queue = instance_double(Homebrew::DownloadQueue)
+        allow(formula_installer).to receive(:prelude_fetch)
+        expect(Homebrew::Attestation).not_to receive(:prefetch)
+
+        described_class.prelude_fetch_formulae([formula_installer], download_queue:, metadata_only: true)
+      end
+
+      it "lists dependency bottle attestations once dependencies are known" do
+        formula_installer = FormulaInstaller.new(formula("dependent") do
+          T.bind(self, T.class_of(Formula))
+          url "foo-1.0"
+        end)
+        stub_formula_loader(bottled_formula)
+        allow(formula_installer).to receive_messages(prelude_fetch: nil, prelude: nil,
+                                                     compute_dependencies: [Dependency.new("bottled")])
+        calls = []
+        allow(Homebrew::Attestation).to receive(:prefetch) { |formulae| calls << [:prefetch, formulae] }
+        allow(formula_installer).to receive(:enqueue_fetch) { calls << :enqueue_fetch }
+
+        described_class.fetch_formulae([formula_installer])
+
+        expect(calls).to eq([
+          [:prefetch, [formula_installer.formula]],
+          [:prefetch, [bottled_formula]],
+          :enqueue_fetch,
+        ])
+      end
     end
   end
 
@@ -366,6 +434,21 @@ RSpec.describe Homebrew::Install do
       expect(error).to receive(:dump).with(verbose: false)
 
       expect(described_class.install_formulae([bad_fi, good_fi])).to eq([good_fi.formula])
+    end
+
+    it "separates a failed build from the output that follows" do
+      bad_formula = formula("bad-build") do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+      end
+      bad_fi = instance_double(FormulaInstaller, formula: bad_formula)
+      error = BuildError.new(bad_formula, "make", ["install"], {})
+
+      allow(described_class).to receive(:install_formula).with(bad_fi, upgrade: false).and_raise(error)
+      allow(Utils::Analytics).to receive(:report_build_error).with(error)
+      allow(error).to receive(:dump).with(verbose: false)
+
+      expect { described_class.install_formulae([bad_fi]) }.to output("\n").to_stdout
     end
   end
 

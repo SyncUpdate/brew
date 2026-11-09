@@ -127,7 +127,6 @@ module Homebrew
             cd dir do
               current_branch_head = ENV["GITHUB_SHA"] || tap.git_head
               original_commit = if args.no_cherry_pick?
-                # TODO: Handle the case where `merge-base` returns multiple commits.
                 Utils.safe_popen_read("git", "-C", tap.path, "merge-base", "origin/HEAD",
                                       current_branch_head).strip
               else
@@ -249,7 +248,7 @@ module Homebrew
       def get_package(tap, subject_name, subject_path, content)
         if subject_path.to_s.start_with?("#{tap.cask_dir}/")
           cask = begin
-            Cask::CaskLoader.load(content.dup)
+            Cask::CaskLoader.from_content(content.dup)
           rescue Cask::CaskUnavailableError
             nil
           end

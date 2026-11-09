@@ -30,7 +30,7 @@ RSpec.describe Homebrew::Cmd::FetchCmd do
       allow(Homebrew::DownloadQueue).to receive(:new).and_return(download_queue)
       allow(download_queue).to receive(:enqueue) { |download| downloads << download }
       allow(cmd.args.named).to receive_messages(to_formulae: [foo], to_formulae_and_casks: [foo])
-      allow(Formulary).to receive(:factory).and_return(foo)
+      allow(Formulary).to receive_messages(factory: foo, from_path: foo)
       allow(cmd).to receive(:fetch_bottle?).and_return(false)
       allow(cmd).to receive(:run_fetch_hook)
     end
@@ -80,7 +80,7 @@ RSpec.describe Homebrew::Cmd::FetchCmd do
     end
   end
 
-  it "does not run a formula's fetch hook until its dependencies are installed" do
+  it "silently skips a formula's fetch hook until its dependencies are installed" do
     cmd = described_class.new(["--build-from-source", "foo"])
     dependency = formula("bar") do
       T.bind(self, T.class_of(Formula))
@@ -96,7 +96,7 @@ RSpec.describe Homebrew::Cmd::FetchCmd do
     allow(foo).to receive(:recursive_dependencies).and_return([instance_double(Dependency, to_formula: dependency)])
     expect(FormulaInstaller).not_to receive(:new)
 
-    expect { cmd.run_fetch_hook(foo) }.to output(/brew install --only-dependencies foo/).to_stderr
+    expect { cmd.run_fetch_hook(foo) }.not_to output.to_stderr
   end
 
   it "uses API bottle metadata before loading simple core formulae" do

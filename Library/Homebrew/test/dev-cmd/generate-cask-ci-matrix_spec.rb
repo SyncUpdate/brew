@@ -391,7 +391,7 @@ RSpec.describe Homebrew::DevCmd::GenerateCaskCiMatrix do
         modified_github_actions_files: [],
         modified_cask_files:           [cask_path],
       )
-      allow(Cask::CaskLoader).to receive(:load).and_return(cask)
+      allow(Cask::CaskLoader).to receive(:from_tap_path).and_return(cask)
       allow(command).to receive(:puts) { |output| stdout.puts(output) }
     end
 
@@ -409,9 +409,9 @@ RSpec.describe Homebrew::DevCmd::GenerateCaskCiMatrix do
 
         it "merges the label's exceptions on every runner" do
           expect(audit_args_by_runner).to eq(
-            "macos-15" => ["--online", "--except", "homepage_https_availability,signing"],
-            "macos-26" => ["--online", "--except", "homepage_https_availability"],
-            "xcode-27" => ["--online", "--except", "homepage_https_availability"],
+            "macos-15" => ["--online", "--except", "homepage_https_availability,homepage_domain_age,signing"],
+            "macos-26" => ["--online", "--except", "homepage_https_availability,homepage_domain_age"],
+            "xcode-27" => ["--online", "--except", "homepage_https_availability,homepage_domain_age"],
           )
         end
       end

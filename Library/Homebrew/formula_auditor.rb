@@ -41,7 +41,6 @@ module Homebrew
         strict:              T::Boolean,
         online:              T::Boolean,
         git:                 T::Boolean,
-        display_cop_names:   T::Boolean,
         only:                T.nilable(T::Array[String]),
         except:              T.nilable(T::Array[String]),
         style_offenses:      T.nilable(T::Array[Style::Offense]),
@@ -51,7 +50,7 @@ module Homebrew
         spdx_exception_data: T.nilable(T::Hash[String, T.untyped]),
       ).void
     }
-    def initialize(formula, new_formula: false, strict: false, online: false, git: false, display_cop_names: false,
+    def initialize(formula, new_formula: false, strict: false, online: false, git: false,
                    only: nil, except: nil, style_offenses: nil, core_tap: false, tap_audit: false,
                    spdx_license_data: nil, spdx_exception_data: nil)
       @formula = formula
@@ -61,7 +60,6 @@ module Homebrew
       @strict = strict
       @online = online
       @git = git
-      @display_cop_names = display_cop_names
       @only = only
       @except = except
       # Accept precomputed style offense results, for efficiency
@@ -83,10 +81,7 @@ module Homebrew
       return unless @style_offenses
 
       @style_offenses.each do |offense|
-        cop_name = "#{offense.cop_name}: " if @display_cop_names
-        message = "#{cop_name}#{offense.message}"
-
-        problem message, location: offense.location, corrected: offense.corrected?
+        problem offense.message, location: offense.location, corrected: offense.corrected?
       end
     end
 
@@ -1097,7 +1092,7 @@ module Homebrew
       return if changed_dependency_paths.empty?
 
       missing_compatibility_bumps = changed_dependency_paths.filter_map do |path|
-        changed_formula = Formulary.factory(path)
+        changed_formula = Formulary.from_tap_path(path)
         # Each changed dependency that updates its version must raise its compatibility_version by exactly one.
         _, base_ref_dependency_version_info = committed_version_info(formula: changed_formula)
         previous_dependency_version = base_ref_dependency_version_info[:version]
@@ -1153,7 +1148,7 @@ module Homebrew
       return unless formula.valid_platform?
 
       dependent_revision_bumps = changed_formulae_paths(tap).filter_map do |path|
-        changed_formula = Formulary.factory(path)
+        changed_formula = Formulary.from_tap_path(path)
         next if changed_formula.name == formula.name
 
         dependencies = changed_formula.recursive_dependencies.map(&:name)

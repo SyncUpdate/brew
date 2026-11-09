@@ -36,17 +36,28 @@ RSpec.describe Homebrew::Cmd::ReadallCmd do
                                                trusted_cask_files:    [trusted_cask])
     expect(Readall).to receive(:valid_tap?).with(
       tap,
-      aliases:       false,
-      no_simulate:   false,
-      formula_files: [trusted_formula],
-      cask_files:    [trusted_cask],
+      aliases:              false,
+      no_simulate:          false,
+      os_arch_combinations: OnSystem::ALL_OS_ARCH_COMBINATIONS,
+      formula_files:        [trusted_formula],
+      cask_files:           [trusted_cask],
     ).and_return(true)
 
     described_class.new([]).run
   end
 
+  it "validates only the platforms given by `--os` and `--arch`" do
+    tap = instance_double(Tap, formula_files: [], cask_files: [])
+    allow(Tap).to receive(:installed).and_return([tap])
+    expect(Readall).to receive(:valid_tap?)
+      .with(tap, hash_including(os_arch_combinations: [[:linux, :arm]]))
+      .and_return(true)
+
+    described_class.new(["--os=linux", "--arch=arm"]).run
+  end
+
   it "skips macOS-only casks when loading tap casks on Linux" do
-    tap_path = mktmpdir
+    tap_path = CoreCaskTap.instance.path
     macos_only_cask_file = tap_path/"Casks/macos-only-example.rb"
     linux_cask_file = tap_path/"Casks/linux-example.rb"
     macos_only_cask_file.dirname.mkpath
@@ -135,7 +146,7 @@ RSpec.describe Homebrew::Cmd::ReadallCmd do
   end
 
   it "validates tap files in parallel worker processes" do
-    tap_path = mktmpdir
+    tap_path = CoreCaskTap.instance.path
     cask_files = (1..8).map do |i|
       file = tap_path/"Casks/linux-example#{i}.rb"
       file.dirname.mkpath
@@ -167,7 +178,7 @@ RSpec.describe Homebrew::Cmd::ReadallCmd do
   end
 
   it "explains nil sha256 values when loading tap casks on Linux" do
-    tap_path = mktmpdir
+    tap_path = CoreCaskTap.instance.path
     linux_cask_file = tap_path/"Casks/linux-example.rb"
     linux_cask_file.dirname.mkpath
     linux_cask_file.write <<~RUBY
@@ -196,7 +207,7 @@ RSpec.describe Homebrew::Cmd::ReadallCmd do
   end
 
   it "reports Linux architectures missing a checksum despite an `on_macos` macOS dependency" do
-    tap_path = mktmpdir
+    tap_path = CoreCaskTap.instance.path
     cross_os_cask_file = tap_path/"Casks/cross-os-example.rb"
     cross_os_cask_file.dirname.mkpath
     cross_os_cask_file.write <<~RUBY
@@ -232,7 +243,7 @@ RSpec.describe Homebrew::Cmd::ReadallCmd do
   end
 
   it "allows Linux architectures excluded by `depends_on arch:`" do
-    tap_path = mktmpdir
+    tap_path = CoreCaskTap.instance.path
     linux_intel_cask_file = tap_path/"Casks/linux-intel-example.rb"
     linux_intel_cask_file.dirname.mkpath
     linux_intel_cask_file.write <<~RUBY

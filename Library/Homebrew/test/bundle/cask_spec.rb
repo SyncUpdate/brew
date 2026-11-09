@@ -3,6 +3,7 @@
 
 require "bundle"
 require "bundle/cask"
+require "bundle/skipper"
 require "cask"
 require "cask/cask_loader"
 
@@ -40,13 +41,16 @@ RSpec.describe Homebrew::Bundle::Cask do
     end
 
     context "when casks `foo`, `bar` and `baz` are installed, with `baz` being a formula requirement" do
-      let(:foo) { instance_double(Cask::Cask, to_s: "foo", full_name: "foo", desc: nil, config: nil) }
-      let(:baz) { instance_double(Cask::Cask, to_s: "baz", full_name: "baz", desc: "Software", config: nil) }
+      let(:foo) { instance_double(Cask::Cask, to_s: "foo", full_name: "foo", desc: nil, config: nil, pinned?: false) }
+      let(:baz) do
+        instance_double(Cask::Cask, to_s: "baz", full_name: "baz", desc: "Software", config: nil, pinned?: true)
+      end
       let(:bar) do
         instance_double(
           Cask::Cask, to_s:      "bar",
                       full_name: "bar",
                       desc:      nil,
+                      pinned?:   false,
                       config:    instance_double(
                         Cask::Config,
                         explicit: {
@@ -68,12 +72,12 @@ RSpec.describe Homebrew::Bundle::Cask do
         expect(dumper.cask_names).to eql(%w[foo bar baz])
       end
 
-      it "dumps as `cask 'baz'` and `cask 'foo' cask 'bar'` plus descriptions and config values" do
+      it "dumps as `cask 'baz'` and `cask 'foo' cask 'bar'` plus descriptions, config values and pins" do
         expected = <<~RUBY
           cask "foo"
           cask "bar", args: { fontdir: "/Library/Fonts", language: "zh-TW" }, trusted: true
           # Software
-          cask "baz"
+          cask "baz", pin: true
         RUBY
         allow(Homebrew::Trust).to receive(:trusted_entries).with(:cask).and_return(["bar"])
         expect(dumper.dump(describe: true)).to eql(expected.chomp)
@@ -324,6 +328,99 @@ RSpec.describe Homebrew::Bundle::Cask do
         end
       end
 
+      context "when a cask is requested from another tap" do
+        let(:options) { { full_name: "thirdparty/tap/google-chrome" } }
+        let(:installed_cask) do
+          instance_double(Cask::Cask, to_s: "google-chrome", tap: CoreCaskTap.instance, pinned?: false)
+        end
+
+        before do
+          allow(Homebrew::Bundle::Skipper).to receive(:skip?).and_return(false)
+          allow(described_class).to receive_messages(outdated_casks: [], casks: [installed_cask])
+        end
+
+        it "does not skip the installed token" do
+          expect(described_class.preinstall!("google-chrome", **options)).to be(true)
+        end
+
+        it "reports that it will reinstall the cask" do
+          expect(described_class.install_verb("google-chrome", options)).to eq("Reinstalling")
+        end
+
+        it "reinstalls from the requested tap" do
+          expect(Homebrew::Bundle).to receive(:brew)
+            .with("reinstall", "--cask", "thirdparty/tap/google-chrome", "--adopt", verbose: false).and_return(true)
+
+          described_class.install!("google-chrome", **options)
+        end
+
+        context "when the installed cask is pinned" do
+          before do
+            allow(installed_cask).to receive(:pinned?).and_return(true)
+            allow(Homebrew::Bundle).to receive(:brew).and_return(true)
+          end
+
+          test_each([false, true]) do |force|
+            it "fails with an instruction to unpin the cask (force: #{force})" do
+              expect do
+                expect(described_class.install!("google-chrome", **options, force:)).to be(false)
+              end.to output(/google-chrome is pinned.*brew unpin --cask google-chrome/m).to_stderr
+            end
+          end
+
+          it "does not reinstall or unpin the cask" do
+            allow(described_class).to receive(:onoe)
+
+            expect(Homebrew::Bundle).not_to receive(:brew)
+
+            described_class.install!("google-chrome", **options)
+          end
+        end
+
+        it "does not report the requested cask as up to date" do
+          expect(described_class.cask_installed_and_up_to_date?("thirdparty/tap/google-chrome")).to be(false)
+        end
+
+        it "checks the requested tap in Brewfile entries" do
+          expect(described_class.check([
+            Homebrew::Bundle::Dsl::Entry.new(:cask, "google-chrome", options),
+          ])).to eq(["Cask thirdparty/tap/google-chrome needs to be installed or updated."])
+        end
+
+        it "changes taps even when upgrades are disabled" do
+          expect(described_class.preinstall!("google-chrome", no_upgrade: true, **options)).to be(true)
+        end
+
+        it "refreshes the installed tap after reinstalling" do
+          allow(described_class).to receive(:casks).and_call_original
+          allow(Cask::Caskroom).to receive(:casks).and_return(
+            [Cask::Cask.new("google-chrome", tap: CoreCaskTap.instance)],
+            [Cask::Cask.new("google-chrome", tap: Tap.fetch("thirdparty/tap"))],
+          )
+          allow(Homebrew::Bundle).to receive(:brew).and_return(true)
+
+          described_class.install!("google-chrome", **options)
+
+          expect(described_class.preinstall!("google-chrome", **options)).to be(false)
+        end
+
+        ["google-chrome", "homebrew/cask/google-chrome", "homebrew/homebrew-cask/google-chrome"].each do |full_name|
+          it "skips the installed cask when requested as #{full_name}" do
+            T.bind(self, RSpec::Core::ExampleGroup)
+
+            expect(described_class.preinstall!("google-chrome", full_name:)).to be(false)
+          end
+        end
+
+        it "checks sanitised cask names" do
+          allow(described_class).to receive(:cask_oldnames).and_return({})
+
+          expect(described_class.check(
+                   Homebrew::Bundle::Dsl.new(StringIO.new('cask "Google-Chrome"')).entries,
+                 )).to be_empty
+        end
+      end
+
       context "when cask is outdated and uses auto-update" do
         before do
           described_class.reset!
@@ -337,6 +434,44 @@ RSpec.describe Homebrew::Bundle::Cask do
                             .and_return(true)
           expect(described_class.preinstall!("opera", greedy: true)).to be(true)
           expect(described_class.install!("opera", greedy: true)).to be(true)
+        end
+      end
+
+      context "when the pin option is true" do
+        let(:chrome) { instance_double(Cask::Cask, to_s: "google-chrome", pinned?: false) }
+
+        before do
+          described_class.reset!
+          allow(described_class).to receive_messages(installed_casks: ["google-chrome"],
+                                                     outdated_casks:  ["google-chrome"], casks: [chrome])
+        end
+
+        it "pins an unpinned cask instead of upgrading it" do
+          expect(Homebrew::Bundle).not_to \
+            receive(:system).with(HOMEBREW_BREW_FILE, "upgrade", "--cask", "google-chrome", verbose: false)
+          expect(Homebrew::Bundle).to \
+            receive(:system).with(HOMEBREW_BREW_FILE, "pin", "--cask", "google-chrome", verbose: false)
+                            .and_return(true)
+          expect(described_class.install_verb("google-chrome", pin: true)).to eq("Pinning")
+          expect(described_class.preinstall!("google-chrome", pin: true)).to be(true)
+          expect(described_class.install!("google-chrome", pin: true)).to be(true)
+        end
+
+        it "skips a cask that is already pinned" do
+          allow(chrome).to receive(:pinned?).and_return(true)
+          expect(Homebrew::Bundle).not_to receive(:system)
+          expect(described_class.preinstall!("google-chrome", pin: true)).to be(false)
+        end
+
+        it "installs and then pins a missing cask" do
+          allow(described_class).to receive_messages(installed_casks: [], casks: [])
+          expect(Homebrew::Bundle).to receive(:brew).with("install", "--cask", "google-chrome", "--adopt",
+                                                          verbose: false)
+                                                    .and_return(true)
+          expect(Homebrew::Bundle).to receive(:brew).with("pin", "--cask", "google-chrome", verbose: false)
+                                                    .and_return(true)
+          expect(described_class.preinstall!("google-chrome", pin: true)).to be(true)
+          expect(described_class.install!("google-chrome", pin: true)).to be(true)
         end
       end
 

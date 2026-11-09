@@ -368,7 +368,7 @@ RSpec.describe Cask::Audit, :cask do
         f.write text
       end
 
-      Cask::CaskLoader.load(path)
+      Cask::CaskLoader.from_path(path)
     end
 
     let(:dir) { mktmpdir }
@@ -544,6 +544,28 @@ RSpec.describe Cask::Audit, :cask do
         it "audits the homepage" do
           expect(audit).to receive(:validate_url_for_https_availability)
           run
+        end
+      end
+    end
+
+    describe "checking binary URL availability" do
+      let(:online) { true }
+      let(:only) { ["url_https_availability"] }
+
+      test_each_hash({ nil => nil, URI("https://brew.sh/") => "https://brew.sh/" }) do |referer, curl_referer|
+        context "with referer #{referer.inspect}" do
+          let(:cask) do
+            Cask::Cask.new("binary-url") do
+              url "https://brew.sh/binary.dmg", referer:
+            end
+          end
+
+          it "checks the URL with referer #{curl_referer.inspect}" do
+            expect(audit).to receive(:curl_check_http_content)
+              .with("https://brew.sh/binary.dmg", "binary URL", user_agents: [:default], referer: curl_referer,
+                                                                 check_content: false, strict: false)
+            run
+          end
         end
       end
     end
@@ -1792,9 +1814,8 @@ RSpec.describe Cask::Audit, :cask do
       subject(:run) { Homebrew::SimulateSystem.with(os:) { audit.run! } }
 
       let(:only) { ["zap_required"] }
-      let(:new_cask) { true }
       let(:os) { :sequoia }
-      let(:message) { /New casks must have a `zap` stanza/ }
+      let(:message) { /Casks must have a `zap` stanza/ }
       let(:tap) { CoreCaskTap.instance }
       let(:stanzas) { nil }
       let(:cask) do
@@ -1817,8 +1838,14 @@ RSpec.describe Cask::Audit, :cask do
         end
       end
 
-      context "when the cask is not new" do
-        let(:new_cask) { false }
+      context "when the cask is deprecated" do
+        let(:stanzas) { proc { deprecate! date: "2021-01-01", because: :discontinued } }
+
+        it { is_expected.not_to error_with(message) }
+      end
+
+      context "when the cask is disabled" do
+        let(:stanzas) { proc { disable! date: "2021-01-01", because: :discontinued } }
 
         it { is_expected.not_to error_with(message) }
       end

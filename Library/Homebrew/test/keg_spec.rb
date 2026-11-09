@@ -39,6 +39,20 @@ RSpec.describe Keg do
     expect(described_class.all).to eq([keg])
   end
 
+  describe "#deleted_formula?" do
+    it "returns true when no tap provides the formula" do
+      expect(keg.deleted_formula?).to be true
+    end
+
+    it "returns false when a tap provides the formula" do
+      formula_path = CoreTap.instance.new_formula_path("foo")
+      formula_path.dirname.mkpath
+      formula_path.write ""
+
+      expect(keg.deleted_formula?).to be false
+    end
+  end
+
   describe "#formula_preserve_rpath?" do
     let(:fallback_formula) do
       formula("foo") do
@@ -402,6 +416,34 @@ RSpec.describe Keg do
       expect(dst).not_to be_a_symlink
     end
 
+    it "prints linked paths during a dry run" do
+      keg.link
+
+      expect do
+        keg.unlink(dry_run: true)
+      end.to output(<<~EOS).to_stdout
+        #{HOMEBREW_PREFIX}/bin/goodbye_cruel_world
+        #{HOMEBREW_PREFIX}/bin/helloworld
+        #{HOMEBREW_PREFIX}/bin/hiworld
+      EOS
+
+      expect(dst).to be_a_symlink
+    end
+
+    it "prunes symlinked directories during a dry run" do
+      src = keg/"bin/linked_dir"
+      src.mkpath
+      link = HOMEBREW_PREFIX/"bin/linked_dir"
+      link.make_relative_symlink(src)
+
+      expect(Find).to receive(:prune).at_least(:once).and_call_original
+      expect do
+        keg.unlink(dry_run: true)
+      end.to output("#{link}\n").to_stdout
+
+      expect(link).to be_a_symlink
+    end
+
     it "prunes empty top-level directories" do
       mkpath HOMEBREW_PREFIX/"lib/foo/bar"
       mkpath keg/"lib/foo/bar"
@@ -504,6 +546,10 @@ RSpec.describe Keg do
   describe "#uninstall" do
     def write_aliases(keg, names)
       (keg/"INSTALL_RECEIPT.json").write({ aliases: names }.to_json)
+    end
+
+    it "does not remove a Keg during a dry run" do
+      expect { keg.uninstall(dry_run: true) }.not_to change(keg, :exist?).from(true)
     end
 
     it "keeps a versioned opt alias that points at a newer keg" do

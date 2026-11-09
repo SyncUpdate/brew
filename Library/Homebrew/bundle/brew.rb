@@ -69,8 +69,8 @@ module Homebrew
         }
         # rubocop:enable Sorbet/AllowIncompatibleOverride
         def install_verb(name, options = {})
-          _ = options
-
+          return "Reinstalling" if formula_tap_changed?(name)
+          return "Pinning" if options[:pin] == true && formula_installed?(name) && !formula_pinned?(name)
           return "Installing" unless formula_upgradable?(name)
 
           "Upgrading"
@@ -78,6 +78,7 @@ module Homebrew
 
         sig { params(formula: String, no_upgrade: T::Boolean).returns(T::Boolean) }
         def formula_installed_and_up_to_date?(formula, no_upgrade: false)
+          return false if formula_tap_changed?(formula)
           return false unless formula_installed?(formula)
           return true if no_upgrade_with_args?(no_upgrade, formula)
 
@@ -150,6 +151,19 @@ module Homebrew
         end
 
         sig { params(formula: String).returns(T::Boolean) }
+        def formula_tap_changed?(formula)
+          return false unless Utils.full_name?(formula)
+
+          require "formulary"
+          return false unless (name_tap_type = Formulary.tap_formula_name_type(formula, warn: false))
+
+          name, tap, = name_tap_type
+          return false unless (keg = Keg.from_rack(HOMEBREW_CELLAR/name))
+
+          keg.tab.tap != tap
+        end
+
+        sig { params(formula: String).returns(T::Boolean) }
         def formula_upgradable?(formula)
           return false unless formula_installed?(formula)
 
@@ -187,6 +201,11 @@ module Homebrew
         sig { returns(T::Array[String]) }
         def pinned_formulae
           @pinned_formulae ||= formulae.filter_map { |f| f[:name] if f[:pinned?] }
+        end
+
+        sig { params(formula: String).returns(T::Boolean) }
+        def formula_pinned?(formula)
+          formula_in_array?(formula, pinned_formulae)
         end
 
         sig { params(name: String).returns(T.nilable(T::Hash[Symbol, T.untyped])) }
@@ -267,6 +286,7 @@ module Homebrew
             brewline += ", args: [#{args}]" unless f[:args].empty?
             brewline += ", restart_service: :changed" if !no_restart && Services.started?(f[:full_name])
             brewline += ", link: #{f[:link?]}" unless f[:link?].nil?
+            brewline += ", pin: true" if f[:pinned?]
             brewline += ", trusted: true" if trusted_formulae.include?(f[:full_name])
             brewline
           end.join("\n")
@@ -429,15 +449,23 @@ module Homebrew
                            .filter_map { |name| @formulae_by_full_name[name] || @formulae_by_name[name] }
                            .uniq { |f| f[:full_name] }
                            .map { |f| f[:full_name] }
-            opoo <<~EOS
+            warning = <<~EOS
               Formulae dependency graph sorting found a circular dependency:
                 #{cyclic.join(", ")}
               This is usually caused by stale dependency data in installed keg tabs.
               If it persists, run the following commands and try again:
                 brew update
                 brew uninstall --ignore-dependencies --force #{cyclic.join(" ")}
-                brew install #{cyclic.join(" ")}
             EOS
+            [true, false].each do |on_request|
+              names = cyclic.select do |name|
+                @formulae_by_full_name.fetch(name)[:installed_on_request?] == on_request
+              end
+              next if names.empty?
+
+              warning += "  brew install#{" --as-dependency" unless on_request} #{names.join(" ")}\n"
+            end
+            opoo warning
           end
 
           @formulae = sorted.filter_map { |name| @formulae_by_full_name[name] || @formulae_by_name[name] }
@@ -458,6 +486,7 @@ module Homebrew
         @postinstall = T.let(options.fetch(:postinstall, nil), T.nilable(String))
         @version_file = T.let(options.fetch(:version_file, nil), T.nilable(String))
         @trusted = T.let(options.fetch(:trusted, false), T::Boolean)
+        @pin = T.let(options[:pin] == true, T::Boolean)
         @changed = T.let(nil, T.nilable(T::Boolean))
       end
 
@@ -506,7 +535,11 @@ module Homebrew
 
       sig { params(no_upgrade: T::Boolean, verbose: T::Boolean).returns(T::Boolean) }
       def preinstall!(no_upgrade: false, verbose: false)
-        if installed? && (self.class.no_upgrade_with_args?(no_upgrade, @name) || !upgradable?)
+        return true if self.class.formula_tap_changed?(@full_name)
+
+        if installed? && (self.class.no_upgrade_with_args?(no_upgrade, @name) || @pin || !upgradable?)
+          return true if pin_needed?
+
           puts "Skipping install of #{@name} formula. It is already installed." if verbose
           @changed = nil
           return false
@@ -517,7 +550,14 @@ module Homebrew
 
       sig { params(preinstall: T::Boolean, no_upgrade: T::Boolean, verbose: T::Boolean, force: T::Boolean).returns(T::Boolean) }
       def install!(preinstall: true, no_upgrade: false, verbose: false, force: false)
-        install_result = if preinstall
+        if preinstall && installed? && self.class.formula_tap_changed?(@full_name) &&
+           self.class.formula_pinned?(@full_name)
+          self.class.onoe "#{@name} is pinned. Run `brew unpin --formula #{@name}` before changing taps."
+          return false
+        end
+
+        # An installed pinned entry only needs its pin unless its requested tap changed.
+        install_result = if preinstall && (!@pin || !installed? || self.class.formula_tap_changed?(@full_name))
           install_change_state!(no_upgrade:, verbose:, force:)
         else
           true
@@ -530,6 +570,9 @@ module Homebrew
 
           link_result = link_change_state!(verbose:)
           result &&= link_result
+
+          pin_result = pin_change_state!(verbose:)
+          result &&= pin_result
 
           postinstall_result = postinstall_change_state!(verbose:)
           result &&= postinstall_result
@@ -568,7 +611,17 @@ module Homebrew
 
         return false unless resolve_conflicts!(verbose:)
 
-        if installed?
+        if installed? && self.class.formula_tap_changed?(@full_name)
+          reinstall_args = @args.dup
+          reinstall_args << "--force" if force
+          @changed = Bundle.brew("reinstall", "--formula", @full_name, *reinstall_args, verbose:)
+          return false unless @changed
+
+          Tab.clear_cache
+          Formula.clear_cache
+          self.class.reset!
+          true
+        elsif installed?
           upgrade_formula!(verbose:, force:)
         else
           install_formula!(verbose:, force:)
@@ -650,6 +703,19 @@ module Homebrew
 
         puts "Running postinstall for #{@name}: #{@postinstall}" if verbose
         Kernel.system(@postinstall) || false
+      end
+
+      sig { returns(T::Boolean) }
+      def pin_needed?
+        @pin && !self.class.formula_pinned?(@full_name)
+      end
+
+      sig { params(verbose: T::Boolean).returns(T::Boolean) }
+      def pin_change_state!(verbose:)
+        return true unless pin_needed?
+
+        puts "Pinning #{@name} formula." if verbose
+        Bundle.brew("pin", "--formula", @full_name, verbose:)
       end
 
       private
@@ -759,7 +825,7 @@ module Homebrew
         upgrade_args << "--force" if force
         with_args = " with #{upgrade_args.join(" ")}" if upgrade_args.present?
         puts "Upgrading #{@name} formula#{with_args}. It is installed but not up-to-date." if verbose
-        unless Bundle.brew("upgrade", "--formula", @name, *upgrade_args, verbose:)
+        unless Bundle.brew("upgrade", "--formula", @full_name, *upgrade_args, verbose:)
           @changed = nil
           return false
         end

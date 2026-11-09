@@ -47,7 +47,7 @@ RSpec.describe Homebrew::Livecheck do
   end
   let(:r) { f.resources.first }
   let(:c) do
-    Cask::CaskLoader.load(+<<-RUBY)
+    Cask::CaskLoader.from_content(+<<-RUBY)
       cask "test" do
         version "0.0.1,2"
 
@@ -64,7 +64,7 @@ RSpec.describe Homebrew::Livecheck do
     RUBY
   end
   let(:c_no_checkable_urls) do
-    Cask::CaskLoader.load(+<<-RUBY)
+    Cask::CaskLoader.from_content(+<<-RUBY)
       cask "test_no_checkable_urls" do
         version "1.2.3"
 
@@ -184,7 +184,7 @@ RSpec.describe Homebrew::Livecheck do
     let(:r_livecheck_url) { f_livecheck_url.resources.first }
 
     let(:c_livecheck_url) do
-      Cask::CaskLoader.load(+<<-RUBY)
+      Cask::CaskLoader.from_content(+<<-RUBY)
         cask "test_livecheck_url" do
           version "0.0.1,2"
 
@@ -287,7 +287,7 @@ RSpec.describe Homebrew::Livecheck do
     end
 
     let(:c_homebrew_curl) do
-      Cask::CaskLoader.load(+<<-RUBY)
+      Cask::CaskLoader.from_content(+<<-RUBY)
         cask "test" do
           version "0.0.1,2"
 
@@ -386,23 +386,8 @@ RSpec.describe Homebrew::Livecheck do
       end
     end
 
-    let(:f_throttle_rate_and_days) do
-      formula("test_throttle_rate_and_days") do
-        T.bind(self, T.class_of(Formula))
-        desc "Test formula"
-        homepage "https://brew.sh"
-        url "https://brew.sh/test-0.0.1.tgz"
-
-        livecheck do
-          url :homepage
-          regex(/href=.*?test[._-]v?(\d+(?:\.\d+)+)\.(?:t|dmg)/i)
-          throttle 4, days: 1
-        end
-      end
-    end
-
     let(:c_throttle_rate) do
-      Cask::CaskLoader.load(+<<-RUBY)
+      Cask::CaskLoader.from_content(+<<-RUBY)
         cask "test_throttle_rate" do
           version "0.0.1"
 
@@ -421,7 +406,7 @@ RSpec.describe Homebrew::Livecheck do
     end
 
     let(:c_throttle_days) do
-      Cask::CaskLoader.load(+<<-RUBY)
+      Cask::CaskLoader.from_content(+<<-RUBY)
         cask "test_throttle_days" do
           version "0.0.1"
 
@@ -434,25 +419,6 @@ RSpec.describe Homebrew::Livecheck do
             url :homepage
             regex(/href=.*?test[._-]v?(\\d+(?:\\.\\d+)+)\\.(?:t|dmg)/i)
             throttle days: 1
-          end
-        end
-      RUBY
-    end
-
-    let(:c_throttle_rate_and_days) do
-      Cask::CaskLoader.load(+<<-RUBY)
-        cask "test_throttle_rate_and_days" do
-          version "0.0.1"
-
-          url "https://brew.sh/test-0.0.1.tgz"
-          name "Test"
-          desc "Test cask"
-          homepage "https://brew.sh"
-
-          livecheck do
-            url :homepage
-            regex(/href=.*?test[._-]v?(\\d+(?:\\.\\d+)+)\\.(?:t|dmg)/i)
-            throttle 4, days: 1
           end
         end
       RUBY
@@ -586,7 +552,7 @@ RSpec.describe Homebrew::Livecheck do
       end
 
       let(:c_options) do
-        Cask::CaskLoader.load(+<<-RUBY)
+        Cask::CaskLoader.from_content(+<<-RUBY)
           cask "test_options" do
             version "0.0.1"
 
@@ -606,7 +572,7 @@ RSpec.describe Homebrew::Livecheck do
         RUBY
       end
       let(:c_reference) do
-        Cask::CaskLoader.load(+<<-RUBY)
+        Cask::CaskLoader.from_content(+<<-RUBY)
           cask "test_reference" do
             version "0.0.1"
 
@@ -794,12 +760,12 @@ RSpec.describe Homebrew::Livecheck do
       latest_version = Version.new("0.0.2")
 
       f_result = T.let(nil, T.nilable(T::Hash[Symbol, T.nilable(Version)]))
-      expect { f_result = livecheck.latest_version(f_throttle_rate_and_days, debug: true) }
-        .to output(a_string_matching(/Throttle: +4 versions or 1 day/)).to_stdout
+      expect { f_result = livecheck.latest_version(f_throttle_days, debug: true) }
+        .to output(a_string_matching(/Throttle: +1 day/)).to_stdout
       expect(f_result[:latest]).to eq(latest_version)
       expect(f_result[:latest_throttled]).to be_nil
 
-      c_result = livecheck.latest_version(c_throttle_rate_and_days)
+      c_result = livecheck.latest_version(c_throttle_days)
       expect(c_result[:latest]).to eq(latest_version)
       expect(c_result[:latest_throttled]).to be_nil
     end
@@ -820,17 +786,9 @@ RSpec.describe Homebrew::Livecheck do
       expect(f_result[:latest]).to eq(latest_version)
       expect(f_result[:latest_throttled]).to eq(latest_version)
 
-      f_result2 = livecheck.latest_version(f_throttle_rate_and_days)
-      expect(f_result2[:latest]).to eq(latest_version)
-      expect(f_result2[:latest_throttled]).to eq(latest_version)
-
       c_result = livecheck.latest_version(c_throttle_days)
       expect(c_result[:latest]).to eq(latest_version)
       expect(c_result[:latest_throttled]).to eq(latest_version)
-
-      c_result2 = livecheck.latest_version(c_throttle_rate_and_days)
-      expect(c_result2[:latest]).to eq(latest_version)
-      expect(c_result2[:latest_throttled]).to eq(latest_version)
     end
   end
 

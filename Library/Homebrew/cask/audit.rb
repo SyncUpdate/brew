@@ -359,8 +359,8 @@ module Cask
 
     sig { void }
     def audit_zap_required
-      return unless new_cask?
       return unless cask.tap&.official?
+      return if cask.deprecated? || cask.disabled?
       return if cask.artifacts.any?(Artifact::Zap)
 
       zap_suggestion = if Homebrew::SimulateSystem.simulating_or_running_on_linux?
@@ -369,7 +369,7 @@ module Cask
         # `brew generate-zap` only scans macOS paths.
         "Generate one with `brew generate-zap #{cask.token}`"
       end
-      add_error "New casks must have a `zap` stanza for every OS and architecture they support. " \
+      add_error "Casks must have a `zap` stanza for every OS and architecture they support. " \
                 "#{zap_suggestion} or use `zap :not_required` only if there is nothing to zap. " \
                 "See #{Formatter.url("https://docs.brew.sh/Cask-Cookbook#stanza-zap")}"
     end
@@ -1247,7 +1247,7 @@ module Cask
         url, "binary URL",
         location:    url.location,
         user_agents: [url.user_agent],
-        referer:     url.referer
+        referer:     url.referer&.to_s
       )
     end
 
@@ -1363,7 +1363,7 @@ module Cask
 
       sourcefile_path.atomic_write(cask_ast.process)
       # Raises if the rewrite is invalid, which the `rescue` restores.
-      CaskLoader.load(sourcefile_path)
+      CaskLoader.from_path(sourcefile_path)
       add_error message, location:, corrected: true
       true
     rescue => e
@@ -1482,14 +1482,18 @@ module Cask
 
     sig {
       params(
-        url_to_check: T.any(String, URL),
-        url_type:     String,
-        location:     T.nilable(Homebrew::SourceLocation),
-        options:      T.untyped,
+        url_to_check:  T.any(String, URL),
+        url_type:      String,
+        user_agents:   T::Array[T.any(String, Symbol)],
+        location:      T.nilable(Homebrew::SourceLocation),
+        referer:       T.nilable(String),
+        check_content: T::Boolean,
+        strict:        T::Boolean,
       ).void
     }
-    def validate_url_for_https_availability(url_to_check, url_type, location: nil, **options)
-      problem = curl_check_http_content(url_to_check.to_s, url_type, **options)
+    def validate_url_for_https_availability(url_to_check, url_type, user_agents:, location: nil, referer: nil,
+                                            check_content: false, strict: false)
+      problem = curl_check_http_content(url_to_check.to_s, url_type, user_agents:, referer:, check_content:, strict:)
       exception = cask.tap&.audit_exception(:secure_connection_audit_skiplist, cask.token, url_to_check.to_s)
 
       if problem

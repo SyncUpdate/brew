@@ -240,7 +240,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
   end
 
   it "prints casks when asking", :cask do
-    cask = Cask::CaskLoader.load(cask_path("local-caffeine"))
+    cask = Cask::CaskLoader.from_path(cask_path("local-caffeine"))
 
     expect do
       Homebrew::Install.ask_casks([cask], prompt: false)
@@ -253,7 +253,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
   context "with only requested casks", :cask do
     test_each(%w[installation reinstallation]) do |action|
       it "skips the #{action} plan and prompt" do
-        cask = Cask::CaskLoader.load(cask_path("local-caffeine"))
+        cask = Cask::CaskLoader.from_path(cask_path("local-caffeine"))
 
         expect(Homebrew::Install).not_to receive(:ask_input)
 
@@ -263,7 +263,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
   end
 
   it "prompts when asking for casks with dependencies", :cask do
-    cask = Cask::CaskLoader.load(cask_path("local-caffeine"))
+    cask = Cask::CaskLoader.from_path(cask_path("local-caffeine"))
     dependency = instance_double(Dependency, installed?: false, name: "unar")
     cask_dependent = instance_double(CaskDependent)
 
@@ -284,7 +284,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
   end
 
   it "does not read installed formula metadata for cask dependency dry-run plans", :cask do
-    cask = Cask::CaskLoader.load(cask_path("local-caffeine"))
+    cask = Cask::CaskLoader.from_path(cask_path("local-caffeine"))
     dependency = instance_double(Dependency, installed?: false, name: "ripgrep")
     cask_dependent = instance_double(CaskDependent)
 
@@ -306,7 +306,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
   end
 
   it "prompts when asking for casks with cask dependencies", :cask do
-    cask = Cask::CaskLoader.load(cask_path("with-depends-on-cask"))
+    cask = Cask::CaskLoader.from_path(cask_path("with-depends-on-cask"))
 
     expect(Homebrew::Install).to receive(:ask_input).with(action: "installation")
 
@@ -321,7 +321,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
   end
 
   it "prints a cask reinstallation dry-run plan when asking", :cask do
-    cask = Cask::CaskLoader.load(cask_path("local-caffeine"))
+    cask = Cask::CaskLoader.from_path(cask_path("local-caffeine"))
 
     expect do
       Homebrew::Install.ask_casks([cask], action: "reinstallation", prompt: false)
@@ -332,7 +332,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
   end
 
   it "does not prompt when skipped cask dependencies will not be installed", :cask do
-    cask = Cask::CaskLoader.load(cask_path("with-depends-on-cask"))
+    cask = Cask::CaskLoader.from_path(cask_path("with-depends-on-cask"))
 
     expect(Homebrew::Install).not_to receive(:ask_input)
 
@@ -369,7 +369,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
     expect(Homebrew::Trust).to receive(:trust_fully_qualified_items!)
       .with(["user/repo/foo"], type: nil)
       .ordered
-    expect(cmd.args.named).to receive(:to_formulae_and_casks).with(warn: false).ordered
+    expect(cmd.args.named).to receive(:to_formulae_and_casks).with(method: :bottle, warn: false).ordered
                                                              .and_raise(TapFormulaUnavailableError.new(tap, "foo"))
 
     expect { cmd.run }.to output(/If you trust this tap/).to_stderr
@@ -394,7 +394,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
 
     allow(Tap).to receive_messages(with_formula_name: nil, with_cask_token: nil)
     allow(Homebrew::Trust).to receive(:trust_fully_qualified_items!)
-    allow(cmd.args.named).to receive(:to_formulae_and_casks).with(warn: false).and_return([formula])
+    allow(cmd.args.named).to receive(:to_formulae_and_casks).with(method: :bottle, warn: false).and_return([formula])
     allow(Homebrew::Install).to receive(:perform_preinstall_checks_once)
     allow(Homebrew::Install).to receive(:check_cc_argv)
     allow(Homebrew::Install).to receive_messages(install_formula?: true, formula_installers: [formula_installer])
@@ -446,7 +446,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
 
     allow(Tap).to receive_messages(with_formula_name: nil, with_cask_token: nil)
     allow(Homebrew::Trust).to receive(:trust_fully_qualified_items!)
-    allow(cmd.args.named).to receive(:to_formulae_and_casks).with(warn: false).and_return([formula])
+    allow(cmd.args.named).to receive(:to_formulae_and_casks).with(method: :bottle, warn: false).and_return([formula])
     allow(Homebrew::Install).to receive(:perform_preinstall_checks_once)
     allow(Homebrew::Install).to receive(:check_cc_argv)
     allow(Homebrew::Install).to receive_messages(install_formula?: true, formula_installers: [formula_installer],
@@ -470,14 +470,14 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
   it "names the cask that failed to install", :cask do
     cmd = described_class.new(["--yes", "local-caffeine"])
     download_queue = instance_double(Homebrew::DownloadQueue, fetch: nil, shutdown: nil, failed_downloads: [])
-    cask = Cask::CaskLoader.load(cask_path("local-caffeine"))
+    cask = Cask::CaskLoader.from_path(cask_path("local-caffeine"))
     installer = instance_double(Cask::Installer, cask:, enqueue_downloads: nil,
                                                   enqueue_dependency_downloads: nil)
     dependants = Homebrew::Upgrade::Dependents.new(upgradeable: [], pinned: [], skipped: [])
 
     allow(Tap).to receive_messages(with_formula_name: nil, with_cask_token: nil)
     allow(Homebrew::Trust).to receive(:trust_fully_qualified_items!)
-    allow(cmd.args.named).to receive(:to_formulae_and_casks).with(warn: false).and_return([cask])
+    allow(cmd.args.named).to receive(:to_formulae_and_casks).with(method: :bottle, warn: false).and_return([cask])
     allow(Cask::Upgrade).to receive(:outdated_casks).and_return([])
     allow(Cask::Installer).to receive(:new).and_return(installer)
     allow(installer).to receive(:install).and_raise("uh-oh")
@@ -494,13 +494,13 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
   it "cleans an installed cask before displaying deferred caveats", :cask do
     cmd = described_class.new(["--yes", "local-caffeine"])
     download_queue = instance_double(Homebrew::DownloadQueue, fetch: nil, shutdown: nil, failed_downloads: [])
-    cask = Cask::CaskLoader.load(cask_path("local-caffeine"))
+    cask = Cask::CaskLoader.from_path(cask_path("local-caffeine"))
     installer = instance_double(Cask::Installer, cask:, install: nil, enqueue_downloads: nil,
                                                   enqueue_dependency_downloads: nil)
 
     allow(Tap).to receive_messages(with_formula_name: nil, with_cask_token: nil)
     allow(Homebrew::Trust).to receive(:trust_fully_qualified_items!)
-    allow(cmd.args.named).to receive(:to_formulae_and_casks).with(warn: false).and_return([cask])
+    allow(cmd.args.named).to receive(:to_formulae_and_casks).with(method: :bottle, warn: false).and_return([cask])
     allow(Cask::Upgrade).to receive(:outdated_casks).and_return([])
     allow(Homebrew::Install).to receive(:perform_preinstall_checks_once)
     allow(Homebrew::Install).to receive(:check_cc_argv)
@@ -547,7 +547,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
 
     allow(Tap).to receive_messages(with_formula_name: nil, with_cask_token: nil)
     allow(Homebrew::Trust).to receive(:trust_fully_qualified_items!)
-    allow(cmd.args.named).to receive(:to_formulae_and_casks).with(warn: false).and_return([formula])
+    allow(cmd.args.named).to receive(:to_formulae_and_casks).with(method: :bottle, warn: false).and_return([formula])
     allow(Homebrew::Install).to receive(:perform_preinstall_checks_once)
     allow(Homebrew::Install).to receive(:check_cc_argv)
     allow(Homebrew::Install).to receive_messages(install_formula?: true, formula_installers: [formula_installer])
@@ -578,7 +578,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
     require "search"
 
     allow(Tap).to receive_messages(with_formula_name: nil, with_cask_token: nil, untapped_official_taps: [])
-    allow(cmd.args.named).to receive(:to_formulae_and_casks).with(warn: false)
+    allow(cmd.args.named).to receive(:to_formulae_and_casks).with(method: :bottle, warn: false)
                                                             .and_raise(FormulaOrCaskUnavailableError.new("foo"))
     allow(cask_tap).to receive(:installed?).and_return(false)
     allow(Homebrew::Search).to receive(:search_names).and_return([[], []])
@@ -591,7 +591,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
   end
 
   context "when installing Formulae" do
-    it "installs Formulae and a Cask", :cask, :integration_test do
+    it "installs Formulae and a Cask as dependencies", :cask, :integration_test do
       source_formula_name = "sourceball"
       source_formula_prefix = HOMEBREW_CELLAR/source_formula_name/"0.1"
       bottle_formula_name = "testball_bottle"
@@ -612,7 +612,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
 
       expect do
         brew "install", "--dry-run", "--no-ask", "--appdir=#{appdir}", source_formula_name,
-             cask_path("local-caffeine"),
+             "local-caffeine",
              "HOMEBREW_NO_INSTALL_FROM_API" => "1", "HOMEBREW_TEST_GENERIC_OS" => "1"
       end
         .to output(/Would install 1 cask:.*Would install 1 formula:/m).to_stdout
@@ -620,8 +620,8 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
 
       with_env(HOMEBREW_NO_INSTALL_FROM_API: "1") do
         expect do
-          brew "install", "--yes", "--no-ask", "--appdir=#{appdir}", source_formula_name, bottle_formula_name,
-               cask_path("local-caffeine"),
+          brew "install", "--yes", "--as-dependency", "--appdir=#{appdir}", source_formula_name, bottle_formula_name,
+               "local-caffeine",
                "HOMEBREW_NO_INSTALL_FROM_API" => "1", "HOMEBREW_TEST_GENERIC_OS" => "1"
         end
           .to output(/#{Regexp.escape(source_formula_prefix)}.*#{Regexp.escape(bottle_formula_prefix)}/m).to_stdout
@@ -633,6 +633,11 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
       expect(bottle_formula_prefix/"bin/helloworld").to be_a_file
       expect(HOMEBREW_PREFIX/"bin/helloworld").not_to be_a_file
       expect(appdir/"Caffeine.app").to be_a_directory
+      expect([
+        Tab.for_keg(source_formula_prefix).installed_on_request,
+        Tab.for_keg(bottle_formula_prefix).installed_on_request,
+        Cask::CaskLoader.load("local-caffeine").tab.installed_on_request,
+      ]).to eq([false, false, false])
     end
   end
 
@@ -689,12 +694,15 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
           url "https://brew.sh/testball_bottle-0.1.tar.gz"
         end
         formula_installer = instance_double(FormulaInstaller, formula:)
-        cask = Cask::CaskLoader.load(cask_path("local-caffeine"))
+        cask = Cask::CaskLoader.from_path(cask_path("local-caffeine"))
         installer = instance_double(Cask::Installer, cask:, enqueue_downloads: nil,
                                                       enqueue_dependency_downloads: nil)
 
         allow(Tap).to receive_messages(with_formula_name: nil, with_cask_token: nil)
-        allow(cmd.args.named).to receive(:to_formulae_and_casks).with(warn: false).and_return([formula, cask])
+        allow(cmd.args.named).to receive(:to_formulae_and_casks).with(method: :bottle,
+                                                                      warn:   false).and_return([
+                                                                        formula, cask
+                                                                      ])
         allow(cask).to receive_messages(
           installed?:        true,
           full_name:         "codex",
@@ -749,6 +757,64 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
         end
         expect { cmd.run }.to output(expected_summary).to_stdout
       end
+    end
+  end
+
+  context "when installing casks", :cask, :no_api do
+    before do
+      allow(Homebrew::Install).to receive(:perform_preinstall_checks_once)
+    end
+
+    test_each([true, false].product([true, false])) do |as_dependency, prefetch|
+      it "installs casks with as_dependency: #{as_dependency} and prefetch: #{prefetch}" do
+        allow(Homebrew::Install).to receive(:enqueue_cask_installers).and_return([]) unless prefetch
+
+        described_class.new([
+          "--yes", "--cask", ("--as-dependency" if as_dependency), "with-depends-on-cask"
+        ].compact).run
+
+        expect([
+          Cask::CaskLoader.load("with-depends-on-cask").tab.installed_on_request,
+          Cask::CaskLoader.load("local-transmission-zip").installed?,
+          Cask::CaskLoader.load("local-transmission-zip").tab.installed_on_request,
+        ]).to eq([!as_dependency, true, false])
+      end
+    end
+
+    test_each([false, true].product([false, true])) do |on_request, outdated|
+      it "preserves a cask's on_request: #{on_request} when outdated: #{outdated}" do
+        cask = Cask::CaskLoader.from_path(cask_path("#{"outdated/" if outdated}local-caffeine"))
+        InstallHelper.stub_cask_installation(cask)
+        tab = cask.tab
+        tab.installed_on_request = on_request
+        tab.write
+
+        described_class.new(["--yes", "--cask", "--as-dependency", "local-caffeine"]).run
+
+        Cask::Tab.clear_cache
+        expect(Cask::CaskLoader.load("local-caffeine").tab.installed_on_request).to eq(on_request)
+      end
+    end
+  end
+
+  test_each([[false, false, true], [true, false, false], [true, true, true]]) do |as_dependency, on_request, expected|
+    it "handles an installed formula with as_dependency: #{as_dependency} and on_request: #{on_request}" do
+      installed_formula = formula("testball") do
+        T.bind(self, T.class_of(Formula))
+        url "https://brew.sh/testball-0.1.tar.gz"
+      end
+      installed_formula.prefix.mkpath
+      Keg.new(installed_formula.prefix).optlink
+      tab = Tab.create(installed_formula)
+      tab.installed_on_request = on_request
+      tab.write
+      cmd = described_class.new(["--quiet", ("--as-dependency" if as_dependency), "testball"].compact)
+      allow(cmd.args.named).to receive(:to_formulae_and_casks).and_return([installed_formula])
+
+      cmd.run
+
+      Tab.clear_cache
+      expect(Tab.for_keg(installed_formula.prefix).installed_on_request).to eq(expected)
     end
   end
 end

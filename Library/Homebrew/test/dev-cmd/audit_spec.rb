@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "dev-cmd/audit"
+require "cask/auditor"
 require "cmd/shared_examples/args_parse"
 
 RSpec.describe Homebrew::DevCmd::Audit do
@@ -17,7 +18,7 @@ RSpec.describe Homebrew::DevCmd::Audit do
   describe "#run" do
     subject(:audit) { described_class.new(["--tap=homebrew/test"]) }
 
-    let(:tap_path) { mktmpdir }
+    let(:tap_path) { Tap.fetch("homebrew/test-audit").path }
     let(:macos_only_cask_file) { tap_path/"Casks/macos-only-example.rb" }
     let(:linux_cask_file) { tap_path/"Casks/linux-example.rb" }
     let(:linux_only_cask_file) { tap_path/"Casks/linux-only-example.rb" }
@@ -25,6 +26,8 @@ RSpec.describe Homebrew::DevCmd::Audit do
       instance_double(Tap, formula_files: [], cask_files: [macos_only_cask_file, linux_cask_file,
                                                            linux_only_cask_file])
     end
+
+    after { FileUtils.rm_rf tap_path }
 
     before do
       macos_only_cask_file.dirname.mkpath
@@ -39,6 +42,7 @@ RSpec.describe Homebrew::DevCmd::Audit do
           homepage "https://example.invalid/"
           depends_on macos: :ventura
           binary "x"
+          zap :not_required
         end
       RUBY
       linux_cask_file.write <<~RUBY
@@ -51,6 +55,7 @@ RSpec.describe Homebrew::DevCmd::Audit do
           desc "Linux-supported cask"
           homepage "https://example.invalid/"
           binary "x"
+          zap :not_required
         end
       RUBY
       linux_only_cask_file.write <<~RUBY
@@ -64,6 +69,7 @@ RSpec.describe Homebrew::DevCmd::Audit do
           homepage "https://example.invalid/"
           depends_on :linux
           binary "x"
+          zap :not_required
         end
       RUBY
 
@@ -110,6 +116,7 @@ RSpec.describe Homebrew::DevCmd::Audit do
           depends_on macos: :ventura
 
           binary "x"
+          zap :not_required
         end
       RUBY
       allow(tap).to receive(:cask_files).and_return([macos_url_cask_file])
@@ -136,6 +143,7 @@ RSpec.describe Homebrew::DevCmd::Audit do
           depends_on arch: :arm64
 
           binary "x"
+          zap :not_required
         end
       RUBY
       allow(tap).to receive(:cask_files).and_return([arm_url_cask_file])
@@ -167,6 +175,7 @@ RSpec.describe Homebrew::DevCmd::Audit do
           end
 
           binary "x"
+          zap :not_required
         end
       RUBY
       allow(tap).to receive(:cask_files).and_return([os_arch_cask_file])
@@ -194,12 +203,74 @@ RSpec.describe Homebrew::DevCmd::Audit do
           end
 
           binary "x"
+          zap :not_required
         end
       RUBY
       allow(tap).to receive(:cask_files).and_return([arm_macos_cask_file])
 
       expect { described_class.new(["--tap=homebrew/test", "--os=all", "--arch=all"]).run }
         .to output(/a sha256 stanza is required/).to_stdout
+    end
+
+    it "audits an installed cask whose tap source has been removed" do
+      path = Cask::Caskroom.path/"removed/.metadata/1.0/20200101000000.000/Casks/removed.rb"
+      path.dirname.mkpath
+      path.write <<~RUBY
+        cask "removed" do
+          version "1.0"
+          sha256 :no_check
+          url "https://example.com/removed-1.0.zip"
+        end
+      RUBY
+      cask = Cask::CaskLoader.load_from_installed_caskfile(path)
+      allow(Formula).to receive(:installed).and_return([])
+      allow(Cask::Caskroom).to receive(:casks).and_return([cask])
+      allow(Cask::Auditor).to receive(:audit).and_return([])
+
+      expect { described_class.new(["--installed", "--skip-style", "--os=all", "--arch=all"]).run }.not_to raise_error
+    end
+
+    it "enumerates cask paths only once when auditing a tap across platforms" do
+      real_tap = Tap.fetch("homebrew/test-audit")
+      allow(Tap).to receive(:fetch).with("homebrew/test").and_return(real_tap)
+      allow(Cask::Auditor).to receive(:audit).and_return([])
+      expect(real_tap).to receive(:cask_files).once.and_call_original
+
+      described_class.new(["--tap=homebrew/test", "--skip-style", "--os=all", "--arch=all"]).run
+    end
+
+    it "audits an installed formula whose tap source has been removed" do
+      path = HOMEBREW_CELLAR/"removed/1.0/.brew/removed.rb"
+      path.dirname.mkpath
+      path.write <<~RUBY
+        class Removed < Formula
+          url "https://example.com/removed-1.0.tar.gz"
+        end
+      RUBY
+      allow(Formula).to receive(:installed).and_return([Formulary.from_path(path)])
+      allow(Cask::Caskroom).to receive(:casks).and_return([])
+      auditor = instance_double(Homebrew::FormulaAuditor, audit: nil, problems: [], new_formula_problems: [])
+      allow(Homebrew::FormulaAuditor).to receive(:new).and_return(auditor)
+
+      expect { described_class.new(["--installed", "--skip-style"]).run }.not_to raise_error
+    end
+
+    it "enumerates formula paths only once when auditing a tap across platforms" do
+      real_tap = Tap.fetch("homebrew/test-audit")
+      path = real_tap.path/"Formula/example.rb"
+      path.dirname.mkpath
+      path.write <<~RUBY
+        class Example < Formula
+          url "https://example.com/example-1.0.tar.gz"
+        end
+      RUBY
+      allow(Tap).to receive(:fetch).with("homebrew/test").and_return(real_tap)
+      auditor = instance_double(Homebrew::FormulaAuditor, audit: nil, problems: [], new_formula_problems: [])
+      allow(Homebrew::FormulaAuditor).to receive(:new).and_return(auditor)
+      allow(real_tap).to receive(:cask_files).and_return([])
+      expect(real_tap).to receive(:formula_files).once.and_call_original
+
+      described_class.new(["--tap=homebrew/test", "--skip-style", "--os=all", "--arch=all"]).run
     end
 
     it "enables API access when auditing external formulae after it was automatically disabled" do
@@ -225,6 +296,37 @@ RSpec.describe Homebrew::DevCmd::Audit do
         end
 
         audit.run
+      end
+    end
+
+    test_each_hash({
+      []                                           => { only_cops: nil, except_cops: ["FormulaAuditStrict"] },
+      ["--strict"]                                 => { only_cops: nil, except_cops: nil },
+      ["--new", "--except-cops=FormulaAudit/Desc"] => { only_cops: nil, except_cops: nil },
+      ["--except-cops=FormulaAudit/Desc"]          => { only_cops: nil, except_cops: ["FormulaAudit/Desc"] },
+      ["--only-cops=FormulaAudit/Desc"]            => { only_cops: ["FormulaAudit/Desc"], except_cops: nil },
+    }) do |flags, cops|
+      it "checks style with #{cops} for #{flags}" do
+        formula_file = tap_path/"Formula/example.rb"
+        formula_file.dirname.mkpath
+        formula_file.write <<~RUBY
+          class Example < Formula
+            url "https://example.com/example-1.0.tar.gz"
+          end
+        RUBY
+        command = described_class.new([*flags, "example"])
+        allow(command.args.named).to receive_messages(
+          to_formulae_and_casks_with_taps: [Formulary.from_path(formula_file)],
+          to_paths:                        [formula_file],
+        )
+        allow(Homebrew::FormulaAuditor).to receive(:new)
+          .and_return(instance_double(Homebrew::FormulaAuditor, audit: nil, problems: [], new_formula_problems: []))
+
+        expect(Homebrew::Style).to receive(:check_style_json)
+          .with([formula_file], hash_including(cops))
+          .and_return(instance_double(Homebrew::Style::Offenses, for_path: []))
+
+        command.run
       end
     end
   end

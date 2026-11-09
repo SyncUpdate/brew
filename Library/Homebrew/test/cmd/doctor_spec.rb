@@ -12,7 +12,8 @@ RSpec.describe Homebrew::Cmd::Doctor do
       .to output(/This is an integration test/).to_stderr
   end
 
-  specify "prints json when requested" do
+  specify "prints json when requested", :needs_utils_curl do
+    ENV["HOMEBREW_GITHUB_API_TOKEN"] = "test-token"
     cmd = described_class.new(["--json"])
 
     expect { cmd.run }
@@ -92,7 +93,7 @@ RSpec.describe Homebrew::Cmd::Doctor do
           with-depends-on-everything: local-caffeine unar
 
         You should `brew install` the missing dependencies:
-          brew install foo local-caffeine unar
+          brew install --as-dependency foo local-caffeine unar
       EOS
   end
 
@@ -111,7 +112,7 @@ RSpec.describe Homebrew::Cmd::Doctor do
   end
 
   specify "does not print removed caveats method errors for installed casks", :cask do
-    cask = Cask::CaskLoader.load(cask_path("local-caffeine"))
+    cask = Cask::CaskLoader.from_path(cask_path("local-caffeine"))
     installer = InstallHelper.install_with_caskfile(cask)
     installed_caskfile = installer.metadata_subdir/"#{cask.token}.json"
     expect(installed_caskfile).to exist

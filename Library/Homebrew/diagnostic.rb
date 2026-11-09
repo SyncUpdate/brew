@@ -50,6 +50,8 @@ module Homebrew
             ofail finding.to_s
           else
             opoo finding.to_s
+            # Commands that continue after a failed build print their own blank line.
+            $stderr.puts if type != :build_error_checks && finding.to_s.include?("\n")
           end
         end
       end
@@ -758,6 +760,26 @@ module Homebrew
         end
       end
 
+      # odeprecated "Remove this check when the minimum curl is 7.55 at the next major/minor release."
+      sig { returns(T.nilable(Finding)) }
+      def check_github_api_tokens
+        return if Homebrew::EnvConfig.github_api_token.blank?
+
+        require "utils/curl"
+
+        minimum_version = HOMEBREW_CURL_HEADER_FILE_MIN_VERSION
+        return if Utils::Curl.curl_version >= Version.new(minimum_version)
+
+        Finding.new(
+          <<~EOS,
+            GitHub API tokens are set, but curl #{Utils::Curl.curl_version} is older than #{minimum_version}.
+            Homebrew does not pass these tokens to curl. Requests use unauthenticated
+            rate limits and cannot access private repositories or write to GitHub.
+          EOS
+          remediation: "Upgrade curl to #{minimum_version} or newer to use GitHub API tokens.",
+        )
+      end
+
       sig { returns(T.nilable(Finding)) }
       def check_git_version
         minimum_version = ENV.fetch("HOMEBREW_MINIMUM_GIT_VERSION")
@@ -1183,7 +1205,7 @@ module Homebrew
         missing = Homebrew::Missing.deps(Formula.installed, Cask::Caskroom.casks)
         return if missing.empty?
 
-        commands = ["brew install #{missing.values.flatten.uniq.sort * " "}"]
+        commands = Homebrew::Missing.install_commands(missing)
         Finding.new(
           append_indented_list(missing.map { |name, deps| Homebrew::Missing.format_deps(name, deps) }, <<~EOS),
             Some installed formulae or casks are missing dependencies:
@@ -1201,7 +1223,10 @@ module Homebrew
       def check_deprecated_disabled
         return unless HOMEBREW_CELLAR.exist?
 
-        deprecated_or_disabled = Formula.installed.select { |f| f.deprecated? || f.disabled? }
+        deprecated_or_disabled = Formula.installed.select do |f|
+          (f.deprecated? || f.disabled?) &&
+            f.installed_kegs.none? { |keg| keg.name == f.name && keg.deleted_formula? }
+        end
         return if deprecated_or_disabled.empty?
 
         Finding.new(
@@ -1343,7 +1368,7 @@ module Homebrew
           next true if (HOMEBREW_LINKED_KEGS/rack.basename).directory?
 
           begin
-            Formulary.from_rack(rack).keg_only?
+            Keg.from_rack(rack)&.deleted_formula? || Formulary.from_rack(rack).keg_only?
           rescue Homebrew::UntrustedTapError
             true
           rescue FormulaUnavailableError, TapFormulaAmbiguityError
@@ -1441,42 +1466,34 @@ module Homebrew
 
       sig { returns(T.nilable(Finding)) }
       def check_deleted_formula
-        kegs = Keg.all
+        newest_kegs_first = Keg.all.select(&:deleted_formula?).sort_by(&:scheme_and_version).reverse
+        kegs_with_a_tap, kegs_without_a_tap = newest_kegs_first.partition { |keg| keg.tab.tap }
+        deleted_kegs = (kegs_with_a_tap + kegs_without_a_tap).uniq(&:name)
 
-        deleted_formulae = kegs.filter_map do |keg|
-          tap = keg.tab.tap
-          tap_keg_name = tap ? "#{tap}/#{keg.name}" : keg.name
+        return if deleted_kegs.blank?
 
-          loadable = [
-            Formulary::FromAPILoader,
-            Formulary::FromTapLoader,
-            Formulary::FromNameLoader,
-          ].any? do |loader_class|
-            loader = begin
-              loader_class.try_new(tap_keg_name, warn: false)
-            rescue TapFormulaAmbiguityError => e
-              e.loaders.first
-            end
-
-            loader.instance_of?(Formulary::FromTapLoader) ? loader.path.exist? : loader.present?
+        kegs_by_tap = deleted_kegs.group_by { |keg| keg.tab.tap }
+        official_taps, other_taps = kegs_by_tap.keys.sort_by(&:to_s).partition { |tap| tap&.official? }
+        groups_by_type = { deleted: [], untapped: [], no_tap: [] }
+        (official_taps + other_taps).each do |tap|
+          type, header = if tap.nil?
+            [:no_tap, "No tap recorded (possibly installed manually):\n"]
+          elsif tap.core_tap? || tap.installed? ||
+                (tap.official? && DEPRECATED_OFFICIAL_TAPS.include?(tap.repository))
+            [:deleted, "Deleted from #{tap}:\n"]
+          else
+            [:untapped, "From untapped #{tap}:\n"]
           end
-
-          keg.name unless loadable
-        end.uniq
-
-        return if deleted_formulae.blank?
+          groups_by_type.fetch(type) << append_indented_list(kegs_by_tap.fetch(tap).map(&:name).sort, header)
+        end
 
         Finding.new(
           <<~EOS,
             Some installed kegs have no formulae!
-            This means they were either deleted or installed manually.
-
+            You should find replacements for the following formulae.
           EOS
-          affects:     deleted_formulae,
-          remediation: append_indented_list(deleted_formulae, <<~EOS),
-            You should find replacements for the following formulae:
-
-          EOS
+          affects:     deleted_kegs.map(&:name).sort,
+          remediation: groups_by_type.values.flatten.join("\n"),
         )
       end
 

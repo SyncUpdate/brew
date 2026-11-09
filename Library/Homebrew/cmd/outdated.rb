@@ -24,9 +24,8 @@ module Homebrew
         switch "--cask", "--casks",
                description: "List only outdated casks."
         flag   "--json",
-               description: "Print output in JSON format. There are two versions: `v1` and `v2`. " \
-                            "`v1` is deprecated and is currently the default if no version is specified. " \
-                            "`v2` prints outdated formulae and casks."
+               description: "Print outdated formulae and casks in JSON format. " \
+                            "The default and only supported version is `v2`."
         flag   "--minimum-version=", "--min-version=",
                description: "Only list a named formula or cask with an installed version below the given " \
                             "minimum version."
@@ -103,14 +102,10 @@ module Homebrew
       def select_outdated(formulae_or_casks)
         formulae_or_casks.select do |formula_or_cask|
           if formula_or_cask.is_a?(Formula)
-            if minimum_version.present?
-              formula_outdated_kegs(formula_or_cask).present?
-            else
-              formula_or_cask.outdated?(fetch_head: args.fetch_HEAD?)
-            end
+            formula_or_cask.outdated?(fetch_head: args.fetch_HEAD?, minimum_version:)
           else
             if (minimum_version = self.minimum_version.presence)
-              next MinimumVersion.cask_installed_below?(formula_or_cask, minimum_version)
+              next formula_or_cask.outdated?(minimum_version:)
             end
 
             cask_greedy = upgrade_greedy_cask?(args.greedy?, formula_or_cask)

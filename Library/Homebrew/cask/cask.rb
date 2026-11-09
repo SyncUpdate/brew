@@ -85,7 +85,11 @@ module Cask
       tokens_and_files += Tap.reject(&:core_cask_tap?).flat_map(&:cask_files)
                              .then { |files| Homebrew::Trust.trusted_cask_files(files) }
       tokens_and_files.filter_map do |token_or_file|
-        token_or_file.is_a?(String) ? CaskLoader.load_from_name(token_or_file) : CaskLoader.load(token_or_file)
+        if token_or_file.is_a?(String)
+          CaskLoader.load_from_name(token_or_file)
+        else
+          CaskLoader.from_path(token_or_file)
+        end
       rescue CaskUnavailableError, CaskInvalidError => e
         # Don't let one broken cask break commands. But do complain.
         opoo e.message
@@ -445,10 +449,23 @@ module Cask
     #
     # @api internal
     sig {
-      params(greedy: T::Boolean, greedy_latest: T.nilable(T::Boolean), greedy_auto_updates: T.nilable(T::Boolean))
-        .returns(T::Boolean)
+      params(
+        greedy:              T::Boolean,
+        greedy_latest:       T.nilable(T::Boolean),
+        greedy_auto_updates: T.nilable(T::Boolean),
+        minimum_version:     T.nilable(String),
+      ).returns(T::Boolean)
     }
-    def outdated?(greedy: false, greedy_latest: false, greedy_auto_updates: false)
+    def outdated?(greedy: false, greedy_latest: false, greedy_auto_updates: false, minimum_version: nil)
+      # Disabled casks cannot be upgraded, even when a newer version is available.
+      return false if disabled?
+
+      if minimum_version.present?
+        require "minimum_version"
+
+        return Homebrew::MinimumVersion.cask_installed_below?(self, minimum_version)
+      end
+
       !outdated_version(greedy:, greedy_latest:,
                         greedy_auto_updates:).nil?
     end

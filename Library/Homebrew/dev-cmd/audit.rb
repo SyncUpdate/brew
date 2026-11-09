@@ -144,7 +144,7 @@ module Homebrew
               next unless File.exist?(absolute_file)
 
               if tap.formula_file?(file)
-                audit_formulae << Formulary.factory(absolute_file)
+                audit_formulae << Formulary.from_tap_path(absolute_file)
               elsif tap.cask_file?(file) && (cask = cask_for_audit(absolute_file, cask_audit_os, cask_audit_arch))
                 audit_casks << cask
               end
@@ -154,7 +154,7 @@ module Homebrew
           elsif args.tap
             Tap.fetch(args.tap).then do |tap|
               [
-                tap.formula_files.map { |path| Formulary.factory(path) },
+                tap.formula_files.map { |path| Formulary.from_path(path) },
                 tap.cask_files.filter_map { |path| cask_for_audit(path, cask_audit_os, cask_audit_arch) },
               ]
             end
@@ -185,17 +185,12 @@ module Homebrew
         style_files = args.named.to_paths unless skip_style
 
         only_cops = args.only_cops
-        except_cops = args.except_cops
-        style_options = { fix: args.fix?, debug: args.debug?, verbose: args.verbose? }
-
-        if only_cops
-          style_options[:only_cops] = only_cops
-        elsif args.new?
+        except_cops = if only_cops || args.new?
           nil
-        elsif except_cops
-          style_options[:except_cops] = except_cops
+        elsif args.except_cops
+          args.except_cops
         elsif !strict
-          style_options[:except_cops] = %w[FormulaAuditStrict]
+          %w[FormulaAuditStrict]
         end
 
         # Run tap audits first
@@ -211,7 +206,16 @@ module Homebrew
         end
 
         # Check style in a single batch run up front for performance
-        style_offenses = Style.check_style_json(style_files, **style_options) if style_files
+        if style_files
+          style_offenses = Style.check_style_json(
+            style_files,
+            fix:         args.fix?,
+            except_cops:,
+            only_cops:,
+            debug:       args.debug?,
+            verbose:     args.verbose?,
+          )
+        end
         # load licenses
         spdx_license_data = SPDX.license_data
         spdx_exception_data = SPDX.exception_data
@@ -220,24 +224,26 @@ module Homebrew
           path = f.path
 
           only = only_cops ? ["style"] : args.only
-          options = {
-            new_formula:         args.new?,
-            strict:,
-            online:,
-            git:                 args.git?,
-            only:,
-            except:              args.except,
-            spdx_license_data:,
-            spdx_exception_data:,
-            style_offenses:      style_offenses&.for_path(f.path),
-            tap_audit:,
-          }.compact
 
           errors = os_arch_combinations.flat_map do |os, arch|
             SimulateSystem.with(os:, arch:) do
               odebug "Auditing Formula #{f} on os #{os} and arch #{arch}"
 
-              audit_proc = proc { FormulaAuditor.new(Formulary.factory(path), **options).tap(&:audit) }
+              audit_proc = proc do
+                FormulaAuditor.new(
+                  Formulary.from_path(path),
+                  new_formula:         args.new?,
+                  strict:,
+                  online:,
+                  git:                 args.git?,
+                  only:,
+                  except:              args.except,
+                  style_offenses:      style_offenses&.for_path(path),
+                  tap_audit:,
+                  spdx_license_data:,
+                  spdx_exception_data:,
+                ).tap(&:audit)
+              end
 
               # Audit requires full Ruby source so disable API. We shouldn't do this for taps however so that we
               # don't unnecessarily require a full Homebrew/core clone.
@@ -271,7 +277,7 @@ module Homebrew
             # between OSes, so read it on the OS being audited.
             os = :linux if os != :linux && !cask.supports_macos?
             os = :macos if os == :linux && !cask.supports_linux?
-            cask_archs = SimulateSystem.with(os:, arch:) { Cask::CaskLoader.load(path) }
+            cask_archs = SimulateSystem.with(os:, arch:) { reload_cask(cask) }
                                        .depends_on.arch&.map { |cask_arch| cask_arch[:type] }
             arch = OnSystem::ARCH_OPTIONS.find { cask_archs.include?(it) } if cask_archs&.exclude?(arch)
 
@@ -279,7 +285,7 @@ module Homebrew
               odebug "Auditing Cask #{cask} on os #{os} and arch #{arch}"
 
               Cask::Auditor.audit(
-                Cask::CaskLoader.load(path),
+                reload_cask(cask),
                 # For switches, we add `|| nil` so that `nil` will be passed
                 # instead of `false` if they aren't set.
                 # This way, we can distinguish between "not set" and "set to false".
@@ -361,6 +367,18 @@ module Homebrew
 
       private
 
+      sig { params(cask: Cask::Cask).returns(Cask::Cask) }
+      def reload_cask(cask)
+        path = cask.sourcefile_path
+        raise Cask::CaskUnavailableError.new(cask.token, "No source file is available for audit.") if path.nil?
+
+        if cask.loaded_from_metadata?
+          Cask::CaskLoader.load_from_installed_caskfile(path)
+        else
+          Cask::CaskLoader.from_path(path)
+        end
+      end
+
       sig {
         params(
           path:            T.any(String, Pathname),
@@ -373,7 +391,7 @@ module Homebrew
           return if Utils::AST::CaskAST.new(Pathname(path).read).depends_on_macos?
 
           cask = SimulateSystem.with(os: :macos, arch: cask_audit_arch) do
-            loaded_cask = Cask::CaskLoader.load(path)
+            loaded_cask = Cask::CaskLoader.from_path(path)
             loaded_cask if loaded_cask.supports_linux?
           end
           return unless cask
@@ -382,7 +400,7 @@ module Homebrew
           return cask
         end
 
-        SimulateSystem.with(os: cask_audit_os, arch: cask_audit_arch) { Cask::CaskLoader.load(path) }
+        SimulateSystem.with(os: cask_audit_os, arch: cask_audit_arch) { Cask::CaskLoader.from_path(path) }
       end
 
       sig {

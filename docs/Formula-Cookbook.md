@@ -505,13 +505,13 @@ system "cmake", "-S", ".", "-B", "build", *std_cmake_args(install_prefix: libexe
 
 Always pass CMake an explicit source directory (`-S`) and build directory (`-B`) rather than relying on the current working directory.
 
-Homebrew provides helpers for Cabal, Cargo, CMake, Autoconf, Go, Meson, npm, pip and Zig builds.
+Homebrew provides helpers for Cabal, Cargo, CMake, Autoconf, Go, Meson, npm, pip, Shards, Swift and Zig builds.
 Pass the helper directly to the build command rather than copying its expanded argument list, because defaults change with Homebrew's build and security policy.
 Use the [`Formula` class API](/rubydoc/Formula.html) for each helper's current signature, supported overrides and generated arguments.
 
 Use `std_npm_args` for npm installations as described in [Language-Specific Formulae](Language-Specific-Formulae.md#standard-npm-installation).
 Use `std_pip_args` for direct pip installations as described in [Language-Specific Formulae](Language-Specific-Formulae.md#installing-python-bindings).
-`std_go_args` also provides supported ways to set `-ldflags`, `-gcflags` and `-tags`; see the [`babelfish`](https://github.com/Homebrew/homebrew-core/blob/HEAD/Formula/b/babelfish.rb) and [`wazero`](https://github.com/Homebrew/homebrew-core/blob/HEAD/Formula/w/wazero.rb) formulae for current examples.
+Use `std_go_args` for Go builds as described in [Language-Specific Formulae](Language-Specific-Formulae.md#go).
 
 ### `bin.install "foo"`
 
@@ -1287,6 +1287,12 @@ end
 ```
 
 To find the file we append `.plist` to the `launchd` service name and `.service` to the `systemd` service name internally.
+
+The service file determines which commands run and with which privileges.
+`sudo brew services start` installs it as a system service.
+Its commands will run as root unless the service specifies another user.
+Running `brew` with `sudo` also trusts the Homebrew prefix owner to run arbitrary code as root: they can modify `brew` itself and the code it loads.
+See [Why does Homebrew say sudo is bad?](FAQ.md#why-does-homebrew-say-sudo-is-bad) for details.
 
 #### Formula-defined service file
 

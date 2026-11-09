@@ -259,7 +259,7 @@ class Formula
 
   # Information about PyPI mappings for this {Formula} is stored
   # as {PypiPackages} object.
-  sig { returns(PypiPackages) }
+  sig { returns(T.nilable(PypiPackages)) }
   attr_reader :pypi_packages_info
 
   # Whether this formula should be considered outdated
@@ -309,7 +309,7 @@ class Formula
       Tap.from_path(path)
     end
 
-    @pypi_packages_info = T.let(self.class.pypi_packages_info || PypiPackages.new, PypiPackages)
+    @pypi_packages_info = T.let(self.class.pypi_packages_info, T.nilable(PypiPackages))
 
     @full_name = T.let(full_name_with_optional_tap(name), String)
     @full_alias_name = T.let((full_name_with_optional_tap(@alias_name) if @alias_name), T.nilable(String))
@@ -1120,14 +1120,16 @@ class Formula
   sig { returns(Pathname) }
   def rack = HOMEBREW_CELLAR/name
 
-  # All currently installed prefix directories.
-  sig { returns(T::Array[Pathname]) }
-  def installed_prefixes = Utils::Path.formula_installed_prefixes(possible_names)
+  # All currently installed prefix directories for formula names.
+  sig { params(formula_names: T::Array[String]).returns(T::Array[Pathname]) }
+  def installed_prefixes(formula_names = possible_names)
+    Utils::Path.formula_installed_prefixes(formula_names)
+  end
 
-  # All currently installed kegs.
-  sig { returns(T::Array[Keg]) }
-  def installed_kegs
-    installed_prefixes.map { |dir| Keg.new(dir) }
+  # All currently installed kegs for formula names.
+  sig { params(formula_names: T::Array[String]).returns(T::Array[Keg]) }
+  def installed_kegs(formula_names = possible_names)
+    installed_prefixes(formula_names).map { |dir| Keg.new(dir) }
   end
 
   # The directory where the formula's binaries should be installed.
@@ -2144,8 +2146,17 @@ class Formula
   # Check whether the installed formula is outdated.
   #
   # @api internal
-  sig { params(fetch_head: T::Boolean).returns(T::Boolean) }
-  def outdated?(fetch_head: false)
+  sig { params(fetch_head: T::Boolean, minimum_version: T.nilable(String)).returns(T::Boolean) }
+  def outdated?(fetch_head: false, minimum_version: nil)
+    # Disabled formulae cannot be upgraded, even when a newer version is available.
+    return false if disabled?
+
+    if minimum_version.present?
+      require "minimum_version"
+
+      return Homebrew::MinimumVersion.formula_outdated_kegs(self, minimum_version, fetch_head:).present?
+    end
+
     !outdated_kegs(fetch_head:).empty?
   rescue Migrator::MigrationNeededError
     true
@@ -2763,7 +2774,11 @@ class Formula
     trusted_tap_files = Homebrew::Trust.trusted_formula_files(tap_files)
 
     (core_names + trusted_tap_files).filter_map do |name_or_file|
-      Formulary.factory(name_or_file)
+      if name_or_file.is_a?(Pathname)
+        Formulary.from_path(name_or_file)
+      else
+        Formulary.factory(name_or_file)
+      end
     rescue FormulaUnavailableError, FormulaUnreadableError, FormulaSpecificationError => e
       # Don't let one broken formula break commands. But do complain.
       onoe "Failed to import: #{name_or_file}"
@@ -3806,7 +3821,7 @@ class Formula
   sig { params(quiet: T::Boolean).returns(T::Array[Keg]) }
   def eligible_kegs_for_cleanup(quiet: false)
     eligible_for_cleanup = []
-    if latest_version_installed?
+    if installed_prefixes.length > 1
       eligible_kegs = if head? && (head_prefix = latest_head_prefix)
         head, stable = installed_kegs.partition { |keg| keg.version.head? }
         stable = stable.sort_by(&:scheme_and_version)
@@ -3814,7 +3829,7 @@ class Formula
         # Remove newest head and stable kegs.
         stable.pop
         head - [Keg.new(head_prefix)] + stable
-      else
+      elsif latest_version_installed?
         installed_kegs.select do |keg|
           tab = keg.tab
           if version_scheme > tab.version_scheme
@@ -3825,6 +3840,15 @@ class Formula
             false
           end
         end
+      else
+        kegs = installed_kegs.select { |keg| (keg/AbstractTab::FILENAME).file? }
+                             .reject { |keg| keg.version.head? }
+                             .sort_by(&:scheme_and_version)
+        newest_keg = kegs.pop
+        if !kegs.empty? && !quiet && !pinned?
+          opoo "Skipping #{newest_keg}: most recent version #{pkg_version} not installed"
+        end
+        kegs
       end
 
       unless eligible_kegs.empty?
@@ -3840,11 +3864,6 @@ class Formula
           end
         end
       end
-    elsif !installed_prefixes.empty? && !pinned?
-      # If the rack only has one version installed, don't complain
-      # that we can't tell which one to keep. Don't complain at all if the
-      # only installed version is a pinned formula.
-      opoo "Skipping #{full_name}: most recent version #{pkg_version} not installed" unless quiet
     end
     eligible_for_cleanup
   end
@@ -4085,6 +4104,10 @@ class Formula
     # Whether this formula was loaded using the internal formulae.brew.sh API.
     sig { returns(T::Boolean) }
     def loaded_from_internal_api? = !!@loaded_from_internal_api
+
+    # Whether this formula was loaded from installed metadata.
+    sig { returns(T::Boolean) }
+    def loaded_from_metadata? = !!formula_namespace&.const_defined?(:LOADED_FROM_METADATA, false)
 
     # Whether this formula was loaded using the formulae.brew.sh API.
     sig { returns(T.nilable(T::Hash[String, T.untyped])) }
@@ -4654,10 +4677,6 @@ class Formula
       exclude_packages: nil,
       dependencies: nil
     )
-      if [package_name, extra_packages, exclude_packages, dependencies].all?(&:nil?)
-        raise ArgumentError, "must provide at least one argument"
-      end
-
       # Sadly `v1, v2, v3 = [v1, v2, v3].map { |x| Array(x) }` does not work
       # for typechecker
       extra_packages = Array(extra_packages)
@@ -5108,8 +5127,7 @@ class Formula
         raise ArgumentError, "no_autobump! can only be used in official Homebrew taps." if tap && !tap.official?
       end
 
-      if because.is_a?(Symbol) && !NO_AUTOBUMP_REASONS_LIST.key?(because) &&
-         !formula_namespace&.const_defined?(:LOADED_FROM_METADATA, false)
+      if because.is_a?(Symbol) && !NO_AUTOBUMP_REASONS_LIST.key?(because) && !loaded_from_metadata?
         raise ArgumentError, "'because' argument should use valid symbol or a string!"
       end
 

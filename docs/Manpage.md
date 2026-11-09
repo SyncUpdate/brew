@@ -11,6 +11,13 @@ Homebrew is the easiest and most flexible way to install the UNIX tools Apple
 didn't include with macOS. It can also install software not packaged for your
 Linux distribution without requiring `sudo`.
 
+Running `brew` with `sudo` trusts the Homebrew prefix owner and anyone else who
+can modify Homebrew's code to run arbitrary code as root. They can modify `brew`
+itself and the code it loads before command-specific checks or switching users.
+This trust also applies to commands that only display information or
+subsequently run as another account. Only use `sudo` if you trust those accounts
+and any software you ask to run with elevated privileges.
+
 ## TERMINOLOGY
 
 **formula**
@@ -141,6 +148,10 @@ account. Changing users requires permission to use `sudo` or an already-root
 process; running as the owner does not. When `sudo` is disabled or unavailable,
 root can switch users directly.
 
+When invoked with `sudo`, this command trusts the Homebrew prefix owner to run
+arbitrary code as root: they can modify `brew` itself and the code it loads
+before switching users. Only use `sudo` if you trust the prefix owner.
+
 Use `brew as-brew-user install --yes` *`formula`* for unattended installation.
 On macOS, use `as-console-user` to select the active desktop user instead.
 
@@ -155,6 +166,10 @@ desktop user is logged in.
 Uses the user's home and a clean environment, then loads `brew.env` for that
 account. Uses `sudo` when enabled and available; root can also switch users when
 `sudo` is disabled or unavailable.
+
+When invoked with `sudo`, this command trusts the Homebrew prefix owner to run
+arbitrary code as root: they can modify `brew` itself and the code it loads
+before switching users. Only use `sudo` if you trust the prefix owner.
 
 Use `as-brew-user` to select the installation's owner on macOS or Linux,
 including when no user is logged in.
@@ -1411,6 +1426,11 @@ upgrade *`formula`* if it is already installed but outdated.
 
 : Show what would be installed, but do not actually install anything.
 
+`--as-dependency`
+
+: Install *`formula`* or *`cask`* as a dependency without marking it as
+  installed on request. Previously requested packages retain their status.
+
 `-y`, `--no-ask`
 
 : Do not ask for confirmation before downloading and installing. Ask mode is the
@@ -1486,10 +1506,6 @@ upgrade *`formula`* if it is already installed but outdated.
 `--skip-link`
 
 : Install but skip linking the keg into the prefix.
-
-`--as-dependency`
-
-: Install but mark as installed as a dependency and not installed on request.
 
 `--bottle-arch`
 
@@ -1725,7 +1741,8 @@ packages.
 Check the given *`formula`* kegs and *`cask`* installations for missing
 dependencies. If no *`formula`* or *`cask`* are provided, check all kegs and
 casks. Will exit with a non-zero status if any kegs or casks are found to be
-missing dependencies.
+missing dependencies. Print installation instructions to standard error unless
+`--hide` is used.
 
 `--hide`
 
@@ -1776,9 +1793,8 @@ otherwise.
 
 `--json`
 
-: Print output in JSON format. There are two versions: `v1` and `v2`. `v1` is
-  deprecated and is currently the default if no version is specified. `v2`
-  prints outdated formulae and casks.
+: Print outdated formulae and casks in JSON format. The default and only
+  supported version is `v2`.
 
 `--minimum-version`
 
@@ -2060,6 +2076,11 @@ If `sudo` is passed, operate on `/Library/LaunchDaemons` or
 `/usr/lib/systemd/system` (started at boot). Otherwise, operate on
 `~/Library/LaunchAgents` or `~/.config/systemd/user` (started at login).
 
+Services started with `sudo` will run as root unless configured otherwise.
+Running `brew` with `sudo` also trusts the Homebrew prefix owner to run
+arbitrary code as root: they can modify `brew` itself and the code it loads.
+Only use `sudo` if you trust the prefix owner and the service software.
+
 Environment variables can be added or overridden for a service by creating
 `$HOMEBREW_USER_CONFIG_HOME/services/<formula>.env` (defaults to
 `~/.homebrew/services/<formula>.env`). The file uses `KEY=value` format, one per
@@ -2308,6 +2329,11 @@ Uninstall a *`formula`* or *`cask`*.
 
 : Delete all installed versions of *`formula`*. Uninstall even if *`cask`* is
   not installed, overwrite existing files and ignore errors when removing files.
+
+`-n`, `--dry-run`
+
+: Show what would be uninstalled and autoremoved, but do not actually remove
+  anything.
 
 `--zap`
 
@@ -2760,6 +2786,10 @@ Display Homebrew's install path. *Default:*
 
 If *`formula`* is provided, display the location where *`formula`* is or would
 be installed.
+
+When invoked with `sudo`, this command trusts the Homebrew prefix owner to run
+arbitrary code as root: they can modify `brew` itself and the code it loads.
+Only use `sudo` if you trust the prefix owner.
 
 `--unbrewed`
 
@@ -3326,21 +3356,28 @@ Summarise contributions to Homebrew repositories.
 `--maintainer-report-csv`
 
 : Print a CSV of Maintainer and Lead Maintainer activity criteria using fetched
-  Git histories and GitHub's existing approved-review search for the Homebrew
+  Git histories, verified GitHub approvals and issue closures for the Homebrew
   governance quarter, for example `--maintainer-report-csv=2026-2`.
   Alternatively, omit the value and set `--from` and `--to` for any reporting
   period. Also write it in the current directory as
   `brew-contributions-FROM-to-TO.csv`, or
-  `brew-contributions-FROM-to-TO-USER.csv` when filtered with `--user`. Only
-  Maintainers listed at the end of that period are included. Activity checks use
-  the latest completed governance quarter; role recommendations use up to four
-  full quarters of reports. Review searches return at most 100 results and other
-  counts are capped at 500 per repository and contribution type.
-  Repository-scoped follow-up searches ensure role activity checks remain
-  accurate when a count is capped. Completed-period GitHub searches are cached
-  in Homebrew's cache and removed by normal cache pruning. `YEAR-1` is December
-  of the previous year through February, `YEAR-2` is March through May, `YEAR-3`
-  is June through August and `YEAR-4` is September through November.
+  `brew-contributions-FROM-to-TO-USER.csv` when filtered with `--user`, beside a
+  matching `.md` summary of activity in the latest completed and current
+  quarters with each Maintainer's numerical gap. Only Maintainers listed at the
+  end of that period are included. Activity checks use the latest completed
+  governance quarter; role recommendations use up to four full quarters of
+  reports. Counts are capped at 500 per repository and contribution type. Merge
+  and approval checks stop once the activity thresholds are met. Historical
+  reports using older criteria must be regenerated. Completed-period GitHub
+  searches are cached in Homebrew's cache and removed by normal cache pruning.
+  `YEAR-1` is December of the previous year through February, `YEAR-2` is March
+  through May, `YEAR-3` is June through August and `YEAR-4` is September through
+  November.
+
+`--maintainer-exempt`
+
+: GitHub usernames exempt from Maintainer inactivity removal, such as Security
+  Team members. Lead Maintainer activity requirements still apply.
 
 ### `create` \[*`options`*\] *`URL`*
 
@@ -5222,14 +5259,17 @@ Homebrew API: <https://docs.brew.sh/rubydoc/>
 
 Homebrew's Project Leader is Mike McQuaid.
 
-Homebrew's Lead Maintainers are Bevan Kay, Carlo Cabrera, Issy Long, Justin
-Krehel, Michael Cho, Mike McQuaid, Nanda H Krishna, Patrick Linnane, Rui Chen,
-Ruoyu Zhong, Sam Ford and Sean Molenaar.
+Homebrew's Lead Maintainers are Bevan Kay, Carlo Cabrera, Justin Krehel, Michael
+Cho, Mike McQuaid, Nanda H Krishna, Patrick Linnane, Rui Chen, Ruoyu Zhong, Sam
+Ford and Sean Molenaar.
+
+Homebrew's Security Team members are Andrew Nesbitt, Mike McQuaid, Patrick
+Linnane and William Woodruff.
 
 Homebrew's other Maintainers are Andrew Nesbitt, Anton Melnikov, Bo Anderson,
 Branch Vincent, Caleb Xu, Daeho Ro, Douglas Eichelberger, Dustin Rodrigues, FX
-Coudert, Harald Nordgren, Klaus Hipp, Markus Reiter, Michka Popoff, Štefan
-Baebler, Thierry Moisan and William Woodruff.
+Coudert, Harald Nordgren, Issy Long, Klaus Hipp, Markus Reiter, Michka Popoff,
+Štefan Baebler, Thierry Moisan and William Woodruff.
 
 ## BUGS
 

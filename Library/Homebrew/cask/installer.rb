@@ -34,7 +34,7 @@ module Cask
         cask: ::Cask::Cask, command: T.class_of(SystemCommand), force: T::Boolean, adopt: T::Boolean,
         skip_cask_deps: T::Boolean, binaries: T::Boolean, verbose: T::Boolean, zap: T::Boolean,
         require_sha: T::Boolean, upgrade: T::Boolean, reinstall: T::Boolean,
-        installed_on_request: T::Boolean, verify_download_integrity: T::Boolean,
+        installed_on_request: T::Boolean, top_level: T::Boolean, verify_download_integrity: T::Boolean,
         quiet: T::Boolean, download_queue: Homebrew::DownloadQueue, defer_fetch: T::Boolean,
         default_uninstall_artifacts: T.nilable(ArtifactSet)
       ).void
@@ -42,7 +42,7 @@ module Cask
     def initialize(cask, command: SystemCommand, force: false, adopt: false,
                    skip_cask_deps: false, binaries: true, verbose: false,
                    zap: false, require_sha: false, upgrade: false, reinstall: false,
-                   installed_on_request: true,
+                   installed_on_request: true, top_level: true,
                    verify_download_integrity: true, quiet: false,
                    download_queue: Homebrew::DownloadQueue.default, defer_fetch: false,
                    default_uninstall_artifacts: nil)
@@ -58,6 +58,7 @@ module Cask
       @reinstall = reinstall
       @upgrade = upgrade
       @installed_on_request = installed_on_request
+      @top_level = top_level
       @verify_download_integrity = verify_download_integrity
       @quiet = quiet
       @download_queue = download_queue
@@ -374,6 +375,8 @@ on_request: true)
     rescue => e
       begin
         already_installed_artifacts&.each do |artifact|
+          next if artifact.is_a?(Artifact::Moved) && artifact.adopted?
+
           if artifact.respond_to?(:uninstall_phase)
             odebug "Reverting installation of artifact of class #{artifact.class}"
             artifact.uninstall_phase(command: @command, verbose: verbose?, force: force?)
@@ -479,7 +482,7 @@ on_request: true)
 
     sig { void }
     def enqueue_dependency_downloads
-      return if download_failed? || !installed_on_request?
+      return if download_failed? || !@top_level
 
       cask_installers, formula_installers = dependency_installers(defer_fetch: true)
       if cask_installers.any?
@@ -494,7 +497,7 @@ on_request: true)
 
     sig { void }
     def satisfy_cask_and_formula_dependencies
-      return unless installed_on_request?
+      return unless @top_level
 
       formulae_and_casks = cask_and_formula_dependencies
 
@@ -557,6 +560,7 @@ on_request: true)
             binaries:             binaries?,
             force:                false,
             installed_on_request: false,
+            top_level:            false,
             quiet:                quiet?,
             require_sha:          require_sha?,
             verbose:              verbose?,
@@ -627,8 +631,13 @@ on_request: true)
       @cask.download_sha_path.atomic_write(@cask.new_download_sha)
     end
 
-    sig { params(successor: T.nilable(Cask)).void }
-    def uninstall(successor: nil)
+    sig { params(successor: T.nilable(Cask), dry_run: T::Boolean).void }
+    def uninstall(successor: nil, dry_run: false)
+      if dry_run
+        puts "Would uninstall Cask #{@cask}"
+        return
+      end
+
       completed = false
       load_installed_caskfile!
       oh1 "Uninstalling Cask #{Formatter.identifier(@cask)}"
@@ -648,7 +657,7 @@ on_request: true)
       purge_caskroom_path if force?
       completed = true
     ensure
-      @cask.cleanup_temp(retain: !completed) if !reinstall? && !upgrade?
+      @cask.cleanup_temp(retain: !completed) if !dry_run && !reinstall? && !upgrade?
     end
 
     sig { void }
@@ -774,8 +783,13 @@ on_request: true)
                                                                            force: force?, successor:)
     end
 
-    sig { void }
-    def zap
+    sig { params(dry_run: T::Boolean).void }
+    def zap(dry_run: false)
+      if dry_run
+        puts "Would uninstall Cask #{@cask}"
+        return
+      end
+
       completed = false
       load_installed_caskfile!
       oh1 "Zapping Cask #{Formatter.identifier(@cask)}"
@@ -786,7 +800,7 @@ on_request: true)
       purge_caskroom_path
       completed = true
     ensure
-      @cask.cleanup_temp(retain: !completed) if !reinstall? && !upgrade?
+      @cask.cleanup_temp(retain: !completed) if !dry_run && !reinstall? && !upgrade?
     end
 
     sig { returns(T.nilable(Pathname)) }

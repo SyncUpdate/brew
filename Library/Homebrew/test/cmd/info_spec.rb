@@ -378,6 +378,49 @@ RSpec.describe Homebrew::Cmd::Info do
       .and not_to_output.to_stderr
   end
 
+  it "marks an installed formula removed from its tap with `(removed from tap)` in the title" do
+    allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
+    allow_any_instance_of(Keg).to receive(:deleted_formula?).and_return(true)
+
+    info = described_class.new([])
+    formula = installed_info_formula
+    (HOMEBREW_CELLAR/"testball/0.1"/AbstractTab::FILENAME).write({ source: { tap: "homebrew/core" } }.to_json)
+    allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
+
+    expect { info.info_formula(formula) }
+      .to output(/==> .*testball.*\(removed from tap\):/).to_stdout
+      .and not_to_output.to_stderr
+  end
+
+  it "does not mark a formula as removed from tap when its keg came from another tap" do
+    allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
+    allow_any_instance_of(Keg).to receive(:deleted_formula?).and_return(true)
+
+    info = described_class.new([])
+    formula = installed_info_formula
+    (HOMEBREW_CELLAR/"testball/0.1"/AbstractTab::FILENAME).write({ source: { tap: "alice/tools" } }.to_json)
+    allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
+
+    expect { info.info_formula(formula) }
+      .not_to output(/removed from tap/).to_stdout
+  end
+
+  it "does not mark an installed formula without a tap as removed from tap" do
+    allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
+    allow_any_instance_of(Keg).to receive(:deleted_formula?).and_return(true)
+
+    info = described_class.new([])
+    formula = installed_info_formula
+    allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new],
+                                       tap: nil, versioned_formulae: [])
+
+    expect { info.info_formula(formula) }
+      .not_to output(/removed from tap/).to_stdout
+  end
+
   it "shows separate blocks for an unqualified and a qualified input that resolve to the same shadowed formula" do
     info = described_class.new([])
     core = installed_info_formula
@@ -672,6 +715,48 @@ RSpec.describe Homebrew::Cmd::Info do
     expect { info.info_formula(formula) }
       .to output(/^Dependents \(2\): another-dependent, some-dependent$/).to_stdout
       .and not_to_output(/^Dependents: /).to_stdout
+      .and not_to_output.to_stderr
+  end
+
+  it "lists installed dependents whose receipts use another name of the formula" do
+    allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
+
+    info = described_class.new(["--verbose"])
+    formula = formula("testball@2") do
+      T.bind(self, T.class_of(Formula))
+      url "https://brew.sh/testball-2.0.tar.gz"
+      homepage "https://brew.sh/testball"
+      desc "Some test"
+    end
+
+    keg_path = HOMEBREW_CELLAR/"testball/1.0"
+    keg_path.mkpath
+    tab = Tab.empty
+    tab.tabfile = keg_path/AbstractTab::FILENAME
+    tab.write
+
+    {
+      "alias-dependent"     => "testball",
+      "oldname-dependent"   => "old-testball",
+      "qualified-dependent" => "homebrew/core/testball",
+      "other-dependent"     => "other-formula",
+    }.each do |dependent_name, dependency_name|
+      dependent_keg_path = HOMEBREW_CELLAR/"#{dependent_name}/1.0"
+      dependent_keg_path.mkpath
+      dependent_tab = Tab.empty
+      dependent_tab.tabfile = dependent_keg_path/AbstractTab::FILENAME
+      dependent_tab.runtime_dependencies = [
+        { "full_name" => dependency_name, "version" => "1.0" },
+      ]
+      dependent_tab.write
+    end
+
+    allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
+    allow(formula).to receive_messages(aliases: ["testball"], core_formula?: false,
+                                       missing_library_linkage: [[], Set.new], oldnames: ["old-testball"])
+
+    expect { info.info_formula(formula) }
+      .to output(/^Dependents \(3\): alias-dependent, oldname-dependent, qualified-dependent$/).to_stdout
       .and not_to_output.to_stderr
   end
 
@@ -1944,11 +2029,11 @@ RSpec.describe Homebrew::Cmd::Info do
       end
 
       it "returns the local path when the formula is not installed" do
-        expect(described_class.new([]).github_info(Formulary.factory(formula_path)))
+        expect(described_class.new([]).github_info(Formulary.from_path(formula_path)))
           .to eq(formula_path.to_s)
       end
 
-      it "returns the same installed path with and without the API" do
+      it "identifies the same installed file with and without the API" do
         keg_path = HOMEBREW_CELLAR/"testball/0.1"
         (keg_path/".brew").mkpath
         (keg_path/".brew/testball.rb").write(formula_path.read)
@@ -1960,8 +2045,9 @@ RSpec.describe Homebrew::Cmd::Info do
         expect([nil, "1"].map do |no_api|
           ENV["HOMEBREW_NO_INSTALL_FROM_API"] = no_api
           tap.clear_cache
-          described_class.new([]).github_info(Formulary.factory("testball"))
-        end).to eq(["#{HOMEBREW_PREFIX}/opt/testball/.brew/testball.rb"] * 2)
+          formula = Formulary.from_keg(Keg.new(keg_path))
+          Pathname(described_class.new([]).github_info(formula)).realpath
+        end).to eq([keg_path/".brew/testball.rb"] * 2)
       end
 
       it "queries the index once for multiple formulae in a tap" do
@@ -1973,7 +2059,7 @@ RSpec.describe Homebrew::Cmd::Info do
                                              .once.and_call_original
 
         %w[testball testball2].each do |name|
-          info.github_info(Formulary.factory(formula_path.dirname/"#{name}.rb"))
+          info.github_info(Formulary.from_path(formula_path.dirname/"#{name}.rb"))
         end
       end
 

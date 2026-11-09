@@ -299,9 +299,9 @@ module RuboCop
           return if formula_tap != "homebrew-core"
 
           find_method_with_args(body_node, :depends_on, "quictls") do |method|
-            problem "Formulae in homebrew/core should use `depends_on \"openssl@3\"` " \
+            problem "Formulae in homebrew/core should use `depends_on \"openssl@4\"` " \
                     "instead of `#{method.source}`." do |corrector|
-              corrector.replace(method.source_range, "depends_on \"openssl@3\"")
+              corrector.replace(method.source_range, "depends_on \"openssl@4\"")
             end
           end
         end
@@ -353,6 +353,48 @@ module RuboCop
               problem "Formulae in homebrew/core should not depend on `#{dependency}`."
               break
             end
+          end
+        end
+      end
+
+      # This cop makes sure that formulae build with `rust` instead of `rustup`.
+      class RustCheck < FormulaCop
+        extend AutoCorrector
+
+        sig { override.params(formula_nodes: FormulaNodes).void }
+        def audit_formula(formula_nodes)
+          return if (body_node = formula_nodes.body_node).nil?
+
+          # Enforce use of `rust` for rust dependency in core
+          return if formula_tap != "homebrew-core"
+
+          find_method_with_args(body_node, :depends_on, "rustup") do |method|
+            problem "Formulae in homebrew/core should use `depends_on \"rust\"` " \
+                    "instead of `#{method.source}`." do |corrector|
+              corrector.replace(method.source_range, "depends_on \"rust\"")
+            end
+          end
+
+          [:build, [:build, :test], [:test, :build]].each do |type|
+            find_method_with_args(body_node, :depends_on, "rustup" => type) do |method|
+              correction = method.source.sub("rustup", "rust")
+              problem "Formulae in homebrew/core should use `#{correction}` " \
+                      "instead of `#{method.source}`." do |corrector|
+                corrector.replace(method.source_range, correction)
+              end
+            end
+          end
+
+          install_node = find_method_def(body_node, :install)
+          return if install_node.blank?
+
+          find_every_method_call_by_name(install_node, :system).each do |method|
+            param = method.first_argument
+            param = param.last_argument if param.is_a?(RuboCop::AST::SendNode)
+            next if param.blank?
+            next if regex_match_group(param, %r{^(.*/)?rustup$}).blank?
+
+            problem "Formulae in homebrew/core should not use `rustup` at build-time."
           end
         end
       end
@@ -1166,58 +1208,6 @@ module RuboCop
               problem "Formulae in homebrew/core (except e.g. cryptography, libraries) " \
                       "should not run build-time checks"
             end
-          end
-        end
-      end
-
-      # This cop ensures that new formulae depending on removed Requirements are not used.
-      class Requirements < FormulaCop
-        sig { override.params(_formula_nodes: FormulaNodes).void }
-        def audit_formula(_formula_nodes)
-          problem "Formulae should depend on a versioned `openjdk` instead of :java" if depends_on? :java
-          problem "Formulae should depend on specific X libraries instead of :x11" if depends_on? :x11
-          problem "Formulae should not depend on :osxfuse" if depends_on? :osxfuse
-          problem "Formulae should not depend on :tuntap" if depends_on? :tuntap
-        end
-      end
-
-      # This cop makes sure that formulae build with `rust` instead of `rustup`.
-      class RustCheck < FormulaCop
-        extend AutoCorrector
-
-        sig { override.params(formula_nodes: FormulaNodes).void }
-        def audit_formula(formula_nodes)
-          return if (body_node = formula_nodes.body_node).nil?
-
-          # Enforce use of `rust` for rust dependency in core
-          return if formula_tap != "homebrew-core"
-
-          find_method_with_args(body_node, :depends_on, "rustup") do |method|
-            problem "Formulae in homebrew/core should use `depends_on \"rust\"` " \
-                    "instead of `#{method.source}`." do |corrector|
-              corrector.replace(method.source_range, "depends_on \"rust\"")
-            end
-          end
-
-          [:build, [:build, :test], [:test, :build]].each do |type|
-            find_method_with_args(body_node, :depends_on, "rustup" => type) do |method|
-              problem "Formulae in homebrew/core should use `depends_on \"rust\" => #{type}` " \
-                      "instead of `#{method.source}`." do |corrector|
-                corrector.replace(method.source_range, "depends_on \"rust\" => #{type}")
-              end
-            end
-          end
-
-          install_node = find_method_def(body_node, :install)
-          return if install_node.blank?
-
-          find_every_method_call_by_name(install_node, :system).each do |method|
-            param = parameters(method).first
-            next if param.blank?
-            # FIXME: Handle Pathname parameters (e.g. `system bin/"rustup"`).
-            next if regex_match_group(param, /rustup$/).blank?
-
-            problem "Formula in homebrew/core should not use `rustup` at build-time."
           end
         end
       end

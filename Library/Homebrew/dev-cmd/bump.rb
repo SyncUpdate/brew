@@ -144,8 +144,8 @@ module Homebrew
             tap = Tap.fetch(args.tap)
             raise UsageError, "`--tap` requires `--auto` for official taps." if tap.official?
 
-            formulae = args.cask? ? [] : tap.formula_files.map { |path| Formulary.factory(path) }
-            casks = args.formula? ? [] : tap.cask_files.map { |path| Cask::CaskLoader.load(path) }
+            formulae = args.cask? ? [] : tap.formula_files.map { |path| Formulary.from_path(path) }
+            casks = args.formula? ? [] : tap.cask_files.map { |path| Cask::CaskLoader.from_path(path) }
             formulae + casks
           elsif args.installed?
             formulae = args.cask? ? [] : Formula.installed
@@ -266,7 +266,7 @@ module Homebrew
           end
           systems = { macos:, linux: :linux }
           detected_versions = {}
-          loaded_cask = Cask::CaskLoader.load(sourcefile_path)
+          loaded_cask = Cask::CaskLoader.from_path(sourcefile_path)
           detected_system_options = BumpVersionParser::VERSION_PLATFORMS.filter_map do |version_type, (system, arch)|
             os = systems.fetch(system)
             tag = Utils::Bottles::Tag.new(system: os, arch:)
@@ -304,7 +304,7 @@ module Homebrew
               sourcefile_path = formula_or_cask.sourcefile_path
               raise "unexpected nil sourcefile_path" unless sourcefile_path
 
-              loaded_formula_or_cask = Cask::CaskLoader.load(sourcefile_path)
+              loaded_formula_or_cask = Cask::CaskLoader.from_path(sourcefile_path)
               current_version_value = Version.new(loaded_formula_or_cask.version)
             end
 
@@ -794,7 +794,8 @@ module Homebrew
       def version_with_cooldown(version_info, current = nil)
         return unless current
 
-        latest = Version.new(version_info[:latest]) if version_info[:latest]
+        latest_str = version_info[:latest_throttled] || version_info[:latest]
+        latest = Version.new(latest_str) if latest_str
         return unless latest
 
         strategy = T.cast(version_info.dig(:meta, :strategy), T.nilable(String))
@@ -1070,19 +1071,20 @@ module Homebrew
         )
         return "unable to get versions", nil if version_info.blank?
 
-        if !version_info.key?(:latest_throttled)
-          latest = Version.new(version_info[:latest])
-          cooldown_version = version_with_cooldown(version_info, current)
-          cooldown_skipped = if cooldown_version
-            strategy = version_info.dig(:meta, :strategy)
-            latest if compare_versions_for_strategy(strategy, cooldown_version.to_s, latest.to_s)&.negative?
-          end
-          [cooldown_version || latest, cooldown_skipped]
-        elsif version_info[:latest_throttled].nil?
-          ["unable to get throttled versions", nil]
-        else
-          [Version.new(version_info[:latest_throttled]), nil]
+        # We ignore cooldown for patch-based throttle as we are replacing usage
+        # with time-based throttle. Throttle rate and days are mutually exclusive.
+        if version_info.key?(:latest_throttled)
+          return "unable to get throttled versions", nil if version_info[:latest_throttled].nil?
+          return Version.new(version_info[:latest_throttled]), nil if formula_or_cask.livecheck.throttle
         end
+
+        latest = Version.new(version_info[:latest_throttled] || version_info[:latest])
+        cooldown_version = version_with_cooldown(version_info, current)
+        cooldown_skipped = if cooldown_version
+          strategy = version_info.dig(:meta, :strategy)
+          latest if compare_versions_for_strategy(strategy, cooldown_version.to_s, latest.to_s)&.negative?
+        end
+        [cooldown_version || latest, cooldown_skipped]
       rescue => e
         ["error: #{e}", nil]
       end

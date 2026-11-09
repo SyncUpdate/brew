@@ -7,13 +7,6 @@
 # shellcheck disable=SC2154
 source "${HOMEBREW_LIBRARY}/Homebrew/utils/os.sh"
 
-# Prevent other staff members from modifying new files, including subprocess output.
-# Keep in sync with Homebrew/install's install.sh and package/scripts/postinstall.
-if [[ -n "${HOMEBREW_MACOS}" && "$(id -gn)" == staff && " $(id -Gn) " != *" admin "* ]]
-then
-  umask go-w
-fi
-
 realpath() {
   (cd "$1" &>/dev/null && pwd -P)
 }
@@ -145,6 +138,14 @@ case "$@" in
     homebrew-help "$@" && exit 0
     ;;
 esac
+
+# Prevent other staff members from modifying new files, including subprocess output.
+# Keep in sync with Homebrew/install's install.sh and package/scripts/postinstall.
+# This forks `id` twice so keep it below the read-only commands above.
+if [[ -n "${HOMEBREW_MACOS}" && "$(id -gn)" == staff && " $(id -Gn) " != *" admin "* ]]
+then
+  umask go-w
+fi
 
 # commands that take a single or no arguments and need to write to HOMEBREW_PREFIX.
 # HOMEBREW_LIBRARY set by bin/brew
@@ -395,6 +396,7 @@ export HOMEBREW_SYSTEM_CURL_TOO_OLD
 export HOMEBREW_CURL_SUPPORTS_ETAGS
 export HOMEBREW_GIT
 export HOMEBREW_MINIMUM_CURL_VERSION
+export HOMEBREW_CURL_HEADER_FILE_MIN_VERSION
 export HOMEBREW_MINIMUM_GIT_VERSION
 export HOMEBREW_LINUX_MINIMUM_GLIBC_VERSION
 export HOMEBREW_PHYSICAL_PROCESSOR
@@ -460,7 +462,7 @@ HOMEBREW_ARG_COUNT="$#"
 HOMEBREW_COMMAND="$1"
 shift
 # If you are going to change anything in below case statement,
-# be sure to also update HOMEBREW_INTERNAL_COMMAND_ALIASES hash in commands.rb
+# be sure to also update HOMEBREW_INTERNAL_COMMAND_ALIASES hash in command_constants.rb
 # doesn't need a default case as other arguments handled elsewhere.
 # shellcheck disable=SC2249
 case "${HOMEBREW_COMMAND}" in
@@ -485,7 +487,7 @@ case "${HOMEBREW_COMMAND}" in
   x) HOMEBREW_COMMAND="exec" ;;
 esac
 
-# Keep in sync with `Commands.internal_cmd_name?` in `commands.rb`.
+# Keep in sync with `Commands.valid_cmd_name?` in `commands.rb`.
 if [[ "${HOMEBREW_COMMAND}" == */* || "${HOMEBREW_COMMAND}" == "." || "${HOMEBREW_COMMAND}" == ".." ]]
 then
   odie "Unknown command: brew ${HOMEBREW_COMMAND}"
