@@ -464,45 +464,46 @@ RSpec.describe CurlDownloadStrategy do
 
             strategy.fetch
           end
+        end
 
-          context "with a trailing slash" do
-            let(:artifact_domain) { "https://mirror.example.com/v2/oci/" }
+        context "with a trailing slash" do
+          let(:artifact_domain) { "https://mirror.example.com/v2/oci/" }
 
-            it "does not duplicate the /v2/ API path" do
-              expect(strategy).to receive(:system_command)
-                .with(
-                  /curl/,
-                  hash_including(args: array_including_cons("https://mirror.example.com/v2/oci/homebrew/core/spec/manifests/0.0")),
-                )
-                .at_least(:once)
-                .and_return(SystemCommand::Result.new(["curl"], [[:stdout, ""]], status, secrets: []))
+          it "does not duplicate the /v2/ API path" do
+            expect(strategy).to receive(:system_command)
+              .with(
+                /curl/,
+                hash_including(args: array_including_cons("https://mirror.example.com/v2/oci/homebrew/core/spec/manifests/0.0")),
+              )
+              .at_least(:once)
+              .and_return(SystemCommand::Result.new(["curl"], [[:stdout, ""]], status, secrets: []))
 
-              strategy.fetch
-            end
+            strategy.fetch
           end
+        end
 
-          context "when the artifact domain is unreachable" do
-            let(:failed_status) { instance_double(Process::Status, success?: false, exitstatus: 6, termsig: nil) }
+        context "when the /v2 artifact domain is unreachable" do
+          let(:artifact_domain) { "https://mirror.example.com/v2/oci" }
+          let(:failed_status) { instance_double(Process::Status, success?: false, exitstatus: 6, termsig: nil) }
 
-            it "falls back to the original ghcr.io URL" do
-              artifact_url = "https://mirror.example.com/v2/oci/homebrew/core/spec/manifests/0.0"
+          it "falls back to the original ghcr.io URL" do
+            artifact_url = "https://mirror.example.com/v2/oci/homebrew/core/spec/manifests/0.0"
 
-              # First call: artifact domain URL fails
-              expect(strategy).to receive(:_fetch)
-                .with(url: artifact_url, resolved_url: artifact_url,
-                      timeout: anything)
-                .once
-                .and_raise(ErrorDuringExecution.new(["curl", artifact_url], status: failed_status))
+            # First call: artifact domain URL fails
+            expect(strategy).to receive(:_fetch)
+              .with(url: artifact_url, resolved_url: artifact_url,
+                    timeout: anything)
+              .once
+              .and_raise(ErrorDuringExecution.new(["curl", artifact_url], status: failed_status))
 
-              # Second call: original ghcr.io URL succeeds
-              expect(strategy).to receive(:_fetch)
-                .with(url: url, resolved_url: url,
-                      timeout: anything)
-                .once
-                .and_return(nil)
+            # Second call: original ghcr.io URL succeeds
+            expect(strategy).to receive(:_fetch)
+              .with(url: url, resolved_url: url,
+                    timeout: anything)
+              .once
+              .and_return(nil)
 
-              strategy.fetch
-            end
+            strategy.fetch
           end
         end
 
@@ -634,6 +635,61 @@ RSpec.describe CurlDownloadStrategy do
             end.to raise_error(RuntimeError, /Could not determine the file size/)
           end
         end
+      end
+    end
+  end
+
+  describe "#curl_output" do
+    subject(:strategy) do
+      Class.new(described_class) do
+        T.bind(self, T.class_of(CurlDownloadStrategy))
+        public :curl_output
+      end.new(url, name, version, **specs)
+    end
+
+    let(:specs) { { user_agent: "Mozilla/25.0.1" } }
+
+    test_each_hash({ nil => "Mozilla/25.0.1", "Explicit/1.0" => "Explicit/1.0" }) do |user_agent, expected|
+      it "passes the #{expected} user agent when given #{user_agent.inspect}" do
+        expect(strategy).to receive(:curl_with_workarounds)
+          .with(any_args, hash_including(user_agent: expected))
+          .and_return(instance_double(SystemCommand::Result))
+
+        strategy.curl_output("--head", url, user_agent:)
+      end
+    end
+  end
+
+  describe "#curl" do
+    subject(:strategy) do
+      Class.new(described_class) do
+        T.bind(self, T.class_of(CurlDownloadStrategy))
+        public :curl
+      end.new(url, name, version, **specs)
+    end
+
+    let(:result) { instance_double(SystemCommand::Result, assert_success!: nil) }
+
+    test_each_hash({ false => true, true => false }) do |quiet, printed|
+      it "prints curl's output: #{printed} when `quiet?` is #{quiet}, whatever `print_stdout:` says" do
+        strategy.quiet! if quiet
+        expect(strategy).to receive(:curl_with_workarounds)
+          .with(any_args, hash_including(print_stdout: printed, print_stderr: printed))
+          .and_return(result)
+
+        strategy.curl(url, print_stdout: true)
+      end
+    end
+
+    context "with mirrors" do
+      let(:specs) { { mirrors: ["https://mirror.example.com/foo.tar.gz"] } }
+
+      it "uses a 15 second connect timeout" do
+        expect(strategy).to receive(:curl_with_workarounds)
+          .with(any_args, hash_including(connect_timeout: 15))
+          .and_return(result)
+
+        strategy.curl(url, connect_timeout: 60)
       end
     end
   end

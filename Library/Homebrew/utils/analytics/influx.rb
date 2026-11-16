@@ -12,6 +12,53 @@ module Utils
       FIRST_INFLUXDB_ANALYTICS_DATE = Date.new(2023, 03, 27).freeze
       STANDARD_PREFIXES = %w[/opt/homebrew /usr/local /home/linuxbrew/.linuxbrew].freeze
 
+      class CategoryDimensions < T::Struct
+        const :bucket, Symbol
+        const :dimension_key, T.any(String, Symbol)
+        const :groups, T::Array[Symbol]
+      end
+
+      DEFAULT_CATEGORY_DIMENSIONS = CategoryDimensions.new(
+        bucket: :formula_install, dimension_key: :formula, groups: [:package, :tap_name, :options],
+      ).freeze
+      CATEGORY_DIMENSIONS = T.let({
+        homebrew_devcmdrun_developer: CategoryDimensions.new(
+          bucket: :formula_install, dimension_key: "devcmdrun_developer", groups: [:devcmdrun, :developer],
+        ),
+        homebrew_env_config:          CategoryDimensions.new(
+          bucket: :command_run, dimension_key: "env_config", groups: [:env_config, :env_config_state],
+        ),
+        homebrew_os_arch_ci:          CategoryDimensions.new(
+          bucket: :formula_install, dimension_key: "os_arch_ci", groups: [:os, :arch, :ci],
+        ),
+        homebrew_prefixes:            CategoryDimensions.new(
+          bucket: :formula_install, dimension_key: "prefix", groups: [:prefix, :os, :arch],
+        ),
+        homebrew_versions:            CategoryDimensions.new(
+          bucket: :formula_install, dimension_key: "version", groups: [:version],
+        ),
+        os_versions:                  CategoryDimensions.new(
+          bucket: :formula_install, dimension_key: :os_version, groups: [:os_name_and_version],
+        ),
+        command_run:                  CategoryDimensions.new(
+          bucket: :command_run, dimension_key: "command_run", groups: [:command],
+        ),
+        command_run_options:          CategoryDimensions.new(
+          bucket:        :command_run,
+          dimension_key: "command_run_options",
+          groups:        [:command, :options, :devcmdrun, :developer],
+        ),
+        test_bot_test:                CategoryDimensions.new(
+          bucket: :test_bot_test, dimension_key: "test_bot_test", groups: [:command, :passed, :arch, :os],
+        ),
+        cask_install:                 CategoryDimensions.new(
+          bucket: :cask_install, dimension_key: :cask, groups: [:package, :tap_name],
+        ),
+        build_error:                  CategoryDimensions.new(
+          bucket: :build_error, dimension_key: :formula, groups: [:package, :tap_name, :options],
+        ),
+      }.freeze, T::Hash[Symbol, CategoryDimensions])
+
       sig { void }
       def setup_python
         uv = which("uv", ORIGINAL_PATHS)
@@ -102,61 +149,20 @@ module Utils
           days_ago = 365
         end
 
-        category_matching_buckets = [:build_error, :cask_install, :command_run, :test_bot_test]
-
         categories.map do |category|
-          additional_where = all_core_formulae_json ? " AND tap_name ~ '^homebrew/(core|cask)$'" : ""
-          bucket = if category_matching_buckets.include?(category)
-            category
-          elsif [:command_run_options, :homebrew_env_config].include?(category)
-            :command_run
-          else
-            :formula_install
-          end
+          additional_where = all_core_formulae_json ? " AND tap_name ~ '^homebrew/'" : ""
+          dimensions = CATEGORY_DIMENSIONS.fetch(category, DEFAULT_CATEGORY_DIMENSIONS)
+          dimension_key = dimensions.dimension_key
+          # Events predating the user-set-aware `env_config_state` tag
+          # counted brew's own exports as configuration, so drop them.
+          additional_where += " AND env_config_state IS NOT NULL" if category == :homebrew_env_config
+          additional_where += " AND on_request = 'true'" if category == :formula_install_on_request
 
-          case category
-          when :homebrew_devcmdrun_developer
-            dimension_key = "devcmdrun_developer"
-            groups = [:devcmdrun, :developer]
-          when :homebrew_env_config
-            dimension_key = "env_config"
-            groups = [:env_config, :env_config_state]
-            # Events predating the user-set-aware `env_config_state` tag
-            # counted brew's own exports as configuration, so drop them.
-            additional_where += " AND env_config_state IS NOT NULL"
-          when :homebrew_os_arch_ci
-            dimension_key = "os_arch_ci"
-            groups = [:os, :arch, :ci]
-          when :homebrew_prefixes
-            dimension_key = "prefix"
-            groups = [:prefix, :os, :arch]
-          when :homebrew_versions
-            dimension_key = "version"
-            groups = [:version]
-          when :os_versions
-            dimension_key = :os_version
-            groups = [:os_name_and_version]
-          when :command_run
-            dimension_key = "command_run"
-            groups = [:command]
-          when :command_run_options
-            dimension_key = "command_run_options"
-            groups = [:command, :options, :devcmdrun, :developer]
-          when :test_bot_test
-            dimension_key = "test_bot_test"
-            groups = [:command, :passed, :arch, :os]
-          when :cask_install
-            dimension_key = :cask
-            groups = [:package, :tap_name]
-          else
-            dimension_key = :formula
-            additional_where += " AND on_request = 'true'" if category == :formula_install_on_request
-            groups = [:package, :tap_name, :options]
-          end
+          package_renames = self.package_renames(dimension_key)
 
-          sql_groups = groups.map { |e| "\"#{e}\"" }.join(",")
+          sql_groups = dimensions.groups.map { |e| "\"#{e}\"" }.join(",")
           query = <<~EOS
-            SELECT #{sql_groups}, COUNT(*) AS "count" FROM "#{bucket}" WHERE time >= now() - INTERVAL '#{days_ago} day'#{additional_where} GROUP BY #{sql_groups}
+            SELECT #{sql_groups}, COUNT(*) AS "count" FROM "#{dimensions.bucket}" WHERE time >= now() - INTERVAL '#{days_ago} day'#{additional_where} GROUP BY #{sql_groups}
           EOS
 
           json = T.let({
@@ -194,11 +200,7 @@ module Utils
             when :homebrew_devcmdrun_developer
               "devcmdrun=#{record["devcmdrun"]} HOMEBREW_DEVELOPER=#{record["developer"]}"
             when :homebrew_os_arch_ci
-              if record["ci"] == "true"
-                "#{record["os"]} #{record["arch"]} (CI)"
-              else
-                "#{record["os"]} #{record["arch"]}"
-              end
+              "#{record["os"]} #{record["arch"]}#{" (CI)" if record["ci"] == "true"}"
             when :homebrew_prefixes
               prefix = record["prefix"].to_s
               if STANDARD_PREFIXES.none? { |std| std.casecmp?(prefix) }
@@ -226,14 +228,22 @@ module Utils
 
               "#{command_and_options} (#{record["os"]} #{record["arch"]}) (#{passed})"
             else
-              record[groups.first.to_s]
+              record[dimensions.groups.first.to_s]
             end
             next if dimension.blank?
 
-            if (tap_name = record["tap_name"].presence) &&
-               ((tap_name != "homebrew/cask" && dimension_key == :cask) ||
-                (tap_name != "homebrew/core" && dimension_key == :formula))
-              dimension = "#{tap_name}/#{dimension}"
+            if [:formula, :cask].include?(dimension_key)
+              tap_name = record["tap_name"].presence
+              dimension = "#{tap_name}/#{dimension}" if tap_name
+              seen = Set.new
+              while (new_name = package_renames[dimension]) && seen.add?(dimension)
+                dimension = new_name
+              end
+
+              core_tap_name = (dimension_key == :cask) ? "homebrew/cask" : "homebrew/core"
+              next if all_core_formulae_json && !dimension.start_with?("#{core_tap_name}/")
+
+              dimension = dimension.delete_prefix("#{core_tap_name}/")
             end
 
             if (all_core_formulae_json || category == :build_error) &&
@@ -250,7 +260,6 @@ module Utils
 
             count = record["count"]
 
-            json[:total_items] += 1
             json[:total_count] += count
 
             json[:items] << {
@@ -263,24 +272,12 @@ module Utils
           odie "No data returned" if json[:total_count].zero?
 
           # Combine identical values
-          deduped_items = {}
-
-          json[:items].each do |item|
-            key = item[dimension_key]
-            if deduped_items.key?(key)
-              deduped_items[key][:count] += item[:count]
-              if category == :homebrew_env_config
-                deduped_items[key][:non_default_count] += item[:non_default_count]
-                deduped_items[key][:set_default_count] += item[:set_default_count]
-                deduped_items[key][:unset_count] += item[:unset_count]
-              end
-            else
-              deduped_items[key] = item
-            end
+          count_keys = [:count]
+          count_keys += [:non_default_count, :set_default_count, :unset_count] if category == :homebrew_env_config
+          json[:items] = json[:items].group_by { |item| item[dimension_key] }.map do |_, items|
+            items.fetch(0).merge(count_keys.to_h { |key| [key, items.sum { |item| item[key] }] })
           end
-
-          json[:items] = deduped_items.values
-          json[:total_items] = json[:items].length if category == :homebrew_env_config
+          json[:total_items] = json[:items].length
 
           if all_core_formulae_json
             core_formula_items = {}
@@ -333,6 +330,28 @@ module Utils
 
           json
         end
+      end
+
+      sig { params(dimension_key: T.any(String, Symbol)).returns(T::Hash[String, String]) }
+      def package_renames(dimension_key)
+        return {} unless [:formula, :cask].include?(dimension_key)
+
+        require "tap"
+
+        package_renames = {}
+        Tap.all.select(&:official?).each do |tap|
+          ((dimension_key == :cask) ? tap.cask_renames : tap.formula_renames).each do |old_name, new_name|
+            package_renames["#{tap.name}/#{old_name}"] = "#{tap.name}/#{new_name}"
+          end
+          tap.tap_migrations.each do |old_name, new_name|
+            package_renames["#{tap.name}/#{old_name}"] = if Utils.full_name?(new_name)
+              new_name
+            else
+              "#{new_name}/#{old_name}"
+            end
+          end
+        end
+        package_renames
       end
 
       sig { params(dimension: T.nilable(String)).returns(T.nilable(String)) }

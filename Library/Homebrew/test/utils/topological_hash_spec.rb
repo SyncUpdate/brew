@@ -29,6 +29,16 @@ RSpec.describe Utils::TopologicalHash do
   end
 
   describe "::graph_package_dependencies" do
+    it "loads shared cask dependencies once per graph" do
+      parents = %w[first second].map do |token|
+        Cask::Cask.new(token) { depends_on cask: "shared" }
+      end
+      expect(Cask::CaskLoader).to receive(:load).with("shared", config: nil).twice
+                                                .and_return(Cask::Cask.new("shared"))
+
+      2.times { described_class.graph_package_dependencies(parents) }
+    end
+
     it "returns a topological hash" do
       formula1 = formula "homebrew-test-formula1" do
         T.bind(self, T.class_of(Formula))
@@ -75,14 +85,8 @@ RSpec.describe Utils::TopologicalHash do
         depends_on cask: "homebrew-test-cask2"
       end
 
-      stub_formula_loader formula1
-      stub_formula_loader formula2
-      stub_formula_loader formula3
-      stub_formula_loader formula4
-
-      stub_cask_loader cask1
-      stub_cask_loader cask2
-      stub_cask_loader cask3
+      [formula1, formula2, formula3, formula4].each { |f| stub_formula_loader f }
+      [cask1, cask2, cask3].each { |cask| stub_cask_loader cask }
 
       packages = [formula1, formula2, formula3, formula4, cask1, cask2, cask3]
       expect(described_class.graph_package_dependencies(packages)).to eq({

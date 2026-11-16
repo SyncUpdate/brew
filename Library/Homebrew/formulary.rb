@@ -2,7 +2,6 @@
 # frozen_string_literal: true
 
 require "digest/sha2"
-require "uri"
 require "cacheable"
 require "tab"
 require "utils"
@@ -11,15 +10,17 @@ require "utils/output"
 require "utils/path"
 require "service"
 require "trust"
-require "utils/curl"
 require "extend/hash/deep_transform_values"
 require "extend/hash/keys"
 require "extend/ENV/sensitive"
 require "tap"
 
+require "formulary/from_api"
+
 # The {Formulary} is responsible for creating instances of {Formula}.
 # It is not meant to be used directly from formulae.
 module Formulary
+  extend FromAPI
   extend Context
   extend T::Generic
   extend Cacheable
@@ -27,9 +28,6 @@ module Formulary
   include Utils::Output::Mixin
 
   Cache = type_template { { fixed: T::Hash[String, T.untyped] } }
-
-  ALLOWED_URL_SCHEMES = %w[file].freeze
-  private_constant :ALLOWED_URL_SCHEMES
 
   # Enable the factory cache.
   #
@@ -207,210 +205,25 @@ module Formulary
           .gsub(HOMEBREW_HOME_PLACEHOLDER, Dir.home)
   end
 
+  # Share source across platform-specific classes, rereading it after edits.
+  sig { params(path: Pathname).returns(String) }
+  def self.formula_contents(path)
+    cache["formula_contents"] ||= {}
+    stat = path.stat
+    cache["formula_contents"][[path.to_s, stat.mtime, stat.ctime, stat.size]] ||=
+      path.open("rb") { |file| file.read.force_encoding(Encoding::UTF_8) }.freeze
+  end
+
   sig {
     params(name: String, path: Pathname, flags: T::Array[String], ignore_errors: T::Boolean,
            from_metadata: T::Boolean)
       .returns(T.class_of(Formula))
   }
   def self.load_formula_from_path(name, path, flags:, ignore_errors:, from_metadata: false)
-    contents = path.open("r") { |f| ensure_utf8_encoding(f).read }
-    namespace = "FormulaNamespace#{namespace_key(path.to_s)}"
-    klass = load_formula(name, path, contents, namespace, flags:, ignore_errors:, from_metadata:)
+    klass = load_formula(name, path, formula_contents(path), "FormulaNamespace#{namespace_key(path.to_s)}",
+                         flags:, ignore_errors:, from_metadata:)
     platform_cache[:path] ||= {}
     platform_cache.fetch(:path)[path.to_s] = klass
-  end
-
-  sig {
-    params(
-      name:           String,
-      formula_struct: Homebrew::API::FormulaStruct,
-      api_source:     T::Hash[String, T.untyped],
-      tap_git_head:   String,
-      flags:          T::Array[String],
-      internal_api:   T::Boolean,
-    ).returns(T.class_of(Formula))
-  }
-  def self.load_formula_from_struct!(name, formula_struct, api_source:, tap_git_head:, flags:, internal_api: false)
-    namespace = :"FormulaNamespaceAPI#{namespace_key(api_source.to_json)}"
-
-    mod = Module.new
-    remove_const(namespace) if const_defined?(namespace)
-    const_set(namespace, mod)
-
-    mod.const_set(:BUILD_FLAGS, flags)
-
-    class_name = class_s(name)
-    ruby_source_path = "Formula/#{CoreTap.instance.new_formula_subdirectory(name)}/#{name.downcase}.rb"
-
-    klass = Class.new(::Formula) do
-      @loaded_from_api = T.let(true, T.nilable(T::Boolean))
-      @loaded_from_internal_api = T.let(internal_api, T.nilable(T::Boolean))
-      @api_source = T.let(api_source, T.nilable(T::Hash[String, T.untyped]))
-
-      desc formula_struct.desc
-      homepage formula_struct.homepage
-      license formula_struct.license
-      revision formula_struct.revision
-      version_scheme formula_struct.version_scheme
-      compatibility_version formula_struct.compatibility_version
-
-      if formula_struct.stable?
-        stable do
-          url(*formula_struct.stable_url_args)
-          version formula_struct.stable_version
-          if (checksum = formula_struct.stable_checksum)
-            sha256 checksum
-          end
-
-          formula_struct.stable_patches.each do |patch_hash|
-            patch patch_hash.fetch("strip", patch_hash[:strip]).to_sym do
-              T.bind(self, Resource::Patch)
-
-              if (patch_url = patch_hash.fetch("url", patch_hash[:url]))
-                url patch_url
-                if (patch_sha256 = patch_hash.fetch("sha256", patch_hash[:sha256]))
-                  sha256 patch_sha256
-                end
-                apply patch_hash.fetch("apply", patch_hash[:apply]) if patch_hash.fetch("apply", patch_hash[:apply])
-                if (patch_directory = patch_hash.fetch("directory", patch_hash[:directory]))
-                  directory patch_directory
-                end
-              elsif (patch_file = patch_hash.fetch("file", patch_hash[:file]))
-                file patch_file
-              end
-
-              if (patch_resolves = patch_hash.fetch("resolves", patch_hash[:resolves]))
-                resolves(*patch_resolves.map { |resolved| resolved.fetch("id", resolved[:id]) })
-              end
-            end
-          end
-
-          formula_struct.stable_dependencies.each do |dep|
-            depends_on dep
-          end
-
-          formula_struct.stable_uses_from_macos.each do |args|
-            uses_from_macos(*args)
-          end
-        end
-      end
-
-      if formula_struct.head?
-        head do
-          url(*formula_struct.head_url_args)
-
-          formula_struct.head_dependencies.each do |dep|
-            depends_on dep
-          end
-
-          formula_struct.head_uses_from_macos.each do |args|
-            uses_from_macos(*args)
-          end
-        end
-      end
-
-      no_autobump!(**formula_struct.no_autobump_args) if formula_struct.no_autobump?
-
-      if formula_struct.bottle?
-        bottle do
-          if Homebrew::EnvConfig.bottle_domain_custom?
-            root_url Homebrew::EnvConfig.bottle_domain
-          else
-            root_url HOMEBREW_BOTTLE_DEFAULT_DOMAIN
-          end
-          rebuild formula_struct.bottle_rebuild
-          formula_struct.bottle_checksums.each do |args|
-            sha256(**args)
-          end
-        end
-      end
-
-      pour_bottle?(**formula_struct.pour_bottle_args) if formula_struct.pour_bottle?
-
-      keg_only(*formula_struct.keg_only_args) if formula_struct.keg_only?
-
-      deprecate!(**formula_struct.deprecate_args) if formula_struct.deprecate?
-      disable!(**formula_struct.disable_args) if formula_struct.disable?
-
-      formula_struct.conflicts.each do |name, args|
-        conflicts_with(name, **args)
-      end
-
-      formula_struct.link_overwrite_paths.each do |path|
-        link_overwrite path
-      end
-
-      @post_install_steps = T.let(
-        formula_struct.post_install_steps,
-        T.nilable(Homebrew::InstallSteps::Steps),
-      )
-      @post_install_steps_defined = T.let(formula_struct.post_install_steps.present?, T.nilable(T::Boolean))
-
-      define_method(:install) do
-        raise NotImplementedError, "Cannot build from source from abstract formula."
-      end
-
-      @post_install_defined_boolean = T.let(formula_struct.post_install_defined, T.nilable(T::Boolean))
-      define_method(:post_install_defined?) do
-        self.class.instance_variable_get(:@post_install_defined_boolean)
-      end
-
-      if formula_struct.service?
-        service do
-          run(*formula_struct.service_run_args, **formula_struct.service_run_kwargs) if formula_struct.service_run?
-          name(**formula_struct.service_name_args) if formula_struct.service_name?
-
-          formula_struct.service_args.each do |key, arg|
-            public_send(key, arg)
-          end
-        end
-      end
-
-      @caveats_string = T.let(formula_struct.caveats, T.nilable(String))
-      define_method(:caveats) do
-        self.class.instance_variable_get(:@caveats_string)
-      end
-
-      @tap_git_head_string = T.let(tap_git_head, T.nilable(String))
-      define_method(:tap_git_head) do
-        self.class.instance_variable_get(:@tap_git_head_string)
-      end
-
-      @oldnames_array = T.let(formula_struct.oldnames, T.nilable(T::Array[String]))
-      define_method(:oldnames) do
-        self.class.instance_variable_get(:@oldnames_array)
-      end
-
-      @aliases_array = T.let(formula_struct.aliases, T.nilable(T::Array[String]))
-      define_method(:aliases) do
-        self.class.instance_variable_get(:@aliases_array)
-      end
-
-      @versioned_formulae_array = T.let(formula_struct.versioned_formulae, T.nilable(T::Array[String]))
-      define_method(:versioned_formulae_names) do
-        self.class.instance_variable_get(:@versioned_formulae_array)
-      end
-
-      @ruby_source_path_string = T.let(ruby_source_path, T.nilable(String))
-      define_method(:ruby_source_path) do
-        self.class.instance_variable_get(:@ruby_source_path_string)
-      end
-
-      @ruby_source_checksum_string = T.let(formula_struct.ruby_source_checksum, T.nilable(String))
-      define_method(:ruby_source_checksum) do
-        checksum = self.class.instance_variable_get(:@ruby_source_checksum_string)
-        Checksum.new(checksum) if checksum
-      end
-
-      define_method(:local_patch_checksums) do
-        formula_struct.local_patch_checksums
-      end
-    end
-
-    mod.const_set(class_name, klass)
-
-    platform_cache[:api] ||= {}
-    platform_cache.fetch(:api)[name] = klass
   end
 
   sig {
@@ -422,11 +235,15 @@ module Formulary
     force_bottle: false,
     flags: []
   )
-    if name.include?("/") || File.exist?(name)
+    if name.include?("/")
       f = resolve_installed_spec(factory(name, spec || :stable, force_bottle:, flags:), spec:)
     else
       rack = to_rack(name)
-      alias_path = factory(name, force_bottle:, flags:).alias_path
+      alias_path = begin
+        factory(name, force_bottle:, flags:).alias_path
+      rescue FormulaUnavailableError
+        nil
+      end
       f = from_rack(rack, spec, alias_path:, force_bottle:, flags:)
     end
 
@@ -474,11 +291,6 @@ module Formulary
     formula
   end
   private_class_method :resolve_installed_spec
-
-  sig { params(io: IO).returns(IO) }
-  def self.ensure_utf8_encoding(io)
-    io.set_encoding(Encoding::UTF_8)
-  end
 
   sig { params(name: String).returns(String) }
   def self.class_s(name)
@@ -561,13 +373,11 @@ module Formulary
     include Utils::Output::Mixin
 
     sig {
-      params(ref: T.any(String, Pathname, URI::Generic), from: T.nilable(Symbol), warn: T::Boolean)
+      params(ref: T.any(String, Pathname))
         .returns(T.nilable(T.attached_class))
     }
-    def self.try_new(ref, from: nil, warn: false)
-      return if Homebrew::EnvConfig.forbid_packages_from_paths?
-
-      from_path(ref.to_s)
+    def self.try_new(ref)
+      from_path(ref)
     end
 
     # @api private
@@ -577,8 +387,8 @@ module Formulary
       new(ref) if HOMEBREW_BOTTLES_EXTNAME_REGEX.match?(ref) && File.exist?(ref)
     end
 
-    sig { params(bottle_name: String, warn: T::Boolean).void }
-    def initialize(bottle_name, warn: false)
+    sig { params(bottle_name: String).void }
+    def initialize(bottle_name)
       @bottle_path = T.let(Pathname(bottle_name).realpath, Pathname)
       name, full_name = Utils::Bottles.resolve_formula_names(@bottle_path)
       tap, = Tap.with_formula_name(full_name)
@@ -630,24 +440,10 @@ module Formulary
 
   # Loads formulae from disk using a path.
   class FromPathLoader < FormulaLoader
-    sig {
-      params(ref: T.any(String, Pathname, URI::Generic), from: T.nilable(Symbol), warn: T::Boolean)
-        .returns(T.nilable(T.any(T.attached_class, FromKegLoader)))
-    }
-    def self.try_new(ref, from: nil, warn: false)
-      path = case ref
-      when String
-        Pathname(ref)
-      when Pathname
-        ref
-      else
-        return
-      end
-
-      return unless path.expand_path.exist?
-      return unless ::Utils::Path.loadable_package_path?(path, :formula)
-
-      from_path(path)
+    T::Sig::WithoutRuntime.sig { params(_ref: String, from: T.nilable(Symbol), warn: T::Boolean).returns(NilClass) }
+    def self.try_new(_ref, from: nil, warn: false)
+      Formulary.odeprecated "Formulary::FromPathLoader.try_new", "Formulary.from_path"
+      nil
     end
 
     sig {
@@ -697,66 +493,6 @@ module Formulary
     end
   end
 
-  # Loads formula from a URI.
-  class FromURILoader < FormulaLoader
-    sig {
-      params(ref: T.any(String, Pathname, URI::Generic), from: T.nilable(Symbol), warn: T::Boolean)
-        .returns(T.nilable(T.attached_class))
-    }
-    def self.try_new(ref, from: nil, warn: false)
-      return if Homebrew::EnvConfig.forbid_packages_from_paths?
-
-      # Cache compiled regex
-      @uri_regex ||= T.let(begin
-        uri_regex = ::URI::RFC2396_PARSER.make_regexp
-        Regexp.new("\\A#{uri_regex.source}\\Z", uri_regex.options)
-      end, T.nilable(Regexp))
-
-      uri = ref.to_s
-      return unless uri.match?(@uri_regex)
-
-      uri = URI(uri)
-      return unless uri.path
-      return unless uri.scheme.present?
-
-      new(uri, from:)
-    end
-
-    sig { returns(T.any(URI::Generic, String)) }
-    attr_reader :url
-
-    sig { params(url: T.any(URI::Generic, String), from: T.nilable(Symbol)).void }
-    def initialize(url, from: nil)
-      @url = url
-      @from = from
-      uri_path = URI(url).path
-      raise ArgumentError, "URL has no path component" unless uri_path
-
-      formula = File.basename(uri_path, ".rb")
-      super formula, HOMEBREW_CACHE_FORMULA/File.basename(uri_path)
-    end
-
-    sig { override.params(flags: T::Array[String], ignore_errors: T::Boolean).void }
-    def load_file(flags:, ignore_errors:)
-      url_scheme = URI(url).scheme
-      if ALLOWED_URL_SCHEMES.exclude?(url_scheme)
-        raise UnsupportedInstallationMethod,
-              "Non-checksummed download of #{name} formula file from an arbitrary URL is unsupported! " \
-              "Use `brew version-install` to install a formula file from your own custom tap " \
-              "instead."
-      end
-      HOMEBREW_CACHE_FORMULA.mkpath
-      FileUtils.rm_f(path)
-      Utils::Curl.curl_download url.to_s, to: path
-      super
-    rescue MethodDeprecatedError => e
-      if (match_data = url.to_s.match(%r{github\.com/(?<user>[\w-]+)/(?<repo>[\w-]+)/}).presence)
-        e.issues_url = "https://github.com/#{match_data[:user]}/#{match_data[:repo]}/issues/new"
-      end
-      raise
-    end
-  end
-
   # Loads tapped formulae.
   class FromTapLoader < FormulaLoader
     sig { returns(Tap) }
@@ -766,10 +502,10 @@ module Formulary
     attr_reader :path
 
     sig {
-      params(ref: T.any(String, Pathname, URI::Generic), from: T.nilable(Symbol), warn: T::Boolean)
+      params(ref: String, warn: T::Boolean)
         .returns(T.nilable(T.attached_class))
     }
-    def self.try_new(ref, from: nil, warn: false)
+    def self.try_new(ref, warn: false)
       ref = ref.to_s
 
       return unless (name_tap_type = Formulary.tap_formula_name_type(ref, warn:))
@@ -833,10 +569,10 @@ module Formulary
     extend ::Utils::Output::Mixin
 
     sig {
-      override.params(ref: T.any(String, Pathname, URI::Generic), from: T.nilable(Symbol), warn: T::Boolean)
+      override.params(ref: String, warn: T::Boolean)
               .returns(T.nilable(T.attached_class))
     }
-    def self.try_new(ref, from: nil, warn: false)
+    def self.try_new(ref, warn: false)
       return unless ref.is_a?(String)
       return unless ref.match?(/\A#{HOMEBREW_TAP_FORMULA_NAME_REGEX}\Z/o)
 
@@ -875,49 +611,19 @@ module Formulary
 
   # Loads a formula from a formula file in a keg.
   class FromKegLoader < FormulaLoader
-    sig {
-      params(ref: T.any(String, Pathname, URI::Generic), from: T.nilable(Symbol), warn: T::Boolean)
-        .returns(T.nilable(T.attached_class))
-    }
-    def self.try_new(ref, from: nil, warn: false)
-      ref = ref.to_s
-
-      keg_directory = HOMEBREW_PREFIX/"opt/#{ref}"
-      return unless keg_directory.directory?
-
-      keg = Keg.new(keg_directory)
-      return if ref != keg.name
-      return unless (keg_formula = keg_directory/".brew/#{keg.name}.rb").file?
-
-      new(keg.name, keg_formula, tap: keg.tab.tap)
-    end
-  end
-
-  # Loads a formula from a cached formula file.
-  class FromCacheLoader < FormulaLoader
-    sig {
-      params(ref: T.any(String, Pathname, URI::Generic), from: T.nilable(Symbol), warn: T::Boolean)
-        .returns(T.nilable(T.attached_class))
-    }
-    def self.try_new(ref, from: nil, warn: false)
-      ref = ref.to_s
-
-      return unless (cached_formula = HOMEBREW_CACHE_FORMULA/"#{ref}.rb").file?
-
-      new(ref, cached_formula)
+    T::Sig::WithoutRuntime.sig { params(_ref: String, from: T.nilable(Symbol), warn: T::Boolean).returns(NilClass) }
+    def self.try_new(_ref, from: nil, warn: false)
+      Formulary.odeprecated "Formulary::FromKegLoader.try_new", "Formulary.from_keg"
+      nil
     end
   end
 
   # Pseudo-loader which will raise a {FormulaUnavailableError} when trying to load the corresponding formula.
   class NullLoader < FormulaLoader
-    sig {
-      params(ref: T.any(String, Pathname, URI::Generic), from: T.nilable(Symbol), warn: T::Boolean)
-        .returns(T.nilable(T.attached_class))
-    }
-    def self.try_new(ref, from: nil, warn: false)
-      return if ref.is_a?(URI::Generic)
-
-      new(ref)
+    T::Sig::WithoutRuntime.sig { params(_ref: String, from: T.nilable(Symbol), warn: T::Boolean).returns(NilClass) }
+    def self.try_new(_ref, from: nil, warn: false)
+      Formulary.odeprecated "Formulary::NullLoader.try_new", "Formulary::NullLoader.new"
+      nil
     end
 
     sig { params(ref: T.any(String, Pathname)).void }
@@ -936,6 +642,37 @@ module Formulary
       ).returns(Formula)
     }
     def get_formula(_spec, alias_path: nil, force_bottle: false, flags: [], ignore_errors: false)
+      raise FormulaUnavailableError, name
+    end
+  end
+
+  # Deprecated entry points. They never discover or evaluate source files.
+  class FromURILoader
+    T::Sig::WithoutRuntime.sig { params(_ref: String, from: T.nilable(Symbol), warn: T::Boolean).returns(NilClass) }
+    def self.try_new(_ref, from: nil, warn: false)
+      Formulary.odeprecated "Formulary::FromURILoader.try_new", "Formulary.from_path for internal source loading"
+      nil
+    end
+
+    T::Sig::WithoutRuntime.sig { params(url: String, from: T.nilable(Symbol)).void }
+    def initialize(url, from: nil)
+      Formulary.odeprecated "Formulary::FromURILoader.new", "Formulary.from_path for internal source loading"
+      raise FormulaUnavailableError, url
+    end
+  end
+
+  class FromCacheLoader
+    T::Sig::WithoutRuntime.sig { params(_ref: String, from: T.nilable(Symbol), warn: T::Boolean).returns(NilClass) }
+    def self.try_new(_ref, from: nil, warn: false)
+      Formulary.odeprecated "Formulary::FromCacheLoader.try_new", "Formulary.from_path for internal source loading"
+      nil
+    end
+
+    T::Sig::WithoutRuntime.sig {
+      params(name: String, _path: Pathname, alias_path: T.nilable(T.any(String, Pathname)), tap: T.nilable(Tap)).void
+    }
+    def initialize(name, _path, alias_path: nil, tap: nil)
+      Formulary.odeprecated "Formulary::FromCacheLoader.new", "Formulary.from_path for internal source loading"
       raise FormulaUnavailableError, name
     end
   end
@@ -963,10 +700,10 @@ module Formulary
   # Load a formula from the API.
   class FromAPILoader < FormulaLoader
     sig {
-      params(ref: T.any(String, Pathname, URI::Generic), from: T.nilable(Symbol), warn: T::Boolean)
+      params(ref: String, warn: T::Boolean)
         .returns(T.nilable(T.attached_class))
     }
-    def self.try_new(ref, from: nil, warn: false)
+    def self.try_new(ref, warn: false)
       return if Homebrew::EnvConfig.no_install_from_api?
       return unless ref.is_a?(String)
       return unless (name = ref[HOMEBREW_DEFAULT_TAP_FORMULA_REGEX, :name])
@@ -1031,21 +768,12 @@ module Formulary
     end
   end
 
-  # Return a {Formula} instance for the given reference.
-  # `ref` is a string containing:
-  #
-  # * a formula name
-  # * a formula pathname
-  # * a formula URL
-  # * a local bottle reference
-  #
-  # @api internal
-  sig {
+  # Look up a formula by name, without interpreting paths, bottles or source.
+  T::Sig::WithoutRuntime.sig {
     params(
-      ref:           T.any(Pathname, String),
+      ref:           String,
       spec:          Symbol,
       alias_path:    T.nilable(T.any(Pathname, String)),
-      from:          T.nilable(Symbol),
       warn:          T::Boolean,
       force_bottle:  T::Boolean,
       flags:         T::Array[String],
@@ -1056,16 +784,17 @@ module Formulary
     ref,
     spec = :stable,
     alias_path: nil,
-    from: nil,
     warn: false,
     force_bottle: false,
     flags: [],
     ignore_errors: false
   )
-    cache_key = "#{ref}-#{spec}-#{alias_path}-#{from}"
-    return factory_cache.fetch(cache_key) if factory_cached? && factory_cache.key?(cache_key)
+    cache_key = "name:#{ref}-#{spec}-#{alias_path}"
+    if factory_cached? && factory_cache.key?(cache_key) && Utils::Path.valid_package_name?(ref)
+      return factory_cache.fetch(cache_key)
+    end
 
-    loader = loader_for(ref, from:, warn:)
+    loader = loader_for(ref, warn:)
     formula = loader.get_formula(spec, alias_path:, force_bottle:, flags:, ignore_errors:)
 
     factory_cache[cache_key] ||= formula if factory_cached?
@@ -1136,7 +865,7 @@ module Formulary
     if keg
       from_keg(keg, spec, alias_path:, force_bottle:, flags:, from_cache:)
     else
-      factory(rack.basename.to_s, spec || :stable, alias_path:, from: from_cache ? :cleanup : :rack,
+      factory(rack.basename.to_s, spec || :stable, alias_path:,
               warn: false, force_bottle:, flags:)
     end
   end
@@ -1175,17 +904,22 @@ module Formulary
     spec ||= tab.spec
 
     formula_name = keg.rack.basename.to_s
-    from = from_cache ? :cleanup : :keg
 
-    f = if tap.nil?
-      factory(formula_name, spec, alias_path:, from:, warn: false, force_bottle:, flags:)
-    else
-      begin
-        factory("#{tap}/#{formula_name}", spec, alias_path:, from:, warn: false, force_bottle:, flags:)
-      rescue FormulaUnavailableError
-        # formula may be migrated to different tap. Try to search in core and all taps.
-        factory(formula_name, spec, alias_path:, from:, warn: false, force_bottle:, flags:)
+    f = begin
+      if tap.nil?
+        factory(formula_name, spec, alias_path:, warn: false, force_bottle:, flags:)
+      else
+        begin
+          factory("#{tap}/#{formula_name}", spec, alias_path:, warn: false, force_bottle:, flags:)
+        rescue FormulaUnavailableError
+          # formula may be migrated to different tap. Try to search in core and all taps.
+          factory(formula_name, spec, alias_path:, warn: false, force_bottle:, flags:)
+        end
       end
+    rescue FormulaUnavailableError
+      raise if from_cache
+
+      from_path(keg/".brew/#{keg.name}.rb", spec, alias_path:, force_bottle:, flags:)
     end
     f.build = tab
     T.cast(f.build, Tab).used_options = Tab.remap_deprecated_options(f.deprecated_options, tab.used_options).as_flags
@@ -1193,8 +927,9 @@ module Formulary
     f
   end
 
+  # @api private
   # Return a {Formula} instance directly from contents.
-  sig {
+  T::Sig::WithoutRuntime.sig {
     params(
       name:          String,
       path:          Pathname,
@@ -1336,26 +1071,19 @@ module Formulary
     [name, tap, type, alias_name]
   end
 
-  sig { params(ref: T.any(String, Pathname), from: T.nilable(Symbol), warn: T::Boolean).returns(FormulaLoader) }
-  def self.loader_for(ref, from: nil, warn: true)
-    loader_classes = [
-      FromBottleLoader,
-      FromURILoader,
-      FromAPILoader,
-      FromTapLoader,
-      FromPathLoader,
-      FromNameLoader,
-      FromKegLoader,
-    ]
-    loader_classes -= [FromBottleLoader, FromURILoader, FromPathLoader] if from == :cleanup
-    loader_classes.each do |loader_class|
-      if (loader = loader_class.try_new(ref, from:, warn:))
-        $stderr.puts "#{$PROGRAM_NAME} (#{loader_class}): loading #{ref}" if verbose? && debug?
-        return loader
-      end
+  T::Sig::WithoutRuntime.sig { params(ref: String, warn: T::Boolean).returns(FormulaLoader) }
+  def self.loader_for(ref, warn: true)
+    unless Utils::Path.valid_package_name?(ref)
+      opoo "Loading formulae from paths or URLs is not supported; use a formula name." if warn
+      return NullLoader.new(ref.to_s)
     end
 
-    NullLoader.new(ref)
+    loader = FromAPILoader.try_new(ref, warn:) ||
+             FromTapLoader.try_new(ref, warn:) ||
+             FromNameLoader.try_new(ref, warn:) ||
+             NullLoader.new(ref)
+    $stderr.puts "#{$PROGRAM_NAME} (#{loader.class}): loading #{ref}" if verbose? && debug?
+    loader
   end
 
   sig { params(name: String).returns(Pathname) }

@@ -85,7 +85,8 @@ require "time"
 #   end
 # end
 # ```
-class Formula
+# The public formula DSL and lifecycle hooks share one subclass contract.
+class Formula # rubocop:disable Metrics/ClassLength
   include FileUtils
   include Utils::Shebang
   include Utils::Shell
@@ -2864,7 +2865,7 @@ class Formula
     T.cast(@spell_checker.correct(name), T::Array[String])
   end
 
-  sig { params(name: T.any(Pathname, String)).returns(Formula) }
+  T::Sig::WithoutRuntime.sig { params(name: String).returns(Formula) }
   def self.[](name)
     Formulary.factory(name)
   end
@@ -3001,26 +3002,34 @@ class Formula
   end
 
   # Returns a list of {Dependency} objects that are required at runtime.
+  # When `stop_at_untrusted` is true, untrusted dependencies are kept without
+  # expanding their own dependencies.
   #
   # @api internal
-  sig { params(read_from_tab: T::Boolean, undeclared: T::Boolean).returns(T::Array[Dependency]) }
-  def runtime_dependencies(read_from_tab: true, undeclared: true)
+  sig {
+    params(read_from_tab: T::Boolean, undeclared: T::Boolean, keg: T.nilable(Keg),
+           stop_at_untrusted: T::Boolean)
+      .returns(T::Array[Dependency])
+  }
+  def runtime_dependencies(read_from_tab: true, undeclared: true, keg: nil, stop_at_untrusted: false)
+    keg ||= any_installed_keg if read_from_tab && undeclared
     cache_key = "#{full_name}-#{read_from_tab}-#{undeclared}"
+    cache_key += "-#{keg}" if keg
+    cache_key += "-#{stop_at_untrusted}"
 
     Formula.cache[:runtime_dependencies] ||= {}
     Formula.cache[:runtime_dependencies][cache_key] ||= begin
-      deps = if read_from_tab && undeclared &&
-                (tab_deps = any_installed_keg&.runtime_dependencies)
-        tab_deps.filter_map do |d|
-          full_name = d["full_name"]
-          next unless full_name
-
-          Dependency.new full_name
+      deps = if read_from_tab && undeclared && keg && (tab_deps = keg.runtime_dependencies)
+        tab_deps.filter_map do |dependency|
+          full_name = dependency["full_name"]
+          Dependency.new(full_name) if full_name
         end
       end
       begin
-        deps ||= declared_runtime_dependencies unless undeclared
-        deps ||= (declared_runtime_dependencies | undeclared_runtime_dependencies)
+        if deps.nil?
+          deps = declared_runtime_dependencies(stop_at_untrusted:)
+          deps |= undeclared_runtime_dependencies(keg:, stop_at_untrusted:) if undeclared
+        end
       rescue FormulaUnavailableError
         onoe "Could not get runtime dependencies from #{path}!"
         deps ||= []
@@ -3030,17 +3039,27 @@ class Formula
   end
 
   # Returns a list of {Formula} objects that are required at runtime.
-  sig { params(read_from_tab: T::Boolean, undeclared: T::Boolean).returns(T::Array[Formula]) }
-  def runtime_formula_dependencies(read_from_tab: true, undeclared: true)
-    cache_key = "#{full_name}-#{read_from_tab}-#{undeclared}"
+  sig {
+    params(read_from_tab: T::Boolean, undeclared: T::Boolean, stop_at_untrusted: T::Boolean)
+      .returns(T::Array[Formula])
+  }
+  def runtime_formula_dependencies(read_from_tab: true, undeclared: true, stop_at_untrusted: false)
+    cache_key = "#{full_name}-#{read_from_tab}-#{undeclared}-#{stop_at_untrusted}"
 
     Formula.cache[:runtime_formula_dependencies] ||= {}
     Formula.cache[:runtime_formula_dependencies][cache_key] ||= runtime_dependencies(
       read_from_tab:,
       undeclared:,
+      stop_at_untrusted:,
     ).filter_map do |d|
+      next if stop_at_untrusted && d.untrusted?
+
       d.to_formula
     rescue FormulaUnavailableError
+      nil
+    rescue Homebrew::UntrustedTapError
+      raise unless stop_at_untrusted
+
       nil
     end
   end
@@ -3080,28 +3099,28 @@ class Formula
   end
 
   # Returns a list of formulae depended on by this formula that aren't
-  # installed. Only trusts tab data for dependency information; when the tab
-  # has no runtime dependency data (nil or empty), returns empty rather
-  # than falling back to formula definitions.
-  # This prevents stale or missing tab data from incorrectly blocking
-  # uninstalls.
+  # installed. Trusts a tab's dependency list, so a stale list doesn't
+  # incorrectly block uninstalls. A tab with no list at all says nothing about
+  # dependencies, so that falls back to formula definitions, like autoremove.
   sig { params(hide: T::Array[String]).returns(T::Array[Dependency]) }
   def missing_dependencies(hide: [])
-    tab_deps = any_installed_keg&.runtime_dependencies
-    return [] if tab_deps.blank?
+    return [] unless any_installed_keg
 
-    tab_deps.filter_map do |d|
-      full_name = d["full_name"]
-      next if full_name.blank?
+    runtime_dependencies(stop_at_untrusted: true).filter_map do |dep|
+      # Use names and loader metadata to check the cellar without loading formulae.
+      dependency_names = [Utils.name_from_full_name(dep.name)]
+      if dep.untrusted?
+        dependency_names.concat(dep.formula_loaders.map { |loader| Utils.name_from_full_name(loader.name) })
+      end
+      dependency_names.uniq!
 
-      # Use base name to check the cellar directly, avoiding Formulary.resolve.
-      # A dep is "missing" if it's in the hide list (pretend uninstalled) or
-      # genuinely not installed in the cellar.
-      base_name = Utils.name_from_full_name(full_name)
-      next if hide.exclude?(base_name) && ((HOMEBREW_CELLAR/base_name).directory? ||
-                                           (HOMEBREW_PREFIX/"opt"/base_name).directory?)
+      hidden = dependency_names.any? { |name| hide.include?(name) }
+      installed = dependency_names.any? do |name|
+        (HOMEBREW_CELLAR/name).directory? || (HOMEBREW_PREFIX/"opt"/name).directory?
+      end
+      next if !hidden && installed
 
-      Dependency.new(full_name)
+      dep
     end
   end
 
@@ -3115,7 +3134,7 @@ class Formula
 
   sig { returns(T.nilable(Checksum)) }
   def ruby_source_checksum
-    Checksum.new(Digest::SHA256.file(path).hexdigest) if path.exist?
+    Checksum.new(Digest::SHA256.hexdigest(Formulary.formula_contents(path))) if path.exist?
   end
 
   # API generation requires every patch checksum; other metadata consumers can omit unreadable patches.
@@ -3251,8 +3270,8 @@ class Formula
     hsh
   end
 
-  sig { returns(T::Hash[String, T.untyped]) }
-  def to_hash_with_variations
+  sig { params(include_compiler_variations: T::Boolean).returns(T::Hash[String, T.untyped]) }
+  def to_hash_with_variations(include_compiler_variations: false)
     if loaded_from_internal_api?
       raise UsageError, "Cannot call #to_hash_with_variations on formulae loaded from the internal API"
     end
@@ -3268,8 +3287,10 @@ class Formula
 
     variations = {}
 
-    if path.exist? && on_system_blocks_exist?
-      formula_contents = path.read
+    formula_contents = if path.exist? && (on_system_blocks_exist? || include_compiler_variations)
+      Formulary.formula_contents(path)
+    end
+    if formula_contents && (on_system_blocks_exist? || formula_contents.include?("clang_build_version"))
       OnSystem::VALID_OS_ARCH_TAGS.each do |bottle_tag|
         Homebrew::SimulateSystem.with_tag(bottle_tag) do
           variations_namespace = Formulary.class_s("Variations#{bottle_tag.to_sym.capitalize}")
@@ -3304,6 +3325,9 @@ class Formula
 
     hash["rebuild"] = bottle_spec.rebuild
     hash["root_url"] = bottle_spec.root_url
+    if (manifest_sha256 = bottle_spec.manifest_sha256)
+      hash["manifest_sha256"] = manifest_sha256
+    end
     hash["files"] = {}
 
     bottle_spec.collector.each_tag do |tag|
@@ -3617,22 +3641,29 @@ class Formula
   end
 
   # Returns a list of {Dependency} objects that are declared in the formula.
-  sig { returns(T::Array[Dependency]) }
-  def declared_runtime_dependencies
+  sig { params(stop_at_untrusted: T::Boolean).returns(T::Array[Dependency]) }
+  def declared_runtime_dependencies(stop_at_untrusted: false)
     cache_key = "Formula#declared_runtime_dependencies"
+    cache_key += "-stop-at-untrusted" if stop_at_untrusted
     if build.any_args_or_options?
       cache_key += "-#{full_name}"
       cache_timestamp = Time.now
     end
     Dependency.expand(self, cache_key:, cache_timestamp:) do |_, dependency|
       next Dependable::PRUNE if dependency.build?
-      next if dependency.required?
 
-      if build.any_args_or_options?
-        next Dependable::PRUNE if build.without?(dependency)
-      elsif !dependency.recommended?
-        next Dependable::PRUNE
+      unless dependency.required?
+        if build.any_args_or_options?
+          next Dependable::PRUNE if build.without?(dependency)
+        elsif !dependency.recommended?
+          next Dependable::PRUNE
+        end
       end
+
+      next unless stop_at_untrusted
+      next unless dependency.untrusted?
+
+      Dependable::KEEP_BUT_PRUNE_RECURSIVE_DEPS
     end
   ensure
     Dependency.delete_timestamped_cache_entry(cache_key, cache_timestamp) if build.any_args_or_options?
@@ -3640,14 +3671,16 @@ class Formula
 
   # Returns a list of {Dependency} objects that are not declared in the formula
   # but the formula links to.
-  sig { returns(T::Array[Dependency]) }
-  def undeclared_runtime_dependencies
-    keg = any_installed_keg
+  sig {
+    params(keg: T.nilable(Keg), stop_at_untrusted: T::Boolean).returns(T::Array[Dependency])
+  }
+  def undeclared_runtime_dependencies(keg: nil, stop_at_untrusted: false)
+    keg ||= any_installed_keg
     return [] unless keg
 
     CacheStoreDatabase.use(:linkage) do |db|
       typed_db = T.cast(db, CacheStoreDatabase[String, T::Hash[T.any(String, Symbol), T.anything]])
-      linkage_checker = LinkageChecker.new(keg, self, cache_db: typed_db)
+      linkage_checker = LinkageChecker.new(keg, self, cache_db: typed_db, stop_at_untrusted:)
       linkage_checker.undeclared_deps.map { |n| Dependency.new(n) }
     end
   end
@@ -3941,25 +3974,23 @@ class Formula
   def common_sandbox_env(home)
     env = Homebrew::PackageManagerCache.env
     env.merge(
-      _JAVA_OPTIONS:           [env[:_JAVA_OPTIONS], "-Djava.io.tmpdir=#{HOMEBREW_TEMP}"].compact.join(" "),
-      HOME:                    home.to_s,
-      TMPDIR:                  HOMEBREW_TEMP.to_s,
-      TEMP:                    HOMEBREW_TEMP.to_s,
-      TMP:                     HOMEBREW_TEMP.to_s,
-      GIT_CONFIG_GLOBAL:       Utils::Git.no_global_config_file,
-      GIT_TERMINAL_PROMPT:     "0",
-      GOENV:                   "off",
-      # TODO: Enable when `min-publish-age` stabilises in Cargo 1.100,
-      # expected with Rust 1.100 on 2026-11-12.
-      # https://github.com/rust-lang/cargo/pull/17335
-      # CARGO_REGISTRY_GLOBAL_MIN_PUBLISH_AGE: Utils.pluralize("day", Homebrew::RELEASE_COOLDOWN_DAYS,
-      #                                                        include_count: true),
-      BUNDLE_COOLDOWN:         Homebrew::RELEASE_COOLDOWN_DAYS.to_s,
-      PIP_CONFIG_FILE:         File::NULL,
-      NPM_CONFIG_USERCONFIG:   File::NULL,
-      CURL_HOME:               ENV.fetch("CURL_HOME") { home.to_s },
-      PYTHONDONTWRITEBYTECODE: "1",
-      XDG_CONFIG_HOME:         "#{home}/.config",
+      _JAVA_OPTIONS:                         [env[:_JAVA_OPTIONS],
+                                              "-Djava.io.tmpdir=#{HOMEBREW_TEMP}"].compact.join(" "),
+      HOME:                                  home.to_s,
+      TMPDIR:                                HOMEBREW_TEMP.to_s,
+      TEMP:                                  HOMEBREW_TEMP.to_s,
+      TMP:                                   HOMEBREW_TEMP.to_s,
+      GIT_CONFIG_GLOBAL:                     Utils::Git.no_global_config_file,
+      GIT_TERMINAL_PROMPT:                   "0",
+      GOENV:                                 "off",
+      CARGO_REGISTRY_GLOBAL_MIN_PUBLISH_AGE: Utils.pluralize("day", Homebrew::RELEASE_COOLDOWN_DAYS,
+                                                             include_count: true),
+      BUNDLE_COOLDOWN:                       Homebrew::RELEASE_COOLDOWN_DAYS.to_s,
+      PIP_CONFIG_FILE:                       File::NULL,
+      NPM_CONFIG_USERCONFIG:                 File::NULL,
+      CURL_HOME:                             ENV.fetch("CURL_HOME") { home.to_s },
+      PYTHONDONTWRITEBYTECODE:               "1",
+      XDG_CONFIG_HOME:                       "#{home}/.config",
     )
   end
 

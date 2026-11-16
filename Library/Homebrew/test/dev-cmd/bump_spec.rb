@@ -593,6 +593,14 @@ RSpec.describe Homebrew::DevCmd::Bump do
                                              ))
     end
 
+    it "reuses the loaded cask source when checking platform versions" do
+      cask = c_per_os
+      allow(bump).to receive(:livecheck_result).and_return([Version.new("2.0"), nil])
+      expect(Cask::CaskLoader).not_to receive(:from_path)
+
+      bump.retrieve_versions_by_arch(formula_or_cask: cask, repositories: [])
+    end
+
     it "does not emit a Linux bump when Linux livecheck returns no version" do
       allow(bump).to receive(:livecheck_result) do
         if Homebrew::SimulateSystem.simulating_or_running_on_linux?
@@ -710,6 +718,27 @@ RSpec.describe Homebrew::DevCmd::Bump do
       )
       expect(version_info.cooldown_skipped_versions).to eq({ arm:   Version.new("1.2.5"),
                                                              intel: Version.new("1.2.4") })
+    end
+
+    it "collects resource versions when the new version is higher" do
+      allow(bump).to receive(:livecheck_result).and_return([Version.new("1.2.4"), nil])
+      expect(bump).to receive(:collect_resource_versions).with(f_basic, "1.2.4").and_return([])
+
+      bump.retrieve_versions_by_arch(formula_or_cask: f_basic, repositories: [])
+    end
+
+    it "does not collect resource versions when the new version is equal" do
+      allow(bump).to receive(:livecheck_result).and_return([Version.new("1.2.3"), nil])
+      expect(bump).not_to receive(:collect_resource_versions)
+
+      bump.retrieve_versions_by_arch(formula_or_cask: f_basic, repositories: [])
+    end
+
+    it "does not collect resource versions when the new version is lower" do
+      allow(bump).to receive(:livecheck_result).and_return([Version.new("1.2.2"), nil])
+      expect(bump).not_to receive(:collect_resource_versions)
+
+      bump.retrieve_versions_by_arch(formula_or_cask: f_basic, repositories: [])
     end
   end
 

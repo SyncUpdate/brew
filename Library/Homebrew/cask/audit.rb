@@ -23,7 +23,8 @@ require "utils/path"
 
 module Cask
   # Audit a cask for various problems.
-  class Audit
+  # Audit methods share cask state and form the dynamically discovered check catalogue.
+  class Audit # rubocop:disable Metrics/ClassLength
     include SystemCommand::Mixin
     include ::Utils::Curl
     include ::Utils::Output::Mixin
@@ -570,11 +571,12 @@ module Cask
 
     sig { void }
     def audit_token_conflicts
-      Homebrew::API.with_no_api_env do
+      return unless strict?
+
+      Homebrew::API.with_no_api_env_if_needed(core_tap.installed?) do
         return unless core_formula_names.include?(cask.token)
 
-        add_error("cask token conflicts with an existing homebrew/core formula: #{Formatter.url(core_formula_url)}",
-                  strict_only: true)
+        add_error "cask token conflicts with an existing homebrew/core formula: #{Formatter.url(core_formula_url)}"
       end
     end
 

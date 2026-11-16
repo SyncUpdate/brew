@@ -364,22 +364,18 @@ RSpec.describe Cask::Upgrade, :cask do
       it 'would include the Casks with "auto_updates true" or "version latest"' do
         expect(described_class).not_to receive(:upgrade_cask)
 
-        expect(local_caffeine).to be_installed
+        expect(local_caffeine).to have_attributes(installed?: true, installed_version: "1.2.2")
         expect(local_caffeine_path).to be_a_directory
-        expect(local_caffeine.installed_version).to eq "1.2.2"
 
-        expect(auto_updates).to be_installed
+        expect(auto_updates).to have_attributes(installed?: true, installed_version: "2.57")
         expect(auto_updates_path).to be_a_directory
-        expect(auto_updates.installed_version).to eq "2.57"
 
-        expect(local_transmission).to be_installed
+        expect(local_transmission).to have_attributes(installed?: true, installed_version: "2.60")
         expect(local_transmission_path).to be_a_directory
-        expect(local_transmission.installed_version).to eq "2.60"
 
-        expect(renamed_app).to be_installed
+        expect(renamed_app).to have_attributes(installed?: true, installed_version: "1.0.0")
         expect(renamed_app_old_path).to be_a_directory
         expect(renamed_app_new_path).not_to be_a_directory
-        expect(renamed_app.installed_version).to eq "1.0.0"
 
         expect(version_latest).to be_installed
         # Change download sha so that :latest cask decides to update itself
@@ -388,22 +384,18 @@ RSpec.describe Cask::Upgrade, :cask do
 
         described_class.upgrade_casks!(greedy: true, dry_run: true, args:)
 
-        expect(local_caffeine).to be_installed
+        expect(local_caffeine).to have_attributes(installed?: true, installed_version: "1.2.2")
         expect(local_caffeine_path).to be_a_directory
-        expect(local_caffeine.installed_version).to eq "1.2.2"
 
-        expect(auto_updates).to be_installed
+        expect(auto_updates).to have_attributes(installed?: true, installed_version: "2.57")
         expect(auto_updates_path).to be_a_directory
-        expect(auto_updates.installed_version).to eq "2.57"
 
-        expect(local_transmission).to be_installed
+        expect(local_transmission).to have_attributes(installed?: true, installed_version: "2.60")
         expect(local_transmission_path).to be_a_directory
-        expect(local_transmission.installed_version).to eq "2.60"
 
-        expect(renamed_app).to be_installed
+        expect(renamed_app).to have_attributes(installed?: true, installed_version: "1.0.0")
         expect(renamed_app_old_path).to be_a_directory
         expect(renamed_app_new_path).not_to be_a_directory
-        expect(renamed_app.installed_version).to eq "1.0.0"
 
         expect(version_latest).to be_installed
         expect(version_latest.outdated_download_sha?).to be(true)
@@ -811,6 +803,37 @@ RSpec.describe Cask::Upgrade, :cask do
       expect do
         described_class.upgrade_casks!(newer_cask, args:)
       end.to change(newer_cask, :installed_version).from("1.2.3").to("1.2.4")
+    end
+  end
+
+  context "when reporting upgrade analytics" do
+    before do
+      Cask::Installer.new(Cask::CaskLoader.from_path(cask_path("outdated/local-caffeine"))).install
+      allow(CoreCaskTap.instance).to receive(:should_report_analytics?).and_return(true)
+    end
+
+    it "reports a successful upgrade as one cask install" do
+      expect(Utils::Analytics).to receive(:report_package_event)
+        .with(:cask_install, package_name: "local-caffeine", tap_name: "homebrew/cask", on_request: true).once
+
+      described_class.upgrade_casks!(local_caffeine, args:)
+    end
+
+    it "does not report upgrades from private taps" do
+      allow(CoreCaskTap.instance).to receive(:should_report_analytics?).and_return(false)
+
+      expect(Utils::Analytics).not_to receive(:report_package_event)
+
+      described_class.upgrade_casks!(local_caffeine, args:)
+    end
+
+    it "does not report failed upgrades" do
+      allow_any_instance_of(Cask::Installer).to receive(:finalize_upgrade)
+        .and_raise(Cask::CaskError, "finalize failed")
+
+      expect(Utils::Analytics).not_to receive(:report_package_event)
+
+      described_class.upgrade_casks!(local_caffeine, args:)
     end
   end
 

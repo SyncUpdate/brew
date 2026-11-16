@@ -88,12 +88,10 @@ module Readall
       next if valid == true || valid&.include?(bottle_tag)
 
       formula_name = file.basename(".rb").to_s
-      formula_contents = file.read.force_encoding("UTF-8")
-
-      readall_namespace = "ReadallNamespace"
-      readall_formula_class = Formulary.load_formula(formula_name, file, formula_contents, readall_namespace,
-                                                     flags: [], ignore_errors: false)
-      readall_formula = readall_formula_class.new(formula_name, file, :stable, tap:)
+      readall_formula = Formulary.load_formula(
+        formula_name, file, Formulary.formula_contents(file), "ReadallNamespace",
+        flags: [], ignore_errors: false
+      ).new(formula_name, file, :stable, tap:)
       readall_formula.to_hash
       cache[:valid_formulae][file] = if readall_formula.on_system_blocks_exist?
         [bottle_tag, *cache[:valid_formulae][file]]
@@ -109,6 +107,19 @@ module Readall
       success = false
     end
     success
+  end
+
+  # Load a cask file once per process, then re-evaluate it for the simulated
+  # system rather than re-reading it for every OS and architecture.
+  sig { params(file: Pathname).returns(Cask::Cask) }
+  def self.load_cask(file)
+    casks = cache[:casks] ||= {}
+    if (cask = casks[file])
+      ENV.clear_sensitive_environment_for_eval! { cask.refresh }
+      cask
+    else
+      casks[file] = Cask::CaskLoader.from_tap_path(file)
+    end
   end
 
   sig {
@@ -131,12 +142,12 @@ module Readall
     (files || tap.cask_files).each do |file|
       cask = if arch
         Homebrew::SimulateSystem.with(os: :macos, arch:) do
-          loaded_cask = Cask::CaskLoader.from_tap_path(file)
+          loaded_cask = load_cask(file)
           loaded_cask if loaded_cask.supports_linux?
         end
       else
         Homebrew::SimulateSystem.with(os: :macos) do
-          loaded_cask = Cask::CaskLoader.from_tap_path(file)
+          loaded_cask = load_cask(file)
           loaded_cask if loaded_cask.supports_linux?
         end
       end

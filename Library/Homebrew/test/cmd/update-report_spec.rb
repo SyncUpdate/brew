@@ -56,22 +56,16 @@ RSpec.describe Homebrew::Cmd::UpdateReport do
                                                      .with("https://github.com/new/homebrew-foo.git", quiet: true) do
       allow(tap).to receive(:repository_var_suffix).and_return("_NEW_HOMEBREW_FOO")
     end
-    allow(Homebrew::EnvConfig).to receive_messages(disable_load_formula?: true, no_install_from_api?: true)
     update_report = described_class.new(["--quiet"])
-    allow(update_report).to receive(:tap_or_untap_core_taps_if_necessary)
 
-    with_env(
-      HOMEBREW_REDIRECTED_REMOTES_FILE:        redirected_remotes_file.to_s,
-      HOMEBREW_UPDATE_BEFORE:                  "abc",
-      HOMEBREW_UPDATE_AFTER:                   "abc",
-      HOMEBREW_UPDATE_BEFORE_OLD_HOMEBREW_FOO: "123",
-      HOMEBREW_UPDATE_AFTER_OLD_HOMEBREW_FOO:  "456",
-    ) do
-      update_report.run
+    ENV["HOMEBREW_REDIRECTED_REMOTES_FILE"] = redirected_remotes_file.to_s
+    ENV["HOMEBREW_UPDATE_BEFORE_OLD_HOMEBREW_FOO"] = "123"
+    ENV["HOMEBREW_UPDATE_AFTER_OLD_HOMEBREW_FOO"] = "456"
 
-      expect(ENV.fetch("HOMEBREW_UPDATE_BEFORE_NEW_HOMEBREW_FOO")).to eq("123")
-      expect(ENV.fetch("HOMEBREW_UPDATE_AFTER_NEW_HOMEBREW_FOO")).to eq("456")
-    end
+    update_report.apply_redirected_remotes
+
+    expect(ENV.fetch("HOMEBREW_UPDATE_BEFORE_NEW_HOMEBREW_FOO")).to eq("123")
+    expect(ENV.fetch("HOMEBREW_UPDATE_AFTER_NEW_HOMEBREW_FOO")).to eq("456")
   end
 
   it "refuses an off-allowlist redirect and rolls the tap back to its pre-update revision" do
@@ -441,6 +435,74 @@ RSpec.describe Homebrew::Cmd::UpdateReport do
     ])
   end
 
+  it "skips Cask metadata backups from interrupted upgrades" do
+    caskroom = mktmpdir/"Caskroom"
+    caskfile = caskroom/"example/.metadata/2.0/20250101000000.000/Casks/example.json"
+    backup_caskfile = caskroom/"example/.metadata/1.0.upgrading/20240101000000.000/Casks/example.json"
+    caskfile.dirname.mkpath
+    caskfile.write('{"version":"2.0","name":"Example"}')
+    backup_caskfile.dirname.mkpath
+    backup_caskfile.write("{}")
+    (caskroom/"example/.metadata/INSTALL_RECEIPT.json").write JSON.pretty_generate({
+      "source"              => { "version" => "2.0" },
+      "uninstall_artifacts" => [{ "app" => ["Example.app"] }],
+    })
+    allow(Cask::Caskroom).to receive(:path).and_return(caskroom)
+
+    expect do
+      2.times { described_class.new([]).migrate_caskroom_caskfiles_to_json }
+    end.not_to output.to_stderr
+    expect([JSON.parse(caskfile.read), backup_caskfile.read]).to eq([{}, "{}"])
+  end
+
+  it "skips Cask metadata from older versions" do
+    caskroom = mktmpdir/"Caskroom"
+    caskfile = caskroom/"test-cask/.metadata/2.0/20250201000000.000/Casks/test-cask.rb"
+    old_caskfile = caskroom/"test-cask/.metadata/1.0/20250101000000.000/Casks/test-cask.json"
+    caskfile.dirname.mkpath
+    caskfile.write <<~RUBY
+      cask "test-cask" do
+        version "2.0"
+        app "Test.app"
+      end
+    RUBY
+    old_caskfile.dirname.mkpath
+    old_caskfile.write("{}")
+    (caskroom/"test-cask/.metadata/INSTALL_RECEIPT.json").write JSON.pretty_generate({
+      "source"              => { "version" => "2.0" },
+      "uninstall_artifacts" => [{ "app" => ["Test.app"] }],
+    })
+    allow(Cask::Caskroom).to receive(:path).and_return(caskroom)
+
+    expect { described_class.new(["--quiet"]).migrate_caskroom_caskfiles_to_json }.not_to output.to_stderr
+    expect([
+      caskfile.exist?,
+      JSON.parse(caskfile.sub_ext(".json").read),
+      old_caskfile.read,
+    ]).to eq([false, {}, "{}"])
+  end
+
+  it "migrates renamed Cask metadata without following old token symlinks" do
+    caskroom = mktmpdir/"Caskroom"
+    caskfile = caskroom/"new-cask/.metadata/2.0/20250101000000.000/Casks/new-cask.rb"
+    caskfile.dirname.mkpath
+    caskfile.write <<~RUBY
+      cask "new-cask" do
+        version "2.0"
+        app "New.app"
+      end
+    RUBY
+    (caskroom/"new-cask/.metadata/INSTALL_RECEIPT.json").write JSON.pretty_generate({
+      "source"              => { "version" => "2.0" },
+      "uninstall_artifacts" => [{ "app" => ["New.app"] }],
+    })
+    FileUtils.ln_s "new-cask", caskroom/"old-cask"
+    allow(Cask::Caskroom).to receive(:path).and_return(caskroom)
+
+    expect { described_class.new(["--quiet"]).migrate_caskroom_caskfiles_to_json }.not_to output.to_stderr
+    expect([caskfile.exist?, JSON.parse(caskfile.sub_ext(".json").read)]).to eq([false, {}])
+  end
+
   it "repairs migrated Cask metadata that differs" do
     caskroom = mktmpdir/"Caskroom"
     caskfile = caskroom/"mismatched/.metadata/1.0/20250101000000.000/Casks/mismatched.rb"
@@ -769,6 +831,157 @@ RSpec.describe Homebrew::Cmd::UpdateReport do
         expect(reporter).to receive(:system)
           .with(HOMEBREW_BREW_FILE.to_s, "install", "--overwrite", "homebrew/core/new-formula")
         reporter.migrate_tap_migration
+      end
+
+      context "when a cask moves to another cask tap" do
+        let(:new_tap) { CoreCaskTap.instance }
+        let(:migration_target) { new_tap.name }
+        let(:tabfile) { HOMEBREW_PREFIX/"Caskroom/old-cask/.metadata/INSTALL_RECEIPT.json" }
+
+        before do
+          (tap.path/"tap_migrations.json").write({ "old-cask" => migration_target }.to_json)
+          (new_tap.path/"Casks").mkpath
+          tabfile.dirname.mkpath
+          tab = Cask::Tab.empty
+          tab.tabfile = tabfile
+          tab.tap = tap
+          tab.write
+          allow(reporter).to receive(:report).and_return({ D: [], DC: ["foo/bar/old-cask"], T: [] })
+        end
+
+        it "updates the tap in the installed cask's receipt" do
+          expect(reporter).not_to receive(:system)
+          reporter.migrate_tap_migration
+
+          expect(JSON.parse(tabfile.read).dig("source", "tap")).to eq("homebrew/cask")
+        end
+
+        context "with a fully qualified migration target" do
+          let(:migration_target) { "homebrew/cask/old-cask" }
+
+          it "updates the tap in the installed cask's receipt" do
+            expect(reporter).not_to receive(:system)
+            reporter.migrate_tap_migration
+
+            expect(JSON.parse(tabfile.read).dig("source", "tap")).to eq("homebrew/cask")
+          end
+        end
+
+        it "skips casks installed from a different tap" do
+          tab = Cask::Tab.from_file(tabfile)
+          tab.tap = "other/tap"
+          tab.write
+
+          expect(reporter).not_to receive(:system)
+          reporter.migrate_tap_migration
+
+          expect(JSON.parse(tabfile.read).dig("source", "tap")).to eq("other/tap")
+        end
+
+        it "skips untrusted cask targets" do
+          allow(Homebrew::Trust).to receive(:trusted?).with(:cask, "homebrew/cask/old-cask").and_return(false)
+
+          expect(reporter).not_to receive(:system)
+          expect { reporter.migrate_tap_migration }
+            .to output(%r{brew trust --cask homebrew/cask/old-cask.*brew reinstall --cask homebrew/cask/old-cask}m)
+            .to_stderr
+          expect(JSON.parse(tabfile.read).dig("source", "tap")).to eq("foo/bar")
+        end
+
+        shared_context "with third-party cask tap fixtures" do
+          let(:new_tap) { Tap.fetch("baz", "qux") }
+
+          before do
+            (new_tap.path/"Casks/old-cask.rb").write ""
+            allow(Homebrew::Trust).to receive(:trusted?).with(:cask, "baz/qux/old-cask").and_return(true)
+          end
+
+          after { FileUtils.rm_r(new_tap.path.parent) }
+        end
+
+        context "with a third-party cask tap" do
+          include_context "with third-party cask tap fixtures"
+
+          it "updates the tap in the installed cask's receipt" do
+            expect(reporter).not_to receive(:system)
+            reporter.migrate_tap_migration
+
+            expect(JSON.parse(tabfile.read).dig("source", "tap")).to eq("baz/qux")
+          end
+        end
+
+        context "when a third-party cask is also renamed" do
+          include_context "with third-party cask tap fixtures"
+
+          let(:migration_target) { "baz/qux/new-cask" }
+
+          before do
+            (new_tap.path/"Casks/new-cask.rb").write <<~RUBY
+              cask "new-cask" do
+                version "1.0"
+                sha256 :no_check
+                url "https://example.com/new-cask.zip"
+                app "Example.app"
+              end
+            RUBY
+            caskfile = HOMEBREW_PREFIX/"Caskroom/old-cask/.metadata/1.0/20250101000000.000/Casks/old-cask.json"
+            caskfile.dirname.mkpath
+            caskfile.write('{"artifacts":[{"app":["Example.app"]}]}')
+            allow(Homebrew::Trust).to receive(:trusted?).with(:cask, migration_target).and_return(true)
+          end
+
+          it "follows the renamed cask after the source tap is removed" do
+            expect(reporter).not_to receive(:system)
+            reporter.migrate_tap_migration
+            FileUtils.rm_r(tap.path)
+
+            expect([
+              JSON.parse(tabfile.read).dig("source", "tap"),
+              (HOMEBREW_PREFIX/"Caskroom/old-cask").symlink?,
+              Cask::Caskroom.casks.map { |cask| [cask.full_name, cask.url&.to_s] },
+            ]).to eq(["baz/qux", true, [["baz/qux/new-cask", "https://example.com/new-cask.zip"]]])
+          end
+
+          it "reports a failed token migration and continues with later migrations" do
+            (new_tap.path/"Casks/another-cask.rb").write ""
+            another_tabfile = HOMEBREW_PREFIX/"Caskroom/another-cask/.metadata/INSTALL_RECEIPT.json"
+            another_tabfile.dirname.mkpath
+            another_tabfile.write(tabfile.read)
+            allow(tap).to receive(:tap_migrations)
+              .and_return("old-cask" => migration_target, "another-cask" => new_tap.name)
+            allow(reporter).to receive(:report)
+              .and_return({ D: [], DC: ["foo/bar/old-cask", "foo/bar/another-cask"], T: [] })
+            allow(Homebrew::Trust).to receive(:trusted?).with(:cask, "baz/qux/another-cask").and_return(true)
+            allow(FileUtils).to receive(:cp_r).and_raise(Errno::EACCES)
+
+            expect { reporter.migrate_tap_migration }.to output(/Permission denied/).to_stderr
+            expect([
+              JSON.parse(tabfile.read).dig("source", "tap"),
+              JSON.parse(another_tabfile.read).dig("source", "tap"),
+            ]).to eq(["foo/bar", "baz/qux"])
+          end
+
+          it "preserves a destination from another tap and recommends reinstalling" do
+            destination_tabfile = HOMEBREW_PREFIX/"Caskroom/new-cask/.metadata/INSTALL_RECEIPT.json"
+            destination_tabfile.dirname.mkpath
+            destination_tab = Cask::Tab.empty
+            destination_tab.tabfile = destination_tabfile
+            destination_tab.tap = "other/tap"
+            destination_tab.write
+            destination_caskfile = destination_tabfile.dirname/"1.0/20250101000000.000/Casks/new-cask.json"
+            destination_caskfile.dirname.mkpath
+            destination_caskfile.write("{}")
+            source_receipt = tabfile.read
+            destination_receipt = destination_tabfile.read
+
+            expect(Cask::Installer).not_to receive(:new)
+            expect do
+              reporter.migrate_tap_migration
+              hub.migrate_cask_renames
+            end.to output(%r{installed from another tap.*brew reinstall --cask baz/qux/new-cask}m).to_stderr
+            expect([tabfile.read, destination_tabfile.read]).to eq([source_receipt, destination_receipt])
+          end
+        end
       end
     end
 

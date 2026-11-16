@@ -26,7 +26,7 @@ module Homebrew
         max_time:        55,
         timeout:         60,
         retries:         0,
-      }.freeze, T::Hash[Symbol, T.untyped])
+      }.freeze, { connect_timeout: Integer, max_time: Integer, timeout: Integer, retries: Integer })
       MAX_CONSECUTIVE_GITHUB_API_ERRORS = 5
       MAX_GITHUB_API_RETRIES = 3
       PYPI_UNSTABLE_VERSION_REGEX = /^(?:\d+!)?\d+(?:\.\d+)*(?:a|b|rc)\d+|\.dev\d+$/i
@@ -255,9 +255,6 @@ module Homebrew
           [nil, arch, is_cask_with_blocks ? arch : :general]
         end
         if formula_or_cask.is_a?(Cask::Cask) && formula_or_cask.on_os_blocks_exist?
-          sourcefile_path = formula_or_cask.sourcefile_path
-          raise "unexpected nil sourcefile_path" unless sourcefile_path
-
           current_os = Homebrew::SimulateSystem.current_os
           macos = if MacOSVersion::SYMBOLS.include?(current_os)
             current_os
@@ -266,7 +263,7 @@ module Homebrew
           end
           systems = { macos:, linux: :linux }
           detected_versions = {}
-          loaded_cask = Cask::CaskLoader.from_path(sourcefile_path)
+          loaded_cask = formula_or_cask.refresh_copy
           detected_system_options = BumpVersionParser::VERSION_PLATFORMS.filter_map do |version_type, (system, arch)|
             os = systems.fetch(system)
             tag = Utils::Bottles::Tag.new(system: os, arch:)
@@ -292,8 +289,6 @@ module Homebrew
 
         system_options.each do |os, arch, version_key|
           SimulateSystem.with(os:, arch:) do
-            # We reload the formula/cask here to ensure we're getting the
-            # correct version for the current platform
             if formula_or_cask.is_a?(Formula)
               loaded_formula_or_cask = formula_or_cask
               stable = loaded_formula_or_cask.stable
@@ -301,10 +296,7 @@ module Homebrew
 
               current_version_value = stable.version
             else
-              sourcefile_path = formula_or_cask.sourcefile_path
-              raise "unexpected nil sourcefile_path" unless sourcefile_path
-
-              loaded_formula_or_cask = Cask::CaskLoader.from_path(sourcefile_path)
+              loaded_formula_or_cask = formula_or_cask.refresh_copy
               current_version_value = Version.new(loaded_formula_or_cask.version)
             end
 
@@ -343,13 +335,11 @@ module Homebrew
         # Collapse identical platform results to `general`
         # only when every platform returned a result.
         if platform_specific
-          new_version_values = new_versions.values.compact
-          if new_version_values.size == system_options.size && new_version_values.uniq.one?
-            new_versions = { general: new_version_values.first }
-          end
-          cooldown_skipped_version_values = cooldown_skipped_versions.values
-          if cooldown_skipped_version_values.size == system_options.size && cooldown_skipped_version_values.uniq.one?
-            cooldown_skipped_versions = { general: cooldown_skipped_version_values.first }
+          [new_versions, cooldown_skipped_versions].each do |versions|
+            values = versions.values.compact
+            next if values.size != system_options.size || !values.uniq.one?
+
+            versions.replace(general: values.first)
           end
         # Consolidate into a single general version when only one architecture
         # was simulated (e.g. `depends_on arch:` restricts to a single arch) or
@@ -361,15 +351,10 @@ module Homebrew
           new_versions = { general: new_versions[single_arch] }
           cooldown_skipped_versions = { general: cooldown_skipped_versions[single_arch] }.compact
         else
-          if current_versions[:arm].present? && current_versions[:arm] == current_versions[:intel]
-            current_versions = { general: current_versions[:arm] }
-          end
-          if new_versions[:arm].present? && new_versions[:arm] == new_versions[:intel]
-            new_versions = { general: new_versions[:arm] }
-          end
-          if cooldown_skipped_versions[:arm].present? &&
-             cooldown_skipped_versions[:arm] == cooldown_skipped_versions[:intel]
-            cooldown_skipped_versions = { general: cooldown_skipped_versions[:arm] }
+          [current_versions, new_versions, cooldown_skipped_versions].each do |versions|
+            next if versions[:arm].blank? || versions[:arm] != versions[:intel]
+
+            versions.replace(general: versions[:arm])
           end
         end
 
@@ -399,40 +384,30 @@ module Homebrew
                                   false }
         end
 
-        # Collect resource version info for formulae with resources that have explicit livecheck blocks
-        resource_versions = if formula_or_cask.is_a?(Formula) && new_version.general.is_a?(Version)
-          collect_resource_versions(formula_or_cask, new_version.general.to_s)
-        else
-          []
-        end
+        # Collect resource version info for formulae with resources that have
+        # explicit livecheck blocks, only when the formula has a newer version
+        resource_versions =
+          if formula_or_cask.is_a?(Formula) &&
+             (new_version_general = new_version.general).is_a?(Version) &&
+             (current_version_general = current_version.general) &&
+             new_version_general > current_version_general
+            collect_resource_versions(formula_or_cask, new_version_general.to_s)
+          else
+            []
+          end
 
         if !args.no_pull_requests? &&
            !newer_than_upstream.all? { |_k, v| v == true }
-          pull_request_version = nil
-          if (new_version_arm = new_version.arm) &&
-             !message?(new_version_arm) &&
-             (new_version_arm != current_version.arm)
-            # We use the ARM version for the pull request version even if there
-            # are multiple arch versions to be consistent with the behavior of
-            # bump-cask-pr.
-            pull_request_version = new_version_arm.to_s
-          elsif (new_version_intel = new_version.intel) &&
-                !message?(new_version_intel) &&
-                (new_version_intel != current_version.intel)
-            pull_request_version = new_version_intel.to_s
-          elsif (new_version_linux_arm = new_version.linux_arm) &&
-                !message?(new_version_linux_arm) &&
-                (new_version_linux_arm != current_version.linux_arm)
-            pull_request_version = new_version_linux_arm.to_s
-          elsif (new_version_linux_intel = new_version.linux_intel) &&
-                !message?(new_version_linux_intel) &&
-                (new_version_linux_intel != current_version.linux_intel)
-            pull_request_version = new_version_linux_intel.to_s
-          elsif (new_version_general = new_version.general) &&
-                !message?(new_version_general) &&
-                (new_version_general != current_version.general)
-            pull_request_version = new_version_general.to_s
-          end
+          # Prefer ARM for the pull request version, matching bump-cask-pr.
+          pull_request_version = [
+            [new_version.arm, current_version.arm],
+            [new_version.intel, current_version.intel],
+            [new_version.linux_arm, current_version.linux_arm],
+            [new_version.linux_intel, current_version.linux_intel],
+            [new_version.general, current_version.general],
+          ].find do |candidate, current|
+            candidate && !message?(candidate) && candidate != current
+          end&.first&.to_s
 
           if pull_request_version
             duplicate_pull_requests = retrieve_pull_requests(formula_or_cask, version: pull_request_version)

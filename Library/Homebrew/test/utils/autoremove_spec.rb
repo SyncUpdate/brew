@@ -157,6 +157,19 @@ RSpec.describe Utils::Autoremove do
           .to eq([formula_with_deps])
       end
     end
+
+    context "when a build dependency is in multiple taps" do
+      it "matches it by the names it resolves to" do
+        allow(tab_from_keg).to receive(:poured_from_bottle).and_return(false)
+        allow(formula_with_deps).to receive(:deps).and_return([Dependency.new("old-three", [:build])])
+        loader = Formulary::FormulaLoader.new("three", Pathname("three.rb"))
+        allow(Formulary).to receive(:factory).with("old-three", { warn: false })
+                                             .and_raise(TapFormulaAmbiguityError.new("old-three", [loader]))
+
+        expect(described_class.formulae_with_no_formula_dependents(formulae))
+          .to eq([formula_with_deps])
+      end
+    end
   end
 
   describe "::unused_formulae_with_no_formula_dependents" do
@@ -182,6 +195,14 @@ RSpec.describe Utils::Autoremove do
 
     specify "installed on request is null" do
       allow(tab_from_keg).to receive_messages(installed_on_request: false, installed_on_request_present?: false)
+
+      expect(described_class.unused_formulae_with_no_formula_dependents(formulae))
+        .to eq([])
+    end
+
+    specify "without an install receipt" do
+      formulae.each { |f| allow(f).to receive(:any_installed_keg).and_return(instance_double(Keg, tab: Tab.empty)) }
+      allow(Formulary).to receive(:factory).with("three", { warn: false }).and_return(formula_is_build_dep)
 
       expect(described_class.unused_formulae_with_no_formula_dependents(formulae))
         .to eq([])

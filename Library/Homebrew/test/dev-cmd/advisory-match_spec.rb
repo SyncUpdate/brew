@@ -42,6 +42,20 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
     cmd
   end
 
+  it "stops record emission when alias preparation fails" do
+    command = cmd_for("--no-history", "requests")
+    emitter = Homebrew::DevCmd::AdvisoryMatch::Emitter.new
+    allow(command).to receive(:text_mode?).and_return(false)
+    allow(emitter).to receive(:prepare_aliases).and_return(["Conflicting advisory aliases"])
+
+    expect do
+      command.emit_formula_records(instance_double(Homebrew::Vulns::Match), requests, [], emitter,
+                                   overrides: nil, latest_macos: :sequoia, rejected_candidates: Set.new,
+                                   prefiltered: [])
+    end.to output(/Conflicting advisory aliases/).to_stderr
+    expect(Homebrew).to have_failed
+  end
+
   def stub_osv_hit(cve, fixed:, aliases: [])
     allow(Homebrew::Vulns::OSV).to receive(:query_batch).and_return([[{ "id" => cve }], []])
     allow(Homebrew::Vulns::OSV).to receive(:vulnerability).with(cve).and_return(
@@ -1450,7 +1464,7 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
 
   it "reuses an independent current formula's hits without additional OSV queries" do
     stub_osv_hit("CVE-2024-1234", fixed: "2.28.1")
-    allow(requests.path).to receive(:read).and_return(<<~RUBY)
+    requests.path.write <<~RUBY
       class Requests < Formula
         url "https://files.pythonhosted.org/packages/aa/bb/cc/requests-2.31.0.tar.gz"
         head "https://github.com/psf/requests.git"
@@ -1468,7 +1482,7 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
 
   it "still stops at the first held platform when the current source is independent" do
     stub_osv_hit("CVE-2024-1234", fixed: "2.28.1")
-    allow(requests.path).to receive(:read).and_return("class Requests < Formula; end")
+    requests.path.write "class Requests < Formula; end"
     matcher = Homebrew::Vulns::Match.new
     allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
     expect(matcher).to receive(:reconcile_history).with(requests, anything, reuse_platforms: true).once
@@ -2751,7 +2765,7 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
     end
 
     it "fails when the rejection file is unreadable" do
-      allow(File).to receive(:readlines).with(rejected_path, chomp: true).and_raise(Errno::EACCES)
+      allow(File).to receive(:foreach).with(rejected_path, chomp: true).and_raise(Errno::EACCES)
       expect { command.run }.to raise_error(Errno::EACCES)
     end
 

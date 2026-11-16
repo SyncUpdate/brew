@@ -29,9 +29,8 @@ module Utils
 
       sig { returns(T::Array[T::Hash[String, T.nilable(T.any(String, Integer))]]) }
       def rows
-        if git("rev-parse", "--is-shallow-repository") == "true"
-          raise "Analytics require complete Git history for #{@name}"
-        end
+        raise "Analytics require complete Git history for #{@name}" if git("rev-parse",
+                                                                           "--is-shallow-repository") == "true"
 
         head = git("rev-parse", "HEAD")
         mailmap = git("ls-tree", "HEAD", "--", ".mailmap")
@@ -46,7 +45,7 @@ module Utils
         cache = HOMEBREW_CACHE/"analytics/git/#{@name}.json"
         data = cache.exist? ? JSON.parse(cache.read) : {}
         generator = Digest::SHA256.file(__FILE__).hexdigest
-        if data["head"] && data["mailmap"] == mailmap && data["generator"] == generator
+        if data["head"] && data.values_at("mailmap", "generator") == [mailmap, generator]
           begin
             git("merge-base", "--is-ancestor", data.fetch("head"), "HEAD")
           rescue ErrorDuringExecution
@@ -56,7 +55,7 @@ module Utils
           data = {}
         end
         year = Time.now.utc.year
-        if data["head"] == head && data["year"] == year && data["tags"] == tags
+        if data.values_at("head", "year", "tags") == [head, year, tags]
           @author_identities = data.fetch("authors")
           return data.fetch("rows")
         end
@@ -113,18 +112,20 @@ module Utils
           while (token = tokens.shift)
             if token == "year"
               period = Time.at(tokens.shift.to_i).utc.year.to_s
-            elsif token.lstrip.start_with?(":")
-              old_mode, new_mode, _, _, status = token.delete_prefix("\n").delete_prefix(":").split
-              old_path = tokens.shift.to_s
-              new_path = status&.start_with?("R") ? tokens.shift.to_s : old_path
-              before = %w[100644 100755].include?(old_mode) && old_path.match?(%r{\ACasks?/(?:[^/]+/)*[^/]+\.rb\z})
-              after = %w[100644 100755].include?(new_mode) && new_path.match?(%r{\ACasks?/(?:[^/]+/)*[^/]+\.rb\z})
-              next if before == after
-
-              metric = after ? "added" : "removed"
-              changes[period] ||= {}
-              changes[period][metric] = changes[period].fetch(metric, 0) + 1
+              next
             end
+            next unless token.lstrip.start_with?(":")
+
+            old_mode, new_mode, _, _, status = token.delete_prefix("\n").delete_prefix(":").split
+            old_path = tokens.shift.to_s
+            new_path = status&.start_with?("R") ? tokens.shift.to_s : old_path
+            before = %w[100644 100755].include?(old_mode) && old_path.match?(%r{\ACasks?/(?:[^/]+/)*[^/]+\.rb\z})
+            after = %w[100644 100755].include?(new_mode) && new_path.match?(%r{\ACasks?/(?:[^/]+/)*[^/]+\.rb\z})
+            next if before == after
+
+            metric = after ? "added" : "removed"
+            changes[period] ||= {}
+            changes[period][metric] = changes[period].fetch(metric, 0) + 1
           end
         end
 
@@ -185,18 +186,10 @@ module Utils
             "maintainers"          => maintainers[revision],
             "pull_requests_merged" => (period == "current") ? pull_requests.size : merged_years.fetch(period, 0),
             "added"                => if @name == "Homebrew/homebrew-cask"
-                                        if period == "current"
-                                          changes.values.sum { |counts| counts.fetch("added", 0) }
-                                        else
-                                          changes.fetch(period, {}).fetch("added", 0)
-                                        end
+                                        change_count(changes, period, "added")
             end,
             "removed"              => if @name == "Homebrew/homebrew-cask"
-                                        if period == "current"
-                                          changes.values.sum { |counts| counts.fetch("removed", 0) }
-                                        else
-                                          changes.fetch(period, {}).fetch("removed", 0)
-                                        end
+                                        change_count(changes, period, "removed")
             end,
             "formulae"             => formula_repository ? catalogue : nil,
             "casks"                => (@name == "Homebrew/homebrew-cask") ? catalogue : nil,
@@ -215,6 +208,16 @@ module Utils
                                            pull_requests:, rows: }))
         rows
       end
+
+      sig { params(changes: T::Hash[String, T::Hash[String, Integer]], period: String, metric: String).returns(Integer) }
+      def change_count(changes, period, metric)
+        if period == "current"
+          changes.values.sum { |counts| counts.fetch(metric, 0) }
+        else
+          changes.fetch(period, {}).fetch(metric, 0)
+        end
+      end
+      private :change_count
 
       sig { params(args: String).returns(String) }
       def git(*args)

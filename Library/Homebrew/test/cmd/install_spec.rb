@@ -3,6 +3,8 @@
 
 require "cmd/install"
 require "install"
+require "missing_formula"
+require "search"
 require "cask/installer"
 require "cask/upgrade"
 require "cmd/shared_examples/args_parse"
@@ -377,6 +379,25 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
     expect(Homebrew).to have_failed
   end
 
+  it "shuts down the download queue when enqueueing fails" do
+    cmd = described_class.new(["--yes", "testball"])
+    download_queue = instance_double(Homebrew::DownloadQueue, shutdown: nil)
+    allow(Homebrew::Install).to receive(:enqueue_formulae).and_raise("enqueue failed")
+
+    expect(download_queue).to receive(:shutdown)
+    expect do
+      cmd.fetch_installers([], [], [], [], [], download_queue:, installed_on_request: true)
+    end.to raise_error("enqueue failed")
+  end
+
+  it "does not search unrelated packages for a missing qualified name" do
+    cmd = described_class.new(["user/repo/missing"])
+    allow(Homebrew::MissingFormula).to receive(:reason).and_return(nil)
+    expect(Homebrew::Search).not_to receive(:search_names)
+
+    cmd.report_missing_package("user/repo/missing", FormulaOrCaskUnavailableError.new("user/repo/missing"))
+  end
+
   it "starts formula prelude fetches before dependant checks when not asking" do
     cmd = described_class.new(["--yes", "testball"])
     download_queue = instance_double(Homebrew::DownloadQueue, fetch: nil, shutdown: nil, failed_downloads: [])
@@ -469,10 +490,21 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
 
   it "names the cask that failed to install", :cask do
     cmd = described_class.new(["--yes", "local-caffeine"])
+    cask = Cask::CaskLoader.from_path(cask_path("local-caffeine"))
+    installer = instance_double(Cask::Installer, cask:)
+    allow(installer).to receive(:install).and_raise("uh-oh")
+
+    expect do
+      cmd.install_casks([cask], [], [], [installer], [], installed_on_request: true)
+    end.to output(/local-caffeine: uh-oh/).to_stderr
+  end
+
+  it "reports a failed cask prefetch only once", :cask do
+    cmd = described_class.new(["--yes", "--cask", "local-caffeine"])
     download_queue = instance_double(Homebrew::DownloadQueue, fetch: nil, shutdown: nil, failed_downloads: [])
     cask = Cask::CaskLoader.from_path(cask_path("local-caffeine"))
-    installer = instance_double(Cask::Installer, cask:, enqueue_downloads: nil,
-                                                  enqueue_dependency_downloads: nil)
+    installer = instance_double(Cask::Installer, cask:, enqueue_downloads: nil)
+    error = Cask::CaskError.new("local-caffeine: This cask does not run on macOS versions older than Tahoe.")
     dependants = Homebrew::Upgrade::Dependents.new(upgradeable: [], pinned: [], skipped: [])
 
     allow(Tap).to receive_messages(with_formula_name: nil, with_cask_token: nil)
@@ -480,7 +512,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
     allow(cmd.args.named).to receive(:to_formulae_and_casks).with(method: :bottle, warn: false).and_return([cask])
     allow(Cask::Upgrade).to receive(:outdated_casks).and_return([])
     allow(Cask::Installer).to receive(:new).and_return(installer)
-    allow(installer).to receive(:install).and_raise("uh-oh")
+    allow(installer).to receive(:enqueue_downloads).and_raise(error)
     allow(Homebrew::DownloadQueue).to receive(:new).and_return(download_queue)
     allow(Homebrew::Install).to receive(:perform_preinstall_checks_once)
     allow(Homebrew::Install).to receive(:check_cc_argv)
@@ -488,7 +520,9 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
     allow(Homebrew::Cleanup).to receive(:periodic_clean!)
     allow(Homebrew.messages).to receive(:display_messages)
 
-    expect { cmd.run }.to output(/local-caffeine: uh-oh/).to_stderr
+    expect { cmd.run }.to output(<<~EOS).to_stderr
+      Error: local-caffeine: This cask does not run on macOS versions older than Tahoe.
+    EOS
   end
 
   it "cleans an installed cask before displaying deferred caveats", :cask do

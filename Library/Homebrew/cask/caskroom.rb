@@ -233,15 +233,16 @@ module Cask
       Process.egid.to_s
     end
 
-    # Get all installed casks.
+    # Get installed casks, optionally limited to specific Caskroom tokens.
     #
     # A Caskroom directory for a cask that has been renamed but not yet migrated loads
     # as the cask it was renamed to, so deduplicate to avoid listing it twice.
     #
     # @api internal
-    sig { params(config: T.nilable(Config)).returns(T::Array[Cask]) }
-    def self.casks(config: nil)
-      return [] unless any_casks_installed?
+    sig { params(config: T.nilable(Config), tokens: T.nilable(T::Array[String])).returns(T::Array[Cask]) }
+    def self.casks(config: nil, tokens: nil)
+      tokens ||= self.tokens
+      return [] if tokens.empty?
 
       require "cask/cask_loader"
 
@@ -253,10 +254,18 @@ module Cask
           e.loaders.fetch(0).load(config:)
         end
       rescue Homebrew::UntrustedTapError
-        # If the tap is untrusted the only place we can load the cask from is the installed cask file, if it exists.
         begin
-          installed_path = Cask.new(token).installed_caskfile
-          CaskLoader.load_from_installed_caskfile(installed_path, config:, warn: false) if installed_path
+          installed_cask = Cask.new(token)
+          installed_path = installed_cask.installed_caskfile
+          next unless installed_path
+
+          if installed_path.extname == ".json"
+            CaskLoader.load_from_installed_caskfile(installed_path, config:, warn: false, api_fallback: false)
+          elsif (installed_version = installed_cask.installed_version)
+            Cask.new(token, tap: installed_cask.tab.tap, config:) do
+              version installed_version
+            end
+          end
         rescue
           nil
         end

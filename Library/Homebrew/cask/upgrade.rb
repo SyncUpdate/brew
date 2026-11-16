@@ -108,6 +108,8 @@ module Cask
       puts Formatter.version_changes(cask_upgrades).join("\n")
     end
 
+    # Keep upgrade flags and optional shared-download/summary accumulators explicit and typed.
+    # rubocop:disable Metrics/ParameterLists
     sig {
       params(
         casks:                      Cask,
@@ -305,6 +307,7 @@ module Cask
 
       !failed
     end
+    # rubocop:enable Metrics/ParameterLists
 
     sig {
       params(
@@ -520,6 +523,8 @@ module Cask
       tab = Tab.create(new_cask)
       tab.installed_on_request = old_tab.tabfile.nil? || old_tab.installed_on_request
       tab.write
+
+      new_cask_installer.report_analytics
 
       end_time = Time.now
       Homebrew.messages.package_installed(new_cask.token, end_time - start_time)

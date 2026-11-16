@@ -718,12 +718,7 @@ module Homebrew
 
           ignore_failures = !args.test_default_formula? && !bottled_on_current_version && !new_formula
 
-          deps = []
-          reqs = []
-
-          build_flag = if build_bottle?(formula, args:)
-            "--build-bottle"
-          else
+          unless build_bottle?(formula, args:)
             if GitHub::Actions.env_set?
               puts GitHub::Actions::Annotation.new(
                 :warning,
@@ -742,8 +737,7 @@ module Homebrew
           # Online checks are a bit flaky and less useful for PRs that modify multiple formulae.
           skip_online_checks = args.skip_online_checks? || (@testing_formulae_count > 5)
 
-          fetch_args = [formula_name, "--test"]
-          fetch_args << build_flag
+          fetch_args = [formula_name, "--test", "--build-bottle"]
           fetch_args << "--force" if cleanup?(args)
 
           audit_args = [formula_name]
@@ -772,8 +766,8 @@ module Homebrew
             return
           end
 
-          deps |= formula.deps.to_a.reject(&:optional?)
-          reqs |= formula.requirements.to_a.reject(&:optional?)
+          deps = formula.deps.to_a.reject(&:optional?).uniq
+          reqs = formula.requirements.to_a.reject(&:optional?).uniq
 
           install_curl_if_needed(formula)
           install_mercurial_if_needed(deps, reqs)
@@ -782,15 +776,10 @@ module Homebrew
 
           test "brew", "uninstall", "--formula", "--force", formula_name if formula.latest_version_installed?
 
-          install_args = ["--verbose", "--formula"]
-          install_args << build_flag
+          install_args = ["--verbose", "--formula", "--build-bottle"]
 
           # We can't verify attestations if we're building `gh`.
-          verify_attestations = if formula_name == "gh"
-            nil
-          else
-            ENV.fetch("HOMEBREW_VERIFY_ATTESTATIONS", nil)
-          end
+          verify_attestations = ENV.fetch("HOMEBREW_VERIFY_ATTESTATIONS", nil) if formula_name != "gh"
           # Don't care about e.g. bottle failures for dependencies.
           test "brew", "install", "--only-dependencies", *install_args, formula_name,
                env: { "HOMEBREW_DEVELOPER"           => nil,
@@ -827,24 +816,13 @@ module Homebrew
           test "brew", "style", "--formula", formula_name, report_analytics: true
           test "brew", "audit", "--formula", *audit_args, report_analytics: true unless formula.deprecated?
           unless install_step_passed
-            if ignore_failures
-              skipped formula_name, "install failed"
-            else
-              failed formula_name, "install failed"
-            end
+            failed(formula_name, "install failed", ignore_failures:)
 
             return
           end
 
           if formula_installed_from_bottle
-            moved_artifacts = bottle_glob(formula_name, artifact_cache, ".{json,tar.gz}").map(&:realpath)
-            Pathname.pwd.install moved_artifacts
-
-            moved_artifacts.each do |old_location|
-              new_location = old_location.basename.realpath
-              @bottle_checksums[new_location] = @bottle_checksums.fetch(old_location)
-              @bottle_checksums.delete(old_location)
-            end
+            relocate_bottle_artifacts(bottle_glob(formula_name, artifact_cache, ".{json,tar.gz}"), Pathname.pwd)
           else
             bottle_reinstall_formula(formula, new_formula, args:)
           end
@@ -885,30 +863,33 @@ module Homebrew
           # Move bottle and don't test dependents if the formula linkage or test failed.
           if failed_linkage_or_test_messages.present?
             if @bottle_filename && @bottle_json_filename
-              failed_dir = @bottle_filename.dirname/"failed"
-              moved_artifacts = [@bottle_filename, @bottle_json_filename].map(&:realpath)
-              failed_dir.install moved_artifacts
-
-              moved_artifacts.each do |old_location|
-                new_location = (failed_dir/old_location.basename).realpath
-                @bottle_checksums[new_location] = @bottle_checksums.fetch(old_location)
-                @bottle_checksums.delete(old_location)
-              end
+              relocate_bottle_artifacts([@bottle_filename, @bottle_json_filename], @bottle_filename.dirname/"failed")
             end
 
-            if ignore_failures
-              skipped formula_name, failed_linkage_or_test_messages.join(", ")
-            else
-              failed formula_name, failed_linkage_or_test_messages.join(", ")
-            end
+            failed(formula_name, failed_linkage_or_test_messages.join(", "), ignore_failures:)
           end
         ensure
           @tested_formulae_count += 1
           cleanup_bottle_etc_var(formula) if cleanup?(args)
 
+          # Keep tested formulae usable by subsequent tests and Homebrew itself.
+          if @unchanged_dependencies.present? && formula.latest_version_installed?
+            @unchanged_dependencies -= formula.runtime_formula_dependencies.map(&:full_name)
+          end
           if @unchanged_dependencies.present?
             test "brew", "uninstall", "--formulae", "--force", "--ignore-dependencies", *@unchanged_dependencies
           end
+        end
+      end
+
+      sig { params(artifacts: T::Array[Pathname], destination: Pathname).void }
+      def relocate_bottle_artifacts(artifacts, destination)
+        artifacts = artifacts.map(&:realpath)
+        destination.install artifacts
+        artifacts.each do |old_location|
+          new_location = (destination/old_location.basename).realpath
+          @bottle_checksums[new_location] = @bottle_checksums.fetch(old_location)
+          @bottle_checksums.delete(old_location)
         end
       end
 

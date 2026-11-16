@@ -5,26 +5,27 @@ require "cmd/fetch"
 require "cmd/shared_examples/args_parse"
 
 RSpec.describe Homebrew::Cmd::FetchCmd do
+  let(:foo) do
+    formula("foo") do
+      T.bind(self, T.class_of(Formula))
+      url "https://brew.sh/foo-1.0.tar.gz"
+
+      resource "build" do
+        url "https://brew.sh/build-1.0.tar.gz"
+      end
+
+      resource "fixture", :test do
+        url "https://brew.sh/fixture-1.0.tar.gz"
+      end
+    end
+  end
+
   it_behaves_like "parseable arguments"
 
   describe "--test" do
     let(:cmd) { described_class.new(["--test", "foo"]) }
     let(:download_queue) { instance_double(Homebrew::DownloadQueue, fetch: nil, shutdown: nil) }
     let(:downloads) { [] }
-    let(:foo) do
-      formula("foo") do
-        T.bind(self, T.class_of(Formula))
-        url "https://brew.sh/foo-1.0.tar.gz"
-
-        resource "build" do
-          url "https://brew.sh/build-1.0.tar.gz"
-        end
-
-        resource "fixture", :test do
-          url "https://brew.sh/fixture-1.0.tar.gz"
-        end
-      end
-    end
 
     before do
       allow(Homebrew::DownloadQueue).to receive(:new).and_return(download_queue)
@@ -48,7 +49,12 @@ RSpec.describe Homebrew::Cmd::FetchCmd do
     it "loads the formula source to find test resources when using the API" do
       ENV.delete("HOMEBREW_TEST_GENERIC_OS")
       allow(foo).to receive(:loaded_from_api?).and_return(true)
-      expect(Homebrew::API::Formula).to receive(:source_download_formula).with(foo).and_return(foo)
+      source_foo = formula("foo") do
+        T.bind(self, T.class_of(Formula))
+        url "https://brew.sh/foo-1.0.tar.gz"
+      end
+      allow(source_foo).to receive(:loaded_from_api?).and_return(false)
+      expect(Homebrew::API::Formula).to receive(:source_download_formula).with(foo).and_return(source_foo)
 
       cmd.run
     end
@@ -97,6 +103,25 @@ RSpec.describe Homebrew::Cmd::FetchCmd do
     expect(FormulaInstaller).not_to receive(:new)
 
     expect { cmd.run_fetch_hook(foo) }.not_to output.to_stderr
+  end
+
+  it "loads the formula source to enqueue its resources when using the API" do
+    ENV.delete("HOMEBREW_TEST_GENERIC_OS")
+    cmd = described_class.new(["--build-from-source", "foo"])
+    api_foo = formula("foo") do
+      T.bind(self, T.class_of(Formula))
+      url "https://brew.sh/foo-1.0.tar.gz"
+    end
+    allow(api_foo).to receive(:loaded_from_api?).and_return(true)
+    download_queue = instance_double(Homebrew::DownloadQueue, enqueue: nil, fetch: nil, shutdown: nil)
+    allow(Homebrew::DownloadQueue).to receive(:new).and_return(download_queue)
+    allow(cmd.args.named).to receive_messages(to_formulae_and_casks: [api_foo])
+    allow(Formulary).to receive_messages(factory: api_foo, from_path: api_foo)
+    allow(cmd).to receive(:run_fetch_hook)
+    allow(Homebrew::API::Formula).to receive(:source_download_formula).with(api_foo).and_return(foo)
+    expect(download_queue).to receive(:enqueue).with(foo.resource("build"))
+
+    cmd.run
   end
 
   it "uses API bottle metadata before loading simple core formulae" do
@@ -179,6 +204,38 @@ RSpec.describe Homebrew::Cmd::FetchCmd do
   end
 
   describe "#cask_downloads", :cask do
+    it "reuses the loaded cask source across platforms and languages" do
+      cask = Cask::CaskLoader.load("with-many-languages")
+      expect(Cask::CaskLoader).not_to receive(:from_path)
+
+      described_class.new(["--cask", "--all-platforms", cask.token]).cask_downloads(cask)
+    end
+
+    it "keeps each queued download's platform and language values independent" do
+      cask = Cask::CaskLoader.from_content(<<~RUBY)
+        cask "localised-platforms" do
+          version "1.0"
+          arch arm: "arm", intel: "intel"
+          os macos: "macos", linux: "linux"
+          language "en", default: true do
+            sha256 "#{"0" * 64}"
+            "en"
+          end
+          language "fr" do
+            sha256 "#{"1" * 64}"
+            "fr"
+          end
+          url "https://example.com/\#{os}-\#{arch}-\#{language}.zip"
+        end
+      RUBY
+      downloads = described_class.new(["--cask", "--all-platforms", cask.token]).cask_downloads(cask)
+
+      expect(downloads.map { |download| [File.basename(download.url.to_s), download.checksum.to_s] })
+        .to match_array(%w[macos linux].product(%w[intel arm], %w[en fr]).map do |os, arch, language|
+          ["#{os}-#{arch}-#{language}.zip", ((language == "en") ? "0" : "1") * 64]
+        end)
+    end
+
     it "collects one download per distinct URL across all platforms" do
       cmd = described_class.new(["--cask", "--all-platforms", "sha256-os"])
       basenames = cmd.cask_downloads(Cask::CaskLoader.load("sha256-os"))

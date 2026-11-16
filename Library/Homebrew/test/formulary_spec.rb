@@ -6,6 +6,8 @@ require "formula_installer"
 require "utils/bottles"
 
 RSpec.describe Formulary do
+  before { allow(described_class).to receive(:odeprecated) }
+
   let(:formula_name) { "testball_bottle" }
   let(:formula_path) { CoreTap.instance.new_formula_path(formula_name) }
   let(:formula_content) do
@@ -52,6 +54,62 @@ RSpec.describe Formulary do
 
     it "replaces '@' with 'AT'" do
       expect(described_class.class_s("openssl@1.1")).to eq("OpensslAT11")
+    end
+  end
+
+  describe "::formula_contents" do
+    before do
+      formula_path.dirname.mkpath
+      formula_path.write <<~RUBY
+        class TestballBottle < Formula
+          on_intel do
+            url "https://example.com/intel-1.0.tar.gz"
+          end
+          on_arm do
+            url "https://example.com/arm-1.0.tar.gz"
+          end
+        end
+      RUBY
+    end
+
+    it "reads formula source only once across simulated platforms" do
+      expect(formula_path).to receive(:open).once.and_call_original
+
+      [:arm, :intel].each do |arch|
+        Homebrew::SimulateSystem.with(os: :linux, arch:) do
+          described_class.load_formula_from_path(formula_name, formula_path, flags: [], ignore_errors: false)
+        end
+      end
+    end
+
+    it "evaluates a separate formula class for each platform" do
+      urls = [:arm, :intel].map do |arch|
+        Homebrew::SimulateSystem.with(os: :linux, arch:) do
+          described_class.load_formula_from_path(formula_name, formula_path, flags: [], ignore_errors: false).url
+        end
+      end
+
+      expect(urls).to eq(%w[https://example.com/arm-1.0.tar.gz https://example.com/intel-1.0.tar.gz])
+    end
+
+    it "rereads edited source even when its modification time is preserved" do
+      updated_source = described_class.formula_contents(formula_path).sub("intel", "other")
+      mtime = formula_path.mtime
+      formula_path.atomic_write(updated_source)
+      File.utime(mtime, mtime, formula_path)
+
+      expect(described_class.formula_contents(formula_path)).to eq(updated_source)
+    end
+
+    it "preserves source checksums with a non-UTF-8 default internal encoding" do
+      original_internal_encoding = Encoding.default_internal
+      formula_path.write "#{formula_path.read}\n# café\n"
+      Encoding.default_internal = Encoding::ISO_8859_1
+
+      expect(described_class.from_path(formula_path).ruby_source_checksum.hexdigest)
+        .to eq(Digest::SHA256.file(formula_path).hexdigest)
+    ensure
+      Encoding.default_internal = original_internal_encoding
     end
   end
 
@@ -283,12 +341,6 @@ RSpec.describe Formulary do
         end.to raise_error(FormulaUnavailableError)
       end
 
-      it "raises an error if ref is nil" do
-        expect do
-          described_class.factory(nil)
-        end.to raise_error(TypeError)
-      end
-
       context "with sharded Formula directory" do
         let(:formula_name) { "testball_sharded" }
         let(:formula_path) do
@@ -331,15 +383,14 @@ RSpec.describe Formulary do
         FileUtils.cp formula_path, HOMEBREW_TEMP
         temp_formula_path = HOMEBREW_TEMP/formula_path.basename
         expect do
-          described_class.factory(temp_formula_path)
+          described_class.factory(temp_formula_path.to_s)
         ensure
           temp_formula_path.unlink
-        end.to raise_error(RuntimeError, /requires formulae to be in a tap, rejecting/)
+        end.to raise_error(FormulaUnavailableError)
       end
 
-      it "returns a Formula when given a URL", :needs_utils_curl do
-        formula = described_class.factory("file://#{formula_path}")
-        expect(formula).to be_a(Formula)
+      it "rejects file URLs" do
+        expect { described_class.factory("file://#{formula_path}") }.to raise_error(FormulaUnavailableError)
       end
 
       it "errors when given a URL but paths are disabled" do
@@ -366,8 +417,8 @@ RSpec.describe Formulary do
         it "disallows cache paths when paths are explicitly disabled" do
           ENV["HOMEBREW_FORBID_PACKAGES_FROM_PATHS"] = "1"
           expect do
-            described_class.factory(cache_formula_path)
-          end.to raise_error(/requires formulae to be in a tap/)
+            described_class.factory(cache_formula_path.to_s)
+          end.to raise_error(FormulaUnavailableError)
         end
       end
 
@@ -404,29 +455,15 @@ RSpec.describe Formulary do
           end.to raise_error(FormulaUnreadableError, /'because' argument/)
         end
 
-        it "rejects the reason through the cached-name loader" do
-          cached_formula = HOMEBREW_CACHE_FORMULA/"#{formula_name}.rb"
-          cached_formula.dirname.mkpath
-          cached_formula.write(formula_content)
-
-          expect { described_class::FromCacheLoader.new(formula_name, cached_formula).get_formula(:stable) }
-            .to raise_error(FormulaUnreadableError, /'because' argument/)
-        end
-
-        it "rejects the reason in a current formula loaded from a URI", :needs_utils_curl do
-          expect { described_class.factory("file://#{formula_path}") }
-            .to raise_error(FormulaUnreadableError, /'because' argument/)
-        end
-
         it "rejects the reason in a current formula loaded while evaluating metadata" do
           expect do
             described_class.from_contents("legacy", mktmpdir/".brew/legacy.rb", <<~RUBY, from_metadata: true)
               class Legacy < Formula
-                Formulary.factory(#{formula_path.to_s.inspect})
+                Formulary.factory(#{formula_name.inspect})
                 url "https://brew.sh/legacy-1.0.tar.gz"
               end
             RUBY
-          end.to raise_error(FormulaUnreadableError, /'because' argument/)
+          end.to raise_error(TapFormulaUnreadableError, /'because' argument/)
         end
 
         it "loads the reason from a bottle" do
@@ -1085,31 +1122,31 @@ RSpec.describe Formulary do
       it "raises an error when given an https URL" do
         expect do
           described_class.factory("https://brew.sh/foo.rb")
-        end.to raise_error(UnsupportedInstallationMethod)
+        end.to raise_error(FormulaUnavailableError)
       end
 
       it "raises an error when given a bottle URL" do
         expect do
           described_class.factory("https://brew.sh/foo-1.0.arm64_big_sur.bottle.tar.gz")
-        end.to raise_error(UnsupportedInstallationMethod)
+        end.to raise_error(FormulaUnavailableError)
       end
 
       it "raises an error when given an ftp URL" do
         expect do
           described_class.factory("ftp://brew.sh/foo.rb")
-        end.to raise_error(UnsupportedInstallationMethod)
+        end.to raise_error(FormulaUnavailableError)
       end
 
       it "raises an error when given an sftp URL" do
         expect do
           described_class.factory("sftp://brew.sh/foo.rb")
-        end.to raise_error(UnsupportedInstallationMethod)
+        end.to raise_error(FormulaUnavailableError)
       end
 
-      it "does not raise an error when given a file URL", :needs_utils_curl do
+      it "raises an error when given a file URL" do
         expect do
           described_class.factory("file://#{TEST_FIXTURE_DIR}/testball.rb")
-        end.not_to raise_error
+        end.to raise_error(FormulaUnavailableError)
       end
     end
 
@@ -1290,11 +1327,11 @@ RSpec.describe Formulary do
     end
 
     context "when given a relative path with two slashes" do
-      it "returns a `FromPathLoader`" do
+      it "returns a `NullLoader`" do
         mktmpdir.cd do
           FileUtils.mkdir "Formula"
           FileUtils.touch "Formula/gcc.rb"
-          expect(described_class.loader_for("./Formula/gcc.rb")).to be_a Formulary::FromPathLoader
+          expect(described_class.loader_for("./Formula/gcc.rb")).to be_a Formulary::NullLoader
         end
       end
     end

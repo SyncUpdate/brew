@@ -5,6 +5,59 @@ require "test_bot"
 require "dev-cmd/test-bot"
 
 RSpec.describe Homebrew::TestBot::Formulae do
+  describe "#relocate_bottle_artifacts" do
+    subject(:formulae) do
+      Class.new(described_class) do
+        T.bind(self, T.class_of(Homebrew::TestBot::Formulae))
+        public :relocate_bottle_artifacts
+        attr_reader :bottle_checksums
+      end.new(tap: nil, git: "git", dry_run: true, fail_fast: false, verbose: false,
+              output_paths: { bottle: HOMEBREW_TEMP/"bottle.txt", linkage: HOMEBREW_TEMP/"linkage.txt",
+                              skipped_or_failed_formulae: HOMEBREW_TEMP/"skipped.txt" })
+    end
+
+    let(:artifact_names) { %w[foo.bottle.tar.gz foo.bottle.json] }
+
+    test_each(%w[cache failed]) do |directory|
+      it "preserves artifact checksums when moving to #{directory}" do
+        source = HOMEBREW_TEMP/"source"
+        source.mkpath
+        artifacts = artifact_names.map do |name|
+          path = source/name
+          path.write(name)
+          path.realpath
+        end
+        artifacts.each { |path| formulae.bottle_checksums[path] = path.sha256 }
+        destination = HOMEBREW_TEMP/directory
+
+        formulae.relocate_bottle_artifacts(artifacts, destination)
+
+        expect(formulae.bottle_checksums).to eq(
+          artifacts.to_h do |path|
+            relocated = (destination/path.basename).realpath
+            [relocated, relocated.sha256]
+          end,
+        )
+      end
+    end
+  end
+
+  describe "#failed" do
+    subject(:formulae) do
+      Class.new(described_class) do
+        T.bind(self, T.class_of(Homebrew::TestBot::Formulae))
+        public :failed
+      end.new(tap: nil, git: "git", dry_run: true, fail_fast: false, verbose: false,
+              output_paths: { bottle: HOMEBREW_TEMP/"bottle.txt", linkage: HOMEBREW_TEMP/"linkage.txt",
+                              skipped_or_failed_formulae: HOMEBREW_TEMP/"skipped.txt" })
+    end
+
+    it "reports ignored failures as skipped" do
+      expect { formulae.failed("foo", "install failed", ignore_failures: true) }
+        .to output(/SKIPPED.*foo/).to_stdout.and output(/install failed/).to_stderr
+    end
+  end
+
   describe "#formula!" do
     subject(:formulae) do
       Class.new(described_class) do
@@ -13,9 +66,9 @@ RSpec.describe Homebrew::TestBot::Formulae do
       end.new(
         tap: nil, git: "git", dry_run: true, fail_fast: false, verbose: false,
         output_paths: {
-          bottle:                     Pathname("bottle.txt"),
-          linkage:                    Pathname("linkage.txt"),
-          skipped_or_failed_formulae: Pathname("skipped.txt"),
+          bottle:                     HOMEBREW_TEMP/"bottle.txt",
+          linkage:                    HOMEBREW_TEMP/"linkage.txt",
+          skipped_or_failed_formulae: HOMEBREW_TEMP/"skipped.txt",
         }
       )
     end
@@ -35,6 +88,65 @@ RSpec.describe Homebrew::TestBot::Formulae do
       formulae.formula!("foo", args: Homebrew::Cmd::TestBotCmd.new([]).args)
 
       expect(formulae.steps.map(&:command)).to include(%w[brew fetch --formula --retry foo --test --build-bottle])
+    end
+
+    context "when cleaning up dependencies" do
+      let(:foo) do
+        formula("foo") do
+          T.bind(self, T.class_of(Formula))
+          url "https://brew.sh/foo-1.0.tar.gz"
+          depends_on "build" => :build
+          depends_on "runtime"
+          depends_on "test" => :test
+        end
+      end
+
+      before do
+        stub_formula_loader foo
+        %w[build runtime test transitive].each do |name|
+          stub_formula_loader formula(name) {
+            T.bind(self, T.class_of(Formula))
+            url "https://brew.sh/#{name}-1.0.tar.gz"
+            depends_on "transitive" if name == "runtime"
+          }
+        end
+        allow(formulae).to receive_messages(bottled?: true, build_bottle?: true, cleanup?: false,
+                                            artifact_cache_valid?: false)
+        allow(formulae).to receive(:annotate_added_dependencies)
+        allow(formulae).to receive(:install_ca_certificates_if_needed)
+        allow(formulae).to receive(:bottle_reinstall_formula) { (foo.prefix/"bin").mkpath }
+        allow(Utils).to receive(:safe_popen_read).with("brew", "list", "--formula", "--full-name").and_return("")
+        allow(Utils).to receive(:safe_popen_read)
+          .with("brew", "deps", "--formula", "--include-build", "--include-test", "--full-name", "foo")
+          .and_return("build\nruntime\ntest\ntransitive\n")
+        allow(Utils).to receive(:safe_popen_read)
+          .with("brew", "deps", "--formula", "--include-test", "foo").and_return("runtime\ntest\ntransitive\n")
+      end
+
+      it "keeps direct and transitive runtime dependencies of the installed formula" do
+        formulae.formula!("foo", args: Homebrew::Cmd::TestBotCmd.new([]).args)
+
+        expect(formulae.steps.last&.command)
+          .to eq(%w[brew uninstall --formulae --force --ignore-dependencies build test])
+      end
+
+      it "removes all temporary dependencies when the formula is not installed" do
+        allow(formulae).to receive(:bottle_reinstall_formula)
+
+        formulae.formula!("foo", args: Homebrew::Cmd::TestBotCmd.new([]).args)
+
+        expect(formulae.steps.last&.command)
+          .to eq(%w[brew uninstall --formulae --force --ignore-dependencies build runtime test transitive])
+      end
+
+      it "does not resolve runtime dependencies when there is nothing to remove" do
+        (foo.prefix/"bin").mkpath
+        allow(foo).to receive(:disabled?).and_return(true)
+
+        expect(foo).not_to receive(:runtime_formula_dependencies)
+
+        formulae.formula!("foo", args: Homebrew::Cmd::TestBotCmd.new([]).args)
+      end
     end
   end
 
@@ -114,48 +226,27 @@ RSpec.describe Homebrew::TestBot::Formulae do
     end
 
     it "writes a warning annotation for the new recursive dependency impact" do
-      formula = formula("foo") do
-        T.bind(self, T.class_of(Formula))
-        url "foo-1.0"
-        depends_on "existing"
-        depends_on "bar"
-        depends_on "baz"
+      packages = {
+        "foo"         => ["existing", "bar", "baz"],
+        "existing"    => [],
+        "bar"         => [{ "not-runtime" => :build }, "existing", "baz"],
+        "baz"         => [{ "not-runtime" => :test }, { "recommended" => :recommended }],
+        "recommended" => [{ "not-runtime" => :optional }],
+        "not-runtime" => ["other"],
+        "other"       => [],
+      }.to_h do |name, dependencies|
+        package = formula(name) do
+          T.bind(self, T.class_of(Formula))
+          url "#{name}-1.0"
+          dependencies.each { |dependency| depends_on dependency }
+        end
+        [name, package]
       end
-      existing = formula("existing") do
-        T.bind(self, T.class_of(Formula))
-        url "existing-1.0"
-      end
-      bar = formula("bar") do
-        T.bind(self, T.class_of(Formula))
-        url "bar-1.0"
-        depends_on "not-runtime" => :build
-        depends_on "existing"
-        depends_on "baz"
-      end
-      baz = formula("baz") do
-        T.bind(self, T.class_of(Formula))
-        url "baz-1.0"
-        depends_on "not-runtime" => :test
-        depends_on "recommended" => :recommended
-      end
-      recommended = formula("recommended") do
-        T.bind(self, T.class_of(Formula))
-        url "recommended-1.0"
-        depends_on "not-runtime" => :optional
-      end
-      not_runtime = formula("not-runtime") do
-        T.bind(self, T.class_of(Formula))
-        url "not-runtime-1.0"
-        depends_on "other"
-      end
-      other = formula("other") do
-        T.bind(self, T.class_of(Formula))
-        url "other-1.0"
-      end
+      formula = packages.fetch("foo")
 
-      [existing, bar, baz, recommended, not_runtime, other].each { |f| stub_formula_loader f }
-      [[bar, 1_000_000], [baz, 500_000], [recommended, 400_000]].each do |f, size|
-        allow(f).to receive(:bottle_for_tag)
+      packages.except("foo").each_value { |package| stub_formula_loader package }
+      { "bar" => 1_000_000, "baz" => 500_000, "recommended" => 400_000 }.each do |name, size|
+        allow(packages.fetch(name)).to receive(:bottle_for_tag)
           .and_return(instance_double(Bottle, fetch_tab: nil, installed_size: size))
       end
       allow(Utils).to receive(:safe_popen_read)

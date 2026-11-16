@@ -117,7 +117,7 @@ module Homebrew
         online = args.new? || args.online?
         tap_audit = args.tap.present?
         skip_style = args.skip_style? || args.no_named? || tap_audit
-        no_named_args = T.let(false, T::Boolean)
+        no_named_args = args.changed? || (args.tap.blank? && (args.installed? || args.no_named?)) || false
 
         gem_groups = ["audit", "ast"]
         gem_groups << "style" unless skip_style
@@ -131,8 +131,6 @@ module Homebrew
           if args.changed?
             tap = Tap.from_path(Dir.pwd)
             odie "`brew audit --changed` must be run inside a tap!" if tap.blank?
-
-            no_named_args = true
 
             audit_formulae = []
             audit_casks = []
@@ -159,10 +157,8 @@ module Homebrew
               ]
             end
           elsif args.installed?
-            no_named_args = true
             [Formula.installed, Cask::Caskroom.casks]
           elsif args.no_named?
-            no_named_args = true
             [Formula.all, Cask::Cask.all]
           else
             if args.named.any? { |named_arg| named_arg.end_with?(".rb") }
@@ -178,19 +174,14 @@ module Homebrew
         end
 
         if audit_formulae.empty? && audit_casks.empty? && !args.tap
-          ofail "No matching formulae or casks to audit!"
-          return
+          return ofail "No matching formulae or casks to audit!"
         end
 
         style_files = args.named.to_paths unless skip_style
 
         only_cops = args.only_cops
-        except_cops = if only_cops || args.new?
-          nil
-        elsif args.except_cops
-          args.except_cops
-        elsif !strict
-          %w[FormulaAuditStrict]
+        except_cops = if !only_cops && !args.new?
+          args.except_cops || (%w[FormulaAuditStrict] unless strict)
         end
 
         # Run tap audits first
@@ -223,8 +214,6 @@ module Homebrew
         formula_problems = audit_formulae.sort.each_with_object({}) do |f, problems|
           path = f.path
 
-          only = only_cops ? ["style"] : args.only
-
           errors = os_arch_combinations.flat_map do |os, arch|
             SimulateSystem.with(os:, arch:) do
               odebug "Auditing Formula #{f} on os #{os} and arch #{arch}"
@@ -236,7 +225,7 @@ module Homebrew
                   strict:,
                   online:,
                   git:                 args.git?,
-                  only:,
+                  only:                only_cops ? ["style"] : args.only,
                   except:              args.except,
                   style_offenses:      style_offenses&.for_path(path),
                   tap_audit:,
@@ -271,75 +260,37 @@ module Homebrew
         cask_problems = audit_casks.each_with_object({}) do |cask, problems|
           path = cask.sourcefile_path
 
-          errors = os_arch_combinations.flat_map do |os, arch|
-            # Casks have no stanza values for platforms they don't support, so
-            # audit them on one they do instead. `depends_on arch` can differ
-            # between OSes, so read it on the OS being audited.
-            os = :linux if os != :linux && !cask.supports_macos?
-            os = :macos if os == :linux && !cask.supports_linux?
-            cask_archs = SimulateSystem.with(os:, arch:) { reload_cask(cask) }
-                                       .depends_on.arch&.map { |cask_arch| cask_arch[:type] }
-            arch = OnSystem::ARCH_OPTIONS.find { cask_archs.include?(it) } if cask_archs&.exclude?(arch)
-
-            SimulateSystem.with(os:, arch:) do
-              odebug "Auditing Cask #{cask} on os #{os} and arch #{arch}"
-
-              Cask::Auditor.audit(
-                reload_cask(cask),
-                # For switches, we add `|| nil` so that `nil` will be passed
-                # instead of `false` if they aren't set.
-                # This way, we can distinguish between "not set" and "set to false".
-                audit_online:   args.online? || nil,
-                audit_strict:   args.strict? || nil,
-
-                audit_signing:  nil,
-                audit_new_cask: args.new? || nil,
-                audit_fix:      args.fix? || nil,
-                any_named_args: !no_named_args,
-                only:           args.only || [],
-                except:         args.except || [],
-              ).to_a
-            end
-          end.uniq
+          errors = audit_cask(cask, os_arch_combinations, no_named_args:)
 
           problems[[cask.full_name, path]] = errors if errors.any?
         end
 
-        print_problems(tap_problems)
-        print_problems(formula_problems)
-        print_problems(cask_problems)
+        [tap_problems, formula_problems, cask_problems].each { |problems| print_problems(problems) }
 
-        tap_count = tap_problems.keys.count
-        formula_count = formula_problems.keys.count
-        cask_count = cask_problems.keys.count
+        problem_groups = { formula: formula_problems, cask: cask_problems, tap: tap_problems }
 
-        corrected_problem_count = (formula_problems.values + cask_problems.values)
-                                  .sum { |problems| problems.count { |problem| problem.fetch(:corrected) } }
+        corrected_count = (formula_problems.values + cask_problems.values)
+                          .sum { |problems| problems.count { |problem| problem.fetch(:corrected) } }
 
-        tap_problem_count = tap_problems.sum { |_, problems| problems.count }
-        formula_problem_count = formula_problems.sum { |_, problems| problems.count }
-        cask_problem_count = cask_problems.sum { |_, problems| problems.count }
-        total_problems_count = formula_problem_count + cask_problem_count + tap_problem_count
+        total_problems_count = problem_groups.values.sum { |problems| problems.values.sum(&:length) }
 
         if total_problems_count.positive?
           errors_summary = Utils.pluralize("problem", total_problems_count, include_count: true)
 
-          error_sources = []
-          error_sources << Utils.pluralize("formula", formula_count, include_count: true) if formula_count.positive?
-          error_sources << Utils.pluralize("cask", cask_count, include_count: true) if cask_count.positive?
-          error_sources << Utils.pluralize("tap", tap_count, include_count: true) if tap_count.positive?
+          error_sources = problem_groups.filter_map do |type, problems|
+            Utils.pluralize(type.to_s, problems.length, include_count: true) unless problems.empty?
+          end
 
           errors_summary += " in #{Utils::Text.to_sentence(error_sources)}" if error_sources.any?
 
           errors_summary += " detected"
 
-          if corrected_problem_count.positive?
-            errors_summary +=
-              ", #{Utils.pluralize("problem", corrected_problem_count, include_count: true)} corrected"
+          if corrected_count.positive?
+            errors_summary += ", #{Utils.pluralize("problem", corrected_count, include_count: true)} corrected"
           end
 
           # Succeed when everything was corrected, as `brew style --fix` does.
-          if total_problems_count == corrected_problem_count
+          if total_problems_count == corrected_count
             opoo "#{errors_summary}."
           else
             ofail "#{errors_summary}."
@@ -348,21 +299,57 @@ module Homebrew
 
         return unless GitHub::Actions.env_set?
 
-        annotations = formula_problems.merge(cask_problems).flat_map do |(_, path), problems|
-          problems.reject { |problem| problem[:corrected] }.map do |problem|
-            GitHub::Actions::Annotation.new(
+        formula_problems.merge(cask_problems).each do |(_, path), problems|
+          problems.each do |problem|
+            next if problem[:corrected]
+
+            annotation = GitHub::Actions::Annotation.new(
               :error,
               problem[:message],
               file:   path,
               line:   problem[:location]&.line,
               column: problem[:location]&.column,
             )
+            puts annotation if annotation.relevant?
           end
-        end.compact
-
-        annotations.each do |annotation|
-          puts annotation if annotation.relevant?
         end
+      end
+
+      sig {
+        params(cask: Cask::Cask, os_arch_combinations: T::Array[[Symbol, Symbol]], no_named_args: T::Boolean)
+          .returns(T::Array[Cask::Audit::Error])
+      }
+      def audit_cask(cask, os_arch_combinations, no_named_args:)
+        os_arch_combinations.flat_map do |os, arch|
+          # Casks have no stanza values for platforms they don't support, so
+          # audit them on one they do instead. `depends_on arch` can differ
+          # between OSes, so read it on the OS being audited.
+          os = :linux if os != :linux && !cask.supports_macos?
+          os = :macos if os == :linux && !cask.supports_linux?
+          cask_archs = SimulateSystem.with(os:, arch:) { reload_cask(cask) }
+                                     .depends_on.arch&.map { |cask_arch| cask_arch[:type] }
+          arch = OnSystem::ARCH_OPTIONS.find { cask_archs.include?(it) } if cask_archs&.exclude?(arch)
+
+          SimulateSystem.with(os:, arch:) do
+            odebug "Auditing Cask #{cask} on os #{os} and arch #{arch}"
+
+            Cask::Auditor.audit(
+              reload_cask(cask),
+              # For switches, we add `|| nil` so that `nil` will be passed
+              # instead of `false` if they aren't set.
+              # This way, we can distinguish between "not set" and "set to false".
+              audit_online:   args.online? || nil,
+              audit_strict:   args.strict? || nil,
+
+              audit_signing:  nil,
+              audit_new_cask: args.new? || nil,
+              audit_fix:      args.fix? || nil,
+              any_named_args: !no_named_args,
+              only:           args.only || [],
+              except:         args.except || [],
+            ).to_a
+          end
+        end.uniq
       end
 
       private
@@ -374,8 +361,10 @@ module Homebrew
 
         if cask.loaded_from_metadata?
           Cask::CaskLoader.load_from_installed_caskfile(path)
-        else
+        elsif args.fix? || cask.loaded_from_api?
           Cask::CaskLoader.from_path(path)
+        else
+          cask.refresh_copy
         end
       end
 

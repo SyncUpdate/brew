@@ -68,7 +68,7 @@ module Homebrew
       @core_tap = T.let(formula.tap&.core_tap? || core_tap || false, T::Boolean)
       @problems = T.let([], T::Array[T.any(String, T::Hash[Symbol, T.untyped])])
       @new_formula_problems = T.let([], T::Array[T.any(String, T::Hash[Symbol, T.untyped])])
-      @text = T.let(formula.path.open("rb", &:read), String)
+      @text = T.let(Formulary.formula_contents(formula.path).b, String)
       @specs = T.let([formula.stable, formula.head].compact, T::Array[SoftwareSpec])
       @spdx_license_data = spdx_license_data
       @spdx_exception_data = spdx_exception_data
@@ -816,51 +816,22 @@ module Homebrew
 
     sig { void }
     def audit_github_repository
-      user, repo = get_repo_data(SharedAudits::NOTABILITY_REPOSITORY_REGEXES.fetch(:github)) if @new_formula
-
-      return if user.blank? || repo.nil?
-
-      self_submission = self_submission?(user)
-      warning = SharedAudits.github(user, repo, self_submission:)
-      return if warning.nil?
-
-      new_formula_problem warning
+      check_repository_notability(:github)
     end
 
     sig { void }
     def audit_gitlab_repository
-      user, repo = get_repo_data(SharedAudits::NOTABILITY_REPOSITORY_REGEXES.fetch(:gitlab)) if @new_formula
-      return if user.blank? || repo.nil?
-
-      self_submission = self_submission?(user)
-      warning = SharedAudits.gitlab(user, repo, self_submission:)
-      return if warning.nil?
-
-      new_formula_problem warning
+      check_repository_notability(:gitlab)
     end
 
     sig { void }
     def audit_bitbucket_repository
-      user, repo = get_repo_data(SharedAudits::NOTABILITY_REPOSITORY_REGEXES.fetch(:bitbucket)) if @new_formula
-      return if user.blank? || repo.nil?
-
-      self_submission = self_submission?(user)
-      warning = SharedAudits.bitbucket(user, repo, self_submission:)
-      return if warning.nil?
-
-      new_formula_problem warning
+      check_repository_notability(:bitbucket)
     end
 
     sig { void }
     def audit_forgejo_repository
-      user, repo = get_repo_data(SharedAudits::NOTABILITY_REPOSITORY_REGEXES.fetch(:forgejo)) if @new_formula
-      return if user.blank? || repo.nil?
-
-      self_submission = self_submission?(user)
-      warning = SharedAudits.forgejo(user, repo, self_submission:)
-      return if warning.nil?
-
-      new_formula_problem warning
+      check_repository_notability(:forgejo)
     end
 
     sig { params(regex: Regexp).returns(T.nilable([String, String])) }
@@ -1391,6 +1362,17 @@ module Homebrew
     end
 
     private
+
+    sig { params(service: Symbol).void }
+    def check_repository_notability(service)
+      return unless @new_formula
+
+      user, repo = get_repo_data(SharedAudits::NOTABILITY_REPOSITORY_REGEXES.fetch(service))
+      return if user.blank? || repo.nil?
+
+      warning = SharedAudits.public_send(service, user, repo, self_submission: self_submission?(user))
+      new_formula_problem warning if warning
+    end
 
     sig { params(message: String, location: T.nilable(Homebrew::SourceLocation), corrected: T::Boolean).void }
     def problem(message, location: nil, corrected: false)

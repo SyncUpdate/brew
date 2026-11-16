@@ -361,6 +361,26 @@ RSpec.describe "Utils::Curl" do
       .to raise_error(Timeout::Error) { expect(selection_cache).to exist }
   end
 
+  describe "::curl_with_workarounds" do
+    test_each([16, 56]) do |exit_status|
+      it "keeps secrets and output options on the HTTP/1.1 retry after exit status #{exit_status}" do
+        allow(self).to receive(:curl_output).with("-V", use_homebrew_curl: false)
+                                            .and_return(instance_double(SystemCommand::Result,
+                                                                        stdout: "curl 7.59.0\nFeatures: HTTP2\n"))
+        allow(self).to receive(:system_command)
+          .and_return(instance_double(SystemCommand::Result, success?: false, exit_status:))
+        expect(self).to receive(:system_command).with(
+          anything,
+          hash_including(args: array_including("--http1.1"), secrets: ["test-token"], print_stdout: true,
+                         print_stderr: true, debug: true, verbose: true),
+        ).and_return(instance_double(SystemCommand::Result, success?: true))
+
+        curl_with_workarounds("https://example.com/", secrets: ["test-token"], print_stdout: true,
+                                                      print_stderr: true, debug: true, verbose: true)
+      end
+    end
+  end
+
   describe "::curl_args" do
     include Context
 
@@ -1146,6 +1166,15 @@ RSpec.describe "Utils::Curl" do
         expect(error).to equal(network_error)
       }
     end
+
+    it "keeps the resume probe's headers off stdout" do
+      allow(self).to receive(:curl)
+      expect(self).to receive(:curl_headers)
+        .with(any_args, hash_excluding(:print_stdout))
+        .and_return({ responses: [] })
+
+      curl_download(url, to: destination, try_partial: true)
+    end
   end
 
   describe "curl request deadlines" do
@@ -1218,11 +1247,11 @@ RSpec.describe "Utils::Curl" do
       destination = mktmpdir/"download.zip"
       destination.write("partial")
       allow(self).to receive(:curl_headers)
-        .with(any_args, wanted_headers: ["accept-ranges"], deadline: start_time + 3) do
+        .with(any_args, hash_including(wanted_headers: ["accept-ranges"], deadline: start_time + 3)) do
           allow(Time).to receive(:now).and_return(start_time + 2)
           { responses: [{ headers: { "accept-ranges" => "bytes" } }] }
         end
-      expect(self).to receive(:curl).with(any_args, timeout: 1)
+      expect(self).to receive(:curl).with(any_args, hash_including(timeout: 1))
 
       curl_download(url, to: destination, try_partial: true, timeout: 3)
     end

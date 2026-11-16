@@ -2004,8 +2004,87 @@ RSpec.describe Formula do
       allow(f).to receive(:any_installed_keg).and_return(keg)
     end
 
-    it "returns empty when no tab runtime_dependencies data" do
+    it "returns empty when no keg is installed" do
+      allow(f).to receive_messages(any_installed_keg:               nil,
+                                   declared_runtime_dependencies:   [Dependency.new("baz")],
+                                   undeclared_runtime_dependencies: [])
+      expect(f.missing_dependencies).to be_empty
+    end
+
+    it "falls back to formula definitions when the tab has no runtime_dependencies data" do
+      allow(f).to receive_messages(declared_runtime_dependencies:   [Dependency.new("baz")],
+                                   undeclared_runtime_dependencies: [])
       allow(keg).to receive(:runtime_dependencies).and_return(nil)
+      expect(f.missing_dependencies.map(&:name)).to eq(["baz"])
+    end
+
+    it "does not load untrusted dependencies when the tab has no runtime_dependencies data", :trust_store do
+      dependency_name = "untrusted/tap/dependency"
+      formula = formula("foo") do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+        depends_on dependency_name
+      end
+
+      allow(formula).to receive(:any_installed_keg).and_return(keg)
+      allow(keg).to receive_messages(runtime_dependencies: nil, find: [])
+      allow(Homebrew::EnvConfig).to receive(:no_require_tap_trust?).and_return(false)
+      allow(Homebrew::Trust).to receive(:trusted?).with(:formula, dependency_name).and_return(false)
+      expect(Formulary).not_to receive(:factory).with(dependency_name, any_args)
+
+      expect(formula.missing_dependencies(hide: ["dependency"]).map(&:name)).to eq([dependency_name])
+    end
+
+    it "does not expand unqualified dependencies from untrusted taps", :trust_store do
+      dependency_name = "dependency"
+      formula = formula("foo") do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+        depends_on dependency_name
+      end
+      untrusted_tap = Tap.fetch("untrusted/tap")
+      loader = instance_double(Formulary::FormulaLoader, name: dependency_name, tap: untrusted_tap)
+
+      allow(formula).to receive(:any_installed_keg).and_return(keg)
+      allow(keg).to receive_messages(runtime_dependencies: nil, find: [])
+      allow(Homebrew::EnvConfig).to receive(:no_require_tap_trust?).and_return(false)
+      allow(Formulary).to receive(:loader_for).and_call_original
+      allow(Formulary).to receive(:loader_for).with(dependency_name, warn: false).and_return(loader)
+      allow(Homebrew::Trust).to receive(:trusted?)
+        .with(:formula, "#{untrusted_tap}/#{dependency_name}").and_return(false)
+      expect(Formulary).not_to receive(:factory).with(dependency_name, any_args)
+
+      expect(formula.missing_dependencies(hide: [dependency_name]).map(&:name)).to eq([dependency_name])
+    end
+
+    it "checks canonical names for untrusted aliases and respects hide", :trust_store do
+      dependency_name = "untrusted/tap/old"
+      formula = formula("foo") do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+        depends_on dependency_name
+      end
+      untrusted_tap = Tap.fetch("untrusted/tap")
+      loader = instance_double(Formulary::FormulaLoader, name: "new", tap: untrusted_tap)
+
+      allow(formula).to receive(:any_installed_keg).and_return(keg)
+      allow(keg).to receive_messages(runtime_dependencies: nil, find: [])
+      allow(Homebrew::EnvConfig).to receive(:no_require_tap_trust?).and_return(false)
+      allow(Formulary).to receive(:loader_for).and_call_original
+      allow(Formulary).to receive(:loader_for).with(dependency_name, any_args).and_return(loader)
+      allow(Homebrew::Trust).to receive(:trusted?)
+        .with(:formula, "#{untrusted_tap}/new").and_return(false)
+      expect(Formulary).not_to receive(:factory).with(dependency_name, any_args)
+      (HOMEBREW_CELLAR/"new").mkpath
+
+      expect(formula.missing_dependencies.map(&:name)).to be_empty
+      expect(formula.missing_dependencies(hide: ["old"]).map(&:name)).to eq([dependency_name])
+      expect(formula.missing_dependencies(hide: ["new"]).map(&:name)).to eq([dependency_name])
+    end
+
+    it "does not fall back to formula definitions when the tab has an empty runtime_dependencies list" do
+      allow(f).to receive(:declared_runtime_dependencies).and_return([Dependency.new("baz")])
+      allow(keg).to receive(:runtime_dependencies).and_return([])
       expect(f.missing_dependencies).to be_empty
     end
 
@@ -2141,6 +2220,20 @@ RSpec.describe Formula do
     expect(h["versions"]["stable"]).to eq("1.0")
     expect(h["versions"]["bottle"]).to be_truthy
     expect(h["patches"]).to eq([])
+  end
+
+  specify "#bottle_hash includes the manifest digest" do
+    f = formula "foo" do
+      T.bind(self, T.class_of(Formula))
+      url "foo-1.0"
+
+      bottle do
+        manifest_sha256 TEST_SHA256
+        sha256 cellar: :any, Utils::Bottles.tag.to_sym => TEST_SHA256
+      end
+    end
+
+    expect(f.bottle_hash["manifest_sha256"]).to eq(TEST_SHA256)
   end
 
   it "includes existing and missing SBOM paths for each installed keg" do
@@ -2569,6 +2662,35 @@ RSpec.describe Formula do
 
       expect(h).to be_a(Hash)
       expect(JSON.pretty_generate(h["variations"])).to eq expected_variations.strip
+    end
+
+    it "includes compiler-dependent dependencies in system variations" do
+      mktmpdir do |path|
+        formula_path = path/"foo-compiler-variations.rb"
+        formula_path.write <<~RUBY
+          class FooCompilerVariations < Formula
+            url "file://#{TEST_FIXTURE_DIR}/tarballs/testball-0.1.tbz"
+            sha256 TESTBALL_SHA256
+
+            if DevelopmentTools.clang_build_version >= Version.new("1600")
+              depends_on "llvm" => :build
+            end
+          end
+        RUBY
+        stub_const("OnSystem::VALID_OS_ARCH_TAGS", [
+          Utils::Bottles::Tag.new(system: :monterey, arch: :intel),
+          Utils::Bottles::Tag.new(system: :sonoma, arch: :intel),
+        ])
+
+        hash = Homebrew::SimulateSystem.with(os: :monterey, arch: :intel) do
+          Formulary.from_path(formula_path).to_hash_with_variations(include_compiler_variations: true)
+        end
+
+        expect([
+          hash.fetch("build_dependencies"),
+          hash.dig("variations", :sonoma, "build_dependencies"),
+        ]).to eq([[], ["llvm"]])
+      end
     end
   end
 
@@ -4285,9 +4407,12 @@ RSpec.describe Formula do
       expect(f.common_sandbox_env(mktmpdir)).not_to have_key(:JDK_JAVA_OPTIONS)
     end
 
-    it "does not configure Cargo cooldown before stable support" do
+    it "sets Cargo cooldown for registry dependencies" do
+      expect(f.common_sandbox_env(mktmpdir)[:CARGO_REGISTRY_GLOBAL_MIN_PUBLISH_AGE]).to eq("1 day")
+    end
+
+    it "does not enable unstable Cargo features" do
       expect(f.common_sandbox_env(mktmpdir).keys & [
-        :CARGO_REGISTRY_GLOBAL_MIN_PUBLISH_AGE,
         :CARGO_UNSTABLE_MIN_PUBLISH_AGE,
         :RUSTC_BOOTSTRAP,
       ]).to be_empty

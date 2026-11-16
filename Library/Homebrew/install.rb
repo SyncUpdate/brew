@@ -24,6 +24,8 @@ module Homebrew
   module Install
     extend Utils::Output::Mixin
 
+    autoload :FetchResult, "install/fetch_result"
+
     DependencySummary = T.type_alias { T::Hash[Symbol, T::Array[VersionChange]] }
 
     class << self
@@ -56,6 +58,8 @@ module Homebrew
       sig { void }
       def check_prefix; end
 
+      # Match FormulaInstaller's explicit typed flags without hiding defaults in an options hash.
+      # rubocop:disable Metrics/ParameterLists
       sig {
         params(formulae_to_install: T::Array[Formula], installed_on_request: T::Boolean,
                build_bottle: T::Boolean, force_bottle: T::Boolean,
@@ -120,6 +124,7 @@ module Homebrew
           )
         end
       end
+      # rubocop:enable Metrics/ParameterLists
 
       sig {
         params(
@@ -280,13 +285,21 @@ module Homebrew
 
       # Leave the cask downloads queued so the caller fetches them alongside
       # any formula bottles under one heading instead of draining them first.
-      sig { params(cask_installers: T::Array[Cask::Installer]).returns(T::Array[Cask::Installer]) }
-      def enqueue_cask_installers(cask_installers)
+      sig {
+        params(
+          cask_installers: T::Array[Cask::Installer],
+          failed_casks:    T::Array[Cask::Cask],
+        ).returns(T::Array[Cask::Installer])
+      }
+      def enqueue_cask_installers(cask_installers, failed_casks: [])
         cask_installers.select do |cask_installer|
           cask_installer.enqueue_downloads
           true
         rescue => e
-          ofail "#{cask_installer.cask}: #{e}"
+          failed_casks << cask_installer.cask if e.is_a?(Cask::CaskError)
+          ofail(
+            e.message.start_with?("#{cask_installer.cask}: ") ? e : "#{cask_installer.cask}: #{e}",
+          )
           false
         end
       end
@@ -338,42 +351,11 @@ module Homebrew
       end
 
       sig {
-        params(formula_installers: T::Array[FormulaInstaller], installed_on_request: T::Boolean,
-               build_bottle: T::Boolean, force_bottle: T::Boolean,
-               bottle_arch: T.nilable(String), ignore_deps: T::Boolean, only_deps: T::Boolean,
-               include_test_formulae: T::Array[String], build_from_source_formulae: T::Array[String],
-               cc: T.nilable(String), git: T::Boolean, interactive: T::Boolean, keep_tmp: T::Boolean,
-               debug_symbols: T::Boolean, force: T::Boolean, overwrite: T::Boolean, debug: T::Boolean,
-               quiet: T::Boolean, verbose: T::Boolean, dry_run: T::Boolean,
-               dry_run_action: String, skip_post_install: T::Boolean, skip_link: T::Boolean,
-               cleanup: T::Boolean).returns(T::Array[Formula])
+        params(formula_installers: T::Array[FormulaInstaller], verbose: T::Boolean, dry_run: T::Boolean,
+               dry_run_action: String, cleanup: T::Boolean).returns(T::Array[Formula])
       }
-      def install_formulae(
-        formula_installers,
-        installed_on_request: true,
-        build_bottle: false,
-        force_bottle: false,
-        bottle_arch: nil,
-        ignore_deps: false,
-        only_deps: false,
-        include_test_formulae: [],
-        build_from_source_formulae: [],
-        cc: nil,
-        git: false,
-        interactive: false,
-        keep_tmp: false,
-        debug_symbols: false,
-        force: false,
-        overwrite: false,
-        debug: false,
-        quiet: false,
-        verbose: false,
-        dry_run: false,
-        dry_run_action: "install",
-        skip_post_install: false,
-        skip_link: false,
-        cleanup: true
-      )
+      def install_formulae(formula_installers, verbose: false, dry_run: false, dry_run_action: "install",
+                           cleanup: true)
         return [] if formula_installers.empty?
 
         if dry_run
