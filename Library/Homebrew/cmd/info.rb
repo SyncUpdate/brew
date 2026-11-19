@@ -195,7 +195,14 @@ module Homebrew
           end
         end
 
-        unique_by_display_name(resolved).each_with_index do |(obj, shadowed_by), i|
+        resolved.uniq! do |obj, _shadowed_by|
+          case obj
+          when Formula, Cask::Cask then obj.full_name
+          else obj
+          end
+        end
+
+        resolved.each_with_index do |(obj, shadowed_by), i|
           puts unless i.zero?
 
           if obj.is_a?(FormulaOrCaskUnavailableError)
@@ -205,7 +212,7 @@ module Homebrew
             if (reason = MissingFormula.reason(obj.name, show_info: true))
               $stderr.puts reason
             end
-          else
+          elsif obj.is_a?(Formula) || obj.is_a?(Cask::Cask)
             info_formula_or_cask(obj, quiet:, shadowed_by:)
           end
         end
@@ -305,6 +312,9 @@ module Homebrew
 
       sig { params(formula: Formula, shadowed_by: T.nilable(Tap)).void }
       def info_formula(formula, shadowed_by: nil)
+        args = self.args
+        verbose = args.verbose?
+        tap = formula.tap
         shadowing_formula = shadowing_installed_formula(formula)
         kegs = shadowing_formula ? [] : formula.installed_kegs
         installed = kegs.any?
@@ -321,25 +331,13 @@ module Homebrew
         installed_version = if outdated
           (formula.linked_version || kegs.max_by(&:scheme_and_version)&.version).to_s
         end
-        title_name = if shadowing_formula && formula.tap
+        title_name = if shadowing_formula && tap
           Utils.fully_qualified_name(formula)
         elsif shadowed_by
           formula.name
         else
           formula.full_name
         end
-        conflicts = formula.conflicts.filter_map do |conflict|
-          resolved = begin
-            Formulary.factory(conflict.name)
-          rescue FormulaUnavailableError
-            nil
-          end
-          next if resolved && resolved.full_name == formula.full_name
-
-          conflict_name = resolved&.full_name || conflict.name
-          reason = " (because #{conflict.reason})" if conflict.reason
-          "#{conflict_name}#{reason}"
-        end.sort!
 
         heads, versioned = kegs.partition { |keg| keg.version.head? }
         kegs = [
@@ -350,7 +348,7 @@ module Homebrew
           installation_status = ["Not installed"]
           if (bottle = formula.bottle)
             begin
-              bottle.fetch_tab(quiet: !args.debug?) if args.verbose?
+              bottle.fetch_tab(quiet: !args.debug?) if verbose
               bottle_size = bottle.bottle_size
               installed_size = bottle.installed_size
               installation_status << "Bottle Size: #{Formatter.disk_usage_readable(bottle_size)}" if bottle_size
@@ -374,8 +372,8 @@ module Homebrew
             installed:,
             outdated:,
             warning:           missing_libraries.present?,
-            removed:           installed && formula.tap.present? &&
-                                 kegs.all? { |keg| keg.tab.tap == formula.tap && keg.deleted_formula? },
+            removed:           installed && tap.present? &&
+                                 kegs.all? { |keg| keg.tab.tap == tap && keg.deleted_formula? },
             stable:            stable.present?,
             bottled:,
             head:              formula.head.present?,
@@ -384,13 +382,13 @@ module Homebrew
           shadowed_by:         shadowed_by&.name,
           aliases:             formula.aliases,
           old_names:           formula.oldnames,
-          conflicts:,
+          conflicts:           formula_conflicts(formula),
           installation_status:,
           source_url:          github_info(formula),
-          tap:                 formula.tap,
+          tap:,
           license:             formula.license,
-          installed_versions:  installed_section_rows(shadowing_formula || formula, verbose: args.verbose?),
-          verbose:             args.verbose?,
+          installed_versions:  installed_section_rows(shadowing_formula || formula, verbose:),
+          verbose:,
         )
 
         tab_runtime_deps = kegs.last&.runtime_dependencies
@@ -436,7 +434,7 @@ module Homebrew
           )
         end
         if installed_dependents.any?
-          dependency_lines << if args.verbose?
+          dependency_lines << if verbose
             "Dependents (#{installed_dependents.count}): #{installed_dependents.join(", ")}"
           else
             "Dependents: #{installed_dependents.count}"
@@ -452,8 +450,8 @@ module Homebrew
           Options.dump_for_formula formula
         end
 
-        caveats = Caveats.new(formula, shadowed_path: !args.verbose?)
-        if args.verbose?
+        caveats = Caveats.new(formula, shadowed_path: !verbose)
+        if verbose
           binaries_keg = kegs.find(&:linked?) || kegs.last
           binaries = if binaries_keg
             binary_files = [binaries_keg/"bin", binaries_keg/"sbin"].select(&:directory?).flat_map do |dir|
@@ -476,6 +474,22 @@ module Homebrew
         return unless formula.core_formula?
 
         Utils::Analytics.formula_output(formula, args:)
+      end
+
+      sig { params(formula: Formula).returns(T::Array[String]) }
+      def formula_conflicts(formula)
+        formula.conflicts.filter_map do |conflict|
+          resolved = begin
+            Formulary.factory(conflict.name)
+          rescue FormulaUnavailableError
+            nil
+          end
+          next if resolved && resolved.full_name == formula.full_name
+
+          conflict_name = resolved&.full_name || conflict.name
+          reason = " (because #{conflict.reason})" if conflict.reason
+          "#{conflict_name}#{reason}"
+        end.sort!
       end
 
       private
@@ -511,18 +525,6 @@ module Homebrew
         end
       end
 
-      sig {
-        params(resolved: T::Array[[T.untyped, T.nilable(Tap)]]).returns(T::Array[[T.untyped, T.nilable(Tap)]])
-      }
-      def unique_by_display_name(resolved)
-        resolved.uniq do |obj, _shadowed_by|
-          case obj
-          when Formula, Cask::Cask then obj.full_name
-          else obj
-          end
-        end
-      end
-
       sig { params(formula: Formula, user_qualified: T::Boolean).returns([Formula, T.nilable(Tap)]) }
       def display_resolution(formula, user_qualified:)
         return [formula, nil] if user_qualified
@@ -541,7 +543,30 @@ module Homebrew
           end
         when Cask::Cask
           if quiet
-            info_cask_summary(formula_or_cask)
+            installed_version = formula_or_cask.installed_version
+            installed = installed_version.present?
+            tab = Cask::Tab.for_cask(formula_or_cask)
+
+            puts oh1_title(info_summary_title(
+                             formula_or_cask.full_name,
+                             formula_or_cask.desc.presence&.then do |desc|
+                               "#{if formula_or_cask.name.present?
+                                    "(#{formula_or_cask.name.join(", ")}) "
+                               end}#{desc}"
+                             end,
+                             installed:,
+                           ))
+            if installed
+              puts "Cask from #{T.cast(formula_or_cask.tap, T.nilable(Tap))&.name ||
+                                 T.cast(tab.source["tap"], T.nilable(String)) ||
+                                 formula_or_cask.sourcefile_path&.to_s ||
+                                 T.cast(tab.source["path"], T.nilable(String)) ||
+                                 github_info(formula_or_cask)}"
+              puts Utils::InfoDisplay.installation_summary(installed_version, tab)
+            else
+              puts "Cask from #{github_info(formula_or_cask)}"
+              puts "Not installed"
+            end
           else
             info_cask(formula_or_cask)
           end
@@ -737,34 +762,6 @@ module Homebrew
         require "cask/info"
 
         Cask::Info.info(cask, args:)
-      end
-
-      sig { params(cask: Cask::Cask).void }
-      def info_cask_summary(cask)
-        installed_version = cask.installed_version
-        installed = installed_version.present?
-        tab = Cask::Tab.for_cask(cask)
-
-        puts oh1_title(info_summary_title(
-                         cask.full_name,
-                         cask.desc.presence&.then do |desc|
-                           "#{if cask.name.present?
-                                "(#{cask.name.join(", ")}) "
-                           end}#{desc}"
-                         end,
-                         installed:,
-                       ))
-        if installed
-          puts "Cask from #{T.cast(cask.tap, T.nilable(Tap))&.name ||
-                             T.cast(tab.source["tap"], T.nilable(String)) ||
-                             cask.sourcefile_path&.to_s ||
-                             T.cast(tab.source["path"], T.nilable(String)) ||
-                             github_info(cask)}"
-          puts Utils::InfoDisplay.installation_summary(installed_version, tab)
-        else
-          puts "Cask from #{github_info(cask)}"
-          puts "Not installed"
-        end
       end
 
       sig { params(title: String, items: T::Array[NameSize]).void }

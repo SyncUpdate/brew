@@ -35,6 +35,11 @@ module Homebrew
     # @api private
     BACKFILL_CUTOFF = DateTime.new(2024, 3, 14).freeze
 
+    # The OIDC issuer of the certificates GitHub Actions workflows sign with.
+    #
+    # @api private
+    GITHUB_ACTIONS_ISSUER = "https://token.actions.githubusercontent.com"
+
     # @api private
     BULK_LIST_MAX_DIGESTS = 1024
 
@@ -88,8 +93,7 @@ module Homebrew
       return @gh_executable if @gh_executable
 
       # NOTE: We set HOMEBREW_NO_VERIFY_ATTESTATIONS when installing `gh` itself,
-      #       to prevent a cycle during bootstrapping. This can eventually be resolved
-      #       by vendoring a pure-Ruby Sigstore verifier client.
+      #       to prevent a cycle until installs use the Ruby verifier.
       @gh_executable = with_env(HOMEBREW_NO_VERIFY_ATTESTATIONS: "1") do
         Utils::Executable.ensure!("gh", reason: "verifying attestations", latest: true)
       end
@@ -336,6 +340,39 @@ module Homebrew
 
       raise MissingAttestationError,
             "attestation not found: none listed from #{organisation} for #{bottle.filename}"
+    end
+
+    # Verifies a Sigstore bundle of build provenance for the given bottle
+    # SHA-256. It makes no request: the bundle carries its transparency log
+    # proof and Sigstore's trusted root is pinned in
+    # `attestation/trusted_root.json`.
+    #
+    # The provenance must have been signed by `signing_workflow`, in
+    # `https://github.com/OWNER/REPO/.github/workflows/WORKFLOW.yml@REF` format.
+    #
+    # @return [Hash] the verified statement and signing time, shaped like a
+    #   `gh attestation verify --format json` result
+    # @raise [InvalidAttestationError] on any verification failures
+    #
+    # @api private
+    sig { params(bundle: String, digest: String, signing_workflow: String).returns(T::Hash[String, T.untyped]) }
+    def self.verify_bundle(bundle, digest, signing_workflow)
+      require "attestation/verifier"
+
+      result = Verifier.verify(bundle, digest, signing_workflow)
+      {
+        "verificationResult" => {
+          "statement"          => result.statement,
+          "verifiedTimestamps" => [{ "timestamp" => result.integrated_time.iso8601 }],
+        },
+      }
+    rescue NoMatchingPatternError
+      raise InvalidAttestationError.new("attestation verification failed: unsupported bundle form"), cause: nil
+    rescue InvalidAttestationError
+      raise
+    rescue => e
+      # Parser and OpenSSL messages can contain signature bytes.
+      raise InvalidAttestationError.new("attestation verification failed: #{e.class}"), cause: nil
     end
 
     ATTESTATION_MAX_RETRIES = 5

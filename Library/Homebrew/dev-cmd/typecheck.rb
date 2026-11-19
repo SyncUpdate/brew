@@ -173,8 +173,14 @@ module Homebrew
           RuboCop::Cop::IgnoredMethods
           RuboCop::Cop::IgnoredNode
           RuboCop::Cop::IgnoredPattern
+          RuboCop::Cop::MethodComplexity
           RuboCop::Cop::MethodPreference
+          RuboCop::Cop::Metrics::BlockNesting
+          RuboCop::Cop::Metrics::CyclomaticComplexity
+          RuboCop::Cop::Metrics::PerceivedComplexity
+          RuboCop::Cop::Metrics::Utils
           RuboCop::Cop::Offense
+          RuboCop::Cop::ProjectIndexHelp
           RuboCop::Cop::RangeHelp
           RuboCop::Cop::Registry
           RuboCop::Cop::Util
@@ -200,8 +206,15 @@ module Homebrew
         parsed.value.statements.body.each do |node|
           case node
           when Prism::ModuleNode, Prism::ClassNode
+            constant_path = node.constant_path
+            full_name = if constant_path.is_a?(Prism::ConstantReadNode)
+              constant_path.name.to_s
+            elsif constant_path.is_a?(Prism::ConstantPathNode)
+              extract_constant_path_parts(constant_path).join("::")
+            else
+              ""
+            end
             # Keep if it's in our allowlist or is a top-level essential node.
-            full_name = extract_full_name(node)
             nodes_to_keep << node if full_name.blank? || allowlist.any? { |name| full_name.start_with?(name) }
           when Prism::ConstantWriteNode # Keep essential constants.
             nodes_to_keep << node if node.name.to_s.match?(/^[[:digit:][:upper:]_]+$/)
@@ -215,25 +228,6 @@ module Homebrew
       end
 
       private
-
-      sig { params(node: Prism::Node).returns(String) }
-      def extract_full_name(node)
-        case node
-        when Prism::ModuleNode, Prism::ClassNode
-          parts = []
-
-          constant_path = node.constant_path
-          if constant_path.is_a?(Prism::ConstantReadNode)
-            parts << constant_path.name.to_s
-          elsif constant_path.is_a?(Prism::ConstantPathNode)
-            parts.concat(extract_constant_path_parts(constant_path))
-          end
-
-          parts.join("::")
-        else
-          ""
-        end
-      end
 
       sig { params(constant_path: T.any(Prism::ConstantPathNode, Prism::Node)).returns(T::Array[String]) }
       def extract_constant_path_parts(constant_path)

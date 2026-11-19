@@ -78,10 +78,10 @@ module Cask
     sig { returns(T::Boolean) }
     attr_accessor :allow_reassignment
 
-    sig { returns(T::Array[Cask]) }
-    def self.all
+    sig { params(core_tokens: T::Array[String]).returns(T::Array[Cask]) }
+    def self.all(core_tokens: CoreCaskTap.instance.cask_tokens)
       # Load core casks from tokens so they load from the API when the core cask is not tapped.
-      tokens_and_files = CoreCaskTap.instance.cask_tokens
+      tokens_and_files = core_tokens
       tokens_and_files += Tap.reject(&:core_cask_tap?).flat_map(&:cask_files)
                              .then { |files| Homebrew::Trust.trusted_cask_files(files) }
       tokens_and_files.filter_map do |token_or_file|
@@ -641,7 +641,9 @@ module Cask
         "outdated"                        => outdated?,
         "sha256"                          => sha256,
         "artifacts"                       => artifacts_list,
-        "caveats"                         => caveats_for_api,
+        # Conditional built-in caveats depend on the current machine so are
+        # stored as separate booleans (e.g. `caveats_rosetta`) instead.
+        "caveats"                         => Tty.strip_ansi(caveats_object.to_s_without_conditional).presence,
         "caveats_rosetta"                 => caveats_object.invoked?(:requires_rosetta) || nil,
         "depends_on"                      => depends_on,
         "conflicts_with"                  => conflicts_with,
@@ -680,7 +682,13 @@ module Cask
       end
 
       if loaded_from_api? && (json_cask = api_source) && !Homebrew::EnvConfig.no_install_from_api?
-        return api_to_local_hash(json_cask.dup)
+        return json_cask.merge(
+          "token"          => token,
+          "installed"      => installed_version,
+          "pinned"         => pinned?,
+          "pinned_version" => pinned_version,
+          "outdated"       => outdated?,
+        )
       end
 
       hash = to_h_with_language_variations
@@ -828,16 +836,6 @@ module Cask
 
     private
 
-    # Returns caveats text for API serialization, excluding conditional
-    # built-in caveats that depend on the current machine's state.
-    # These are stored as separate boolean fields (e.g. caveats_rosetta)
-    # and evaluated at install time instead.
-    sig { returns(T.nilable(String)) }
-    def caveats_for_api
-      Tty.strip_ansi(caveats_object.to_s_without_conditional)
-         .presence
-    end
-
     sig { returns(T.nilable(Homebrew::BundleVersion)) }
     def bundle_version
       @bundle_version ||= T.let(
@@ -928,16 +926,6 @@ module Cask
       return false if build_comparisons.include?(0)
 
       build_comparisons.include?(-1)
-    end
-
-    sig { params(hash: T::Hash[String, T.untyped]).returns(T::Hash[String, T.untyped]) }
-    def api_to_local_hash(hash)
-      hash["token"] = token
-      hash["installed"] = installed_version
-      hash["pinned"] = pinned?
-      hash["pinned_version"] = pinned_version
-      hash["outdated"] = outdated?
-      hash
     end
 
     sig { returns(T.nilable(T::Hash[Symbol, T.untyped])) }

@@ -51,10 +51,10 @@ module Cask
 
       unless pkgutil_bom_dirs.empty?
         odebug "Deleting pkg directories"
-        rmdir(deepest_path_first(pkgutil_bom_dirs))
+        rmdir(pkgutil_bom_dirs.sort_by { |path| -path.to_s.split(File::SEPARATOR).count })
       end
 
-      rmdir(root) unless MacOS.undeletable?(root)
+      rmdir(root) unless OS::Mac.undeletable?(root)
 
       forget
     end
@@ -78,7 +78,8 @@ module Cask
 
     sig { returns(T::Array[Pathname]) }
     def pkgutil_bom_specials
-      @pkgutil_bom_specials ||= T.let(pkgutil_bom_all.select { special?(it) }, T.nilable(T::Array[Pathname]))
+      @pkgutil_bom_specials ||= T.let(pkgutil_bom_all.select { it.symlink? || it.chardev? || it.blockdev? },
+                                      T.nilable(T::Array[Pathname]))
     end
 
     sig { returns(T::Array[Pathname]) }
@@ -94,7 +95,7 @@ module Cask
                 .stdout
                 .split("\n")
                 .map { |path| root.join(path) }
-                .reject { |path| MacOS.undeletable?(path) },
+                .reject { |path| OS::Mac.undeletable?(path) },
         T.nilable(T::Array[Pathname]),
       )
     end
@@ -111,11 +112,6 @@ module Cask
 
     private
 
-    sig { params(path: Pathname).returns(T::Boolean) }
-    def special?(path)
-      path.symlink? || path.chardev? || path.blockdev?
-    end
-
     # Helper script to delete empty directories after deleting `.DS_Store` files and broken symlinks.
     # Needed in order to execute all file operations with `sudo`.
     RMDIR_SH = T.let((HOMEBREW_LIBRARY_PATH/"cask/utils/rmdir.sh").freeze, Pathname)
@@ -130,11 +126,6 @@ module Cask
         sudo:         true,
         sudo_as_root: true,
       )
-    end
-
-    sig { params(paths: T::Array[Pathname]).returns(T::Array[Pathname]) }
-    def deepest_path_first(paths)
-      paths.sort_by { |path| -path.to_s.split(File::SEPARATOR).count }
     end
   end
 end

@@ -5,7 +5,6 @@ require "utils/browser"
 
 require "abstract_command"
 require "fileutils"
-require "hardware"
 require "system_command"
 require "utils/git"
 
@@ -98,25 +97,20 @@ module Homebrew
             Dir.glob("test/**/*_spec.rb")
           end
 
-          if files.blank?
-            raise UsageError, "The `--only` argument requires a valid file or folder name!" if only
-
-            if args.changed?
-              opoo "No tests are directly associated with the changed files!"
-              return
-            end
+          if only && files.blank?
+            raise UsageError, "The `--only` argument requires a valid file or folder name!"
           end
 
-          parallel_rspec_log_name = "parallel_runtime_rspec"
-          parallel_rspec_log_name = "#{parallel_rspec_log_name}.generic" if args.generic?
-          parallel_rspec_log_name = "#{parallel_rspec_log_name}.online" if args.online?
-          parallel_rspec_log_name = "#{parallel_rspec_log_name}.log"
-
-          parallel_rspec_log_path = if ENV["CI"]
-            "tests/#{parallel_rspec_log_name}"
-          else
-            "#{HOMEBREW_CACHE}/#{parallel_rspec_log_name}"
+          if args.changed? && files.blank?
+            opoo "No tests are directly associated with the changed files!"
+            return
           end
+
+          parallel_rspec_log_name = [
+            "parallel_runtime_rspec", ("generic" if args.generic?), ("online" if args.online?), "log"
+          ].compact.join(".")
+
+          parallel_rspec_log_path = "#{ENV["CI"] ? "tests" : HOMEBREW_CACHE}/#{parallel_rspec_log_name}"
           # A run that may not record every file must not replace the log a full run
           # reads: `--only`, `--changed` and `--shard` cover a subset by design, and
           # `--fail-fast` stops its workers early.
@@ -126,16 +120,7 @@ module Homebrew
             parallel_rspec_log_path
           end
 
-          parallel_args = if ENV["CI"]
-            %w[
-              --combine-stderr
-              --serialize-stdout
-            ]
-          else
-            %w[
-              --nice
-            ]
-          end
+          parallel_args = ENV["CI"] ? %w[--combine-stderr --serialize-stdout] : %w[--nice]
           # Group by recorded runtime rather than source file size, which barely
           # correlates with how long a file takes.
           parallel_args += ["--runtime-log", parallel_rspec_log_path]
@@ -144,17 +129,17 @@ module Homebrew
           # seeds being output when running parallel tests.
           seed = args.seed || rand(0xFFFF).to_i
 
-          bundle_args = ["-I", (HOMEBREW_LIBRARY_PATH/"test").to_s]
-          bundle_args += %W[
+          bundle_args = %W[
+            -I #{HOMEBREW_LIBRARY_PATH/"test"}
             --seed #{seed}
             --color
             --require spec_helper
           ]
           bundle_args << "--fail-fast" if args.fail_fast?
           bundle_args << "--dry-run" if args.load_only?
-          bundle_args << "--profile" << args.profile if args.profile
-          bundle_args << "--tag" << "~needs_arm" unless Hardware::CPU.arm?
-          bundle_args << "--tag" << "~needs_intel" unless Hardware::CPU.intel?
+          if (profile = args.profile)
+            bundle_args << "--profile" << profile
+          end
           bundle_args << "--tag" << "~needs_network" unless args.online?
           bundle_args << "--tag" << "~needs_ci" unless ENV["CI"]
 
@@ -175,12 +160,10 @@ module Homebrew
             ).fetch(shard_index - 1)
           end
           if files.blank?
-            if args.changed?
-              opoo "No tests are available to run on this operating system."
-              return
-            end
+            raise UsageError, "No tests are available to run on this operating system." unless args.changed?
 
-            raise UsageError, "No tests are available to run on this operating system."
+            opoo "No tests are available to run on this operating system."
+            return
           end
 
           puts "Randomized with seed #{seed}"
@@ -223,9 +206,7 @@ module Homebrew
 
           Utils::Browser.open prof_filename if prof_filename
 
-          return if success
-
-          Homebrew.failed = true
+          Homebrew.failed = true unless success
         end
       end
 
@@ -316,7 +297,14 @@ module Homebrew
         filestub_regex = %r{Library/Homebrew/([\w/-]+).rb}
         changed_files.filter_map { |file| file[filestub_regex, 1] }
                      .flat_map do |filestub|
-          shared_context_tests = shared_context_test_files(filestub)
+          shared_context_tests = case filestub
+          when "test/support/helper/spec/shared_context/integration_test"
+            tests_tagged_with("integration_test")
+          when "test/support/helper/spec/shared_context/homebrew_cask"
+            tests_tagged_with("cask")
+          else
+            []
+          end
           next shared_context_tests if shared_context_tests.present?
 
           if filestub.start_with?("test/")
@@ -349,12 +337,12 @@ module Homebrew
         bundle_args << "--tag" << "~needs_svnadmin" unless args.online?
         bundle_args << "--tag" << "~needs_svn" unless args.online?
 
-        bundle_args << "--tag" << "~needs_macos" << "--tag" << "~cask"
+        bundle_args << "--tag" << "~needs_macos"
       end
 
       sig { params(bundle_args: T::Array[String]).returns(T::Array[String]) }
       def non_linux_bundle_args(bundle_args)
-        bundle_args << "--tag" << "~needs_linux" << "--tag" << "~needs_systemd"
+        bundle_args << "--tag" << "~needs_linux"
       end
 
       sig { params(files: T::Array[String]).returns(T::Array[String]) }
@@ -365,7 +353,7 @@ module Homebrew
 
       sig { params(files: T::Array[String]).returns(T::Array[String]) }
       def non_macos_files(files)
-        files.grep_v(%r{^test/(os/mac|cask)(/.*|_spec\.rb)$})
+        files.grep_v(%r{^test/os/mac(/.*|_spec\.rb)$})
       end
 
       sig { params(files: T::Array[String]).returns(T::Array[String]) }
@@ -373,31 +361,8 @@ module Homebrew
         files.grep_v(%r{^test/os/linux(/.*|_spec\.rb)$})
       end
 
-      sig { params(filestub: String).returns(T::Array[Pathname]) }
-      def shared_context_test_files(filestub)
-        case filestub
-        when "test/support/helper/spec/shared_context/integration_test"
-          tests_tagged_with("integration_test")
-        when "test/support/helper/spec/shared_context/homebrew_cask"
-          tests_tagged_with("cask")
-        else
-          []
-        end
-      end
-
       sig { params(tag: String).returns(T::Array[Pathname]) }
       def tests_tagged_with(tag)
-        Dir.glob("test/**/*_spec.rb").filter_map do |file|
-          path = Pathname(file)
-          next unless path.exist?
-          next unless file_uses_rspec_tag?(path, tag)
-
-          path
-        end
-      end
-
-      sig { params(path: Pathname, tag: String).returns(T::Boolean) }
-      def file_uses_rspec_tag?(path, tag)
         escaped_tag = Regexp.escape(tag)
         rspec_declaration_methods = %w[describe context it specify example].join("|")
         rspec_declaration_regex = /^\s*(?:RSpec\.)?(?:#{rspec_declaration_methods})\b/
@@ -406,10 +371,18 @@ module Homebrew
         # Match hash tag syntax: `tag_name: true/false/nil/value`.
         hash_tag_regex = /(?:^|[,(])\s*#{escaped_tag}:\s*(?:true|false|nil|:[a-z_]\w*|[a-z_]\w*)?/i
 
-        path.read.each_line.any? do |line|
-          is_rspec_declaration = line.match?(rspec_declaration_regex)
-          has_tag = line.match?(symbol_tag_regex) || line.match?(hash_tag_regex)
-          is_rspec_declaration && has_tag
+        Dir.glob("test/**/*_spec.rb").filter_map do |file|
+          path = Pathname(file)
+          next unless path.exist?
+
+          tagged = path.read.each_line.any? do |line|
+            is_rspec_declaration = line.match?(rspec_declaration_regex)
+            has_tag = line.match?(symbol_tag_regex) || line.match?(hash_tag_regex)
+            is_rspec_declaration && has_tag
+          end
+          next unless tagged
+
+          path
         end
       end
     end

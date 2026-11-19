@@ -17,6 +17,50 @@ RSpec.describe PyPI do
     "https://github.com/pypa/pip-audit/releases/download/v2.5.6/v2.5.6.tar.gz"
   end
 
+  describe ".input_packages" do
+    it "deduplicates the main and extra packages with normalised names" do
+      main = PyPI::Package.new("Example_Name==1.0")
+      extras = [PyPI::Package.new("example-name==1.0"), PyPI::Package.new("other==2.0")]
+
+      expect(described_class.input_packages(main, extras, ignore_non_pypi_packages: false).map(&:to_s))
+        .to eq(["example-name==1.0", "other==2.0"])
+    end
+
+    it "allows extra packages without a main package" do
+      extra = PyPI::Package.new("example==1.0")
+
+      expect(described_class.input_packages(nil, [extra], ignore_non_pypi_packages: false)).to eq([extra])
+    end
+
+    it "rejects conflicting versions of the same package" do
+      main = PyPI::Package.new("example==1.0")
+      extra = PyPI::Package.new("example==2.0")
+
+      expect { described_class.input_packages(main, [extra], ignore_non_pypi_packages: false) }
+        .to raise_error(SystemExit).and output(/Conflicting versions.*example.*1.0, 2.0/).to_stderr
+    end
+
+    it "checks conflicts between extra packages too" do
+      extras = [PyPI::Package.new("example==1.0"), PyPI::Package.new("example==2.0")]
+
+      expect { described_class.input_packages(nil, extras, ignore_non_pypi_packages: false) }
+        .to raise_error(SystemExit).and output(/Conflicting versions.*example/).to_stderr
+    end
+
+    it "rejects non-PyPI extra packages by default" do
+      extra = PyPI::Package.new(non_pypi_package_url, is_url: true)
+
+      expect { described_class.input_packages(nil, [extra], ignore_non_pypi_packages: false) }
+        .to raise_error(SystemExit).and output(/is not available on PyPI/).to_stderr
+    end
+
+    it "preserves non-PyPI extra packages when requested" do
+      extra = PyPI::Package.new(non_pypi_package_url, is_url: true)
+
+      expect(described_class.input_packages(nil, [extra], ignore_non_pypi_packages: true)).to eq([extra])
+    end
+  end
+
   describe ".main_package" do
     let(:package_formula) do
       formula do
@@ -398,10 +442,11 @@ RSpec.describe PyPI do
       allow(Formula).to receive(:[]).with("python").and_return(instance_double(Formula, ensure_installed!: true))
     end
 
-    it "uses the stable resource for dependency and package metadata resolution" do
+    it "uses the stable resource and selected Python for dependency and package metadata resolution" do
       path.write <<~RUBY
         class Foo < Formula
           url "ssh://git@gitlab.example/foo.git", tag: "v1.0"
+          depends_on "python@3.14"
 
           def install
             bin.install "foo"
@@ -409,8 +454,13 @@ RSpec.describe PyPI do
         end
       RUBY
       formula = Formulary.from_contents("foo", path, path.read)
+      python = instance_double(Formula, name: "python@3.14", version: Version.new("3.14"),
+                                        any_version_installed?: true, ensure_installed!: true)
+      allow(formula.deps.fetch(0)).to receive(:to_formula).and_return(python)
+      allow(Formula).to receive(:[]).with("python@3.14").and_return(python)
       allow(described_class).to receive(:pip_output)
-        .with(array_including(formula.resource), any_args)
+        .with(array_including(Utils::Path.formula_opt_libexec("python@3.14")/"bin/python",
+                              formula.resource), any_args)
         .and_return('{"install":[{"metadata":{"name":"foo","version":"1.0"}}]}')
 
       expect(described_class.update_python_resources!(formula, quiet: true)).to be true
@@ -459,6 +509,18 @@ RSpec.describe PyPI do
           end
         end
       RUBY
+    end
+
+    it "skips non-PyPI formulae with unavailable optional Python dependencies", :no_api do
+      formula = formula("vim-custom") do
+        T.bind(self, T.class_of(Formula))
+        url "https://github.com/vim/vim/archive/refs/tags/v9.2.1350.tar.gz"
+        depends_on "python@3.14" => :optional
+      end
+
+      expect(described_class.update_python_resources!(formula,
+                                                      version:                  "9.2.1350",
+                                                      ignore_non_pypi_packages: true)).to be false
     end
 
     context "with a non-PyPI stable URL and no pypi_packages defined" do

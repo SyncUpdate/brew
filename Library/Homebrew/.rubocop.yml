@@ -53,10 +53,10 @@ Metrics:
     - "test/support/fixtures/**/*"
 
 Metrics/AbcSize:
-  Max: 250
+  Max: 195
 
 Metrics/BlockLength:
-  Max: 150
+  Max: 100
   CountAsOne: [array, hash, heredoc]
   AllowedMethods:
     - refine

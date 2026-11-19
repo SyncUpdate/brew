@@ -197,10 +197,15 @@ module GitHub
       gh_out.chomp.presence
     end
 
+    sig { returns(T::Boolean) }
+    def self.keychain_available? = false
+
     # Gets the password field from `git-credential-osxkeychain` for github.com,
     # but only if that password looks like a GitHub access token.
     sig { returns(T.nilable(String)) }
     def self.keychain_username_password
+      return unless keychain_available?
+
       git_credential_out, _, result = system_command("git",
                                                      args:         ["credential-osxkeychain", "get"],
                                                      input:        ["protocol=https\n", "host=github.com\n"],
@@ -231,7 +236,7 @@ module GitHub
     # `curl` arguments to authenticate a GitHub API request, if credentials are available.
     sig { returns(T::Array[String]) }
     def self.credentials_curl_args
-      return [] if credentials_type == :none
+      return [] if credentials.blank?
 
       ["--header", "Authorization: token #{credentials}"]
     end
@@ -514,3 +519,5 @@ module GitHub
     end
   end
 end
+
+require "extend/os/utils/github/api"
