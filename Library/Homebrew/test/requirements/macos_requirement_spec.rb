@@ -22,9 +22,8 @@ RSpec.describe MacOSRequirement do
   end
 
   it "tracks every retired macOS release" do
-    expect(MacOSVersion::RELEASES.keys - MacOSVersion::SYMBOLS.keys).to contain_exactly(
-      *MacOSRequirement::DISABLED_MACOS_VERSIONS,
-      *MacOSRequirement::DEPRECATED_MACOS_VERSIONS,
+    expect(MacOSVersion::RELEASES.keys - MacOSVersion::SYMBOLS.keys).to match_array(
+      MacOSRequirement::DISABLED_MACOS_VERSIONS + MacOSRequirement::DEPRECATED_MACOS_VERSIONS,
     )
   end
 
@@ -121,6 +120,28 @@ RSpec.describe MacOSRequirement do
         expect(no_requirement.message).to eq "This formula requires macOS."
         expect(no_requirement.message(type: :cask)).to eq "This cask requires macOS."
       end
+    end
+  end
+
+  describe "#platform_supported?" do
+    subject(:requirement) { described_class.new([:sonoma]) }
+
+    test_each([[:arm64_sonoma, true], [:ventura, false], [:x86_64_linux, false]]) do |(tag, supported)|
+      it "is #{supported} on #{tag}" do
+        expect(requirement.platform_supported?(Utils::Bottles::Tag.from_symbol(tag))).to be(supported)
+      end
+    end
+
+    it "is true on a macOS version too new to be known" do
+      tag = Utils::Bottles::Tag.new(system: :dunno, arch: :arm64)
+
+      expect(requirement.platform_supported?(tag)).to be(true)
+    end
+
+    it "is false on a system that is neither macOS nor Linux" do
+      tag = Utils::Bottles::Tag.new(system: :generic, arch: :arm64)
+
+      expect(requirement.platform_supported?(tag)).to be(false)
     end
   end
 end

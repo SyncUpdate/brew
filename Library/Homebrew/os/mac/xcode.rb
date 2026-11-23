@@ -7,6 +7,8 @@ module OS
   module Mac
     # Helper module for querying Xcode information.
     module Xcode
+      @prefix = T.let(nil, T.nilable(::Pathname))
+
       DEFAULT_BUNDLE_PATH = ::Pathname.new("/Applications/Xcode.app").freeze
       BUNDLE_ID = "com.apple.dt.Xcode"
       OLD_BUNDLE_ID = "com.apple.Xcode"
@@ -88,7 +90,7 @@ module OS
       # directory or nil if Xcode.app is not installed.
       sig { returns(T.nilable(::Pathname)) }
       def self.prefix
-        @prefix ||= T.let(begin
+        @prefix ||= begin
           dir = MacOS.active_developer_dir
 
           if dir.empty? || dir == CLT::PKG_PATH || !File.directory?(dir)
@@ -98,7 +100,7 @@ module OS
             # Use cleanpath to avoid pathological trailing slash
             ::Pathname.new(dir).cleanpath
           end
-        end, T.nilable(::Pathname))
+        end
       end
 
       sig { returns(::Pathname) }
@@ -245,8 +247,9 @@ module OS
       sig { returns(String) }
       def self.installation_instructions
         if OS::Mac.version.prerelease?
+          major_version = minimum_version.split(".").first
           <<~EOS
-            Install the Command Line Tools for Xcode #{minimum_version.split(".").first} from:
+            Install the Command Line Tools for Xcode #{major_version} from:
               #{Formatter.url(MacOS::Xcode::APPLE_DEVELOPER_DOWNLOAD_URL)}
           EOS
         else
@@ -302,6 +305,7 @@ module OS
       def self.latest_version
         case MacOS.version
         when "26" then "26.6"
+        when "15" then "16.4"
         when "13" then "15.1"
         when "11" then "13.2"
         else           MacOS::Xcode.latest_version
@@ -313,7 +317,7 @@ module OS
         case macos.strip_patch
         when "27" then "2100.3.34.2"
         when "26" then "2100.1.1.101"
-        when "15" then "1700.6.4.2"
+        when "15" then "1700.0.13.5"
         when "14" then "1600.0.26.6"
         when "13" then "1500.1.0.2.5"
         when "12" then "1400.0.29.202"

@@ -127,7 +127,11 @@ module SharedAudits
       # `# whois.nic.sh` on macOS, `Found a referral to whois.nic.sh.` on Linux.
       if lines.first&.start_with?("% IANA WHOIS server")
         referral_index = lines.index { |line| line.start_with?("# whois.", "Found a referral to ") }
-        lines = referral_index ? lines.drop(referral_index + 1) : []
+        lines = if referral_index
+          lines.drop(referral_index + 1)
+        else
+          []
+        end
       end
 
       lines.each do |line|
@@ -572,17 +576,18 @@ module SharedAudits
 
   sig { params(formula_or_cask: T.any(Formula, Cask::Cask)).returns(T.nilable(String)) }
   def self.check_deprecate_disable_reason(formula_or_cask)
-    return if !formula_or_cask.deprecated? && !formula_or_cask.disabled?
-
-    reason = formula_or_cask.deprecated? ? formula_or_cask.deprecation_reason : formula_or_cask.disable_reason
-    return unless reason.is_a?(Symbol)
-
     reasons = if formula_or_cask.is_a?(Formula)
       DeprecateDisable::FORMULA_DEPRECATE_DISABLE_REASONS
     else
       DeprecateDisable::CASK_DEPRECATE_DISABLE_REASONS
     end
 
-    "#{reason} is not a valid deprecate! or disable! reason" unless reasons.include?(reason)
+    invalid_reason = [formula_or_cask.deprecate_args, formula_or_cask.disable_args].filter_map do |args|
+      reason = args&.fetch(:because)
+      reason if reason.is_a?(Symbol) && reasons.exclude?(reason)
+    end.first
+    return if invalid_reason.nil?
+
+    "#{invalid_reason} is not a valid deprecate! or disable! reason"
   end
 end

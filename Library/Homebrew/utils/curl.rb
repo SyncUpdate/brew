@@ -4,6 +4,7 @@
 require "utils/output"
 
 require "open3"
+require "timeout"
 
 require "utils/timer"
 require "utils/curl/responses"
@@ -92,10 +93,7 @@ module Utils
 
     sig { returns(String) }
     def curl_path
-      @curl_path ||= T.let(
-        Utils.popen_read(curl_executable, "--homebrew=print-path").chomp,
-        T.nilable(String),
-      )
+      @curl_path ||= Utils.popen_read(curl_executable, "--homebrew=print-path").chomp
       odie("Failed to get curl path") if @curl_path.blank?
       @curl_path
     end
@@ -104,10 +102,10 @@ module Utils
     def clear_path_cache
       ENV.delete("HOMEBREW_CURL_VERSION")
       ENV.delete("HOMEBREW_CURL_VERSION_PATH")
-      @curl_path = nil
+      @curl_path = T.let(nil, T.nilable(String))
       @curl_version = nil
-      @curl_supports_fail_with_body = nil
-      @curl_supports_tls13 = nil
+      @curl_supports_fail_with_body = T.let(nil, T.nilable(T::Hash[T.any(Pathname, String), T::Boolean]))
+      @curl_supports_tls13 = T.let(nil, T.nilable(T::Hash[T.any(Pathname, String), T::Boolean]))
     end
 
     # Keep environment options in sync with setup_curl_args in utils/curl.sh.
@@ -432,10 +430,11 @@ module Utils
     rescue ErrorDuringExecution => e
       raise if e.exitstatus != 23 # CURLE_WRITE_ERROR
 
+      error_message = strip_progress_bar(Tty.collapse_carriage_returns(e.stderr)).strip
       raise DownloadWriteError, <<~EOS
         Could not write download to #{destination}
         Check that the destination has enough free disk space and is writable.
-        #{strip_progress_bar(Tty.collapse_carriage_returns(e.stderr)).strip}
+        #{error_message}
       EOS
     end
 
@@ -603,7 +602,8 @@ module Utils
       details = T.let({}, T::Hash[Symbol, T.untyped])
       attempts = 0
       # The body is only read to compare an HTTP URL with its HTTPS counterpart.
-      head_only = T.let(url == secure_url, T::Boolean)
+      head_only = T.let(false, T::Boolean)
+      head_only = true if url == secure_url
       user_agents.each do |user_agent|
         loop do
           details = curl_http_content_headers_and_checksum(
@@ -746,7 +746,8 @@ module Utils
       specs = specs.flat_map do |option, argument|
         next [] if argument == false # No flag.
 
-        args = ["--#{option.to_s.tr("_", "-")}"]
+        option_name = option.to_s.tr("_", "-")
+        args = ["--#{option_name}"]
         args << argument if argument != true # It's a flag.
         args
       end
@@ -795,7 +796,8 @@ module Utils
           # Try to get encoding from Content-Type header, then from a `<meta>` tag
           # outside comments in the first 1024 bytes as browsers do.
           charset = content_type[/;\s*charset\s*=\s*"?([^\s";]+)/i, 1] if content_type
-          charset ||= File.binread(file_path, 1024).to_s
+          charset ||= File.binread(file_path, 1024)
+                          .to_s
                           .gsub(/<!--.*?(?:-->|\z)/m, "")[/<meta[^>]*[\s;]charset\s*=\s*["']?([\w-]+)/i, 1]
           begin
             if charset
@@ -858,17 +860,17 @@ module Utils
 
     sig { returns(T::Boolean) }
     def curl_supports_fail_with_body?
-      @curl_supports_fail_with_body ||= T.let(Hash.new do |h, key|
+      @curl_supports_fail_with_body ||= Hash.new do |h, key|
         h[key] = curl_version >= Version.new("7.76.0")
-      end, T.nilable(T::Hash[T.any(Pathname, String), T::Boolean]))
+      end
       @curl_supports_fail_with_body[curl_path]
     end
 
     sig { returns(T::Boolean) }
     def curl_supports_tls13?
-      @curl_supports_tls13 ||= T.let(Hash.new do |h, key|
-        h[key] = SystemCommand.quiet_system(curl_executable, *curl_args("--tlsv1.3", "--head", "https://brew.sh/"))
-      end, T.nilable(T::Hash[T.any(Pathname, String), T::Boolean]))
+      @curl_supports_tls13 ||= Hash.new do |h, key|
+        h[key] = SystemCommand.quiet_system(curl_executable, args: curl_args("--tlsv1.3", "--head", "https://brew.sh/"))
+      end
       @curl_supports_tls13[curl_path]
     end
   end

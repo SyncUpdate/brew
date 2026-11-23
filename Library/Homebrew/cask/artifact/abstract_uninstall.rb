@@ -91,6 +91,8 @@ module Cask
 
       sig { params(cask: Cask, directives: DirectivesType).void }
       def initialize(cask, **directives)
+        @running_bundle_ids = T.let(nil, T.nilable(T::Array[String]))
+
         ::Utils::Data.assert_valid_keys(directives, *ORDERED_DIRECTIVES, *METADATA_KEYS)
 
         super
@@ -216,7 +218,9 @@ module Cask
       def find_launchctl_with_wildcard(search)
         regex = wildcard_pattern(search)
         system_command!("/bin/launchctl", args: ["list"])
-          .stdout.lines.drop(1) # skip stdout column headers
+          .stdout
+          .lines
+          .drop(1) # skip stdout column headers
           .filter_map do |line|
             pid, _state, id = line.chomp.split(/\s+/)
             id if pid.to_i.nonzero? && id&.match?(regex)
@@ -335,7 +339,9 @@ module Cask
       sig { params(bundle_id: String).returns(T::Array[[Integer, Integer, T.nilable(String)]]) }
       def running_processes(bundle_id)
         system_command!("/bin/launchctl", args: ["list"])
-          .stdout.lines.drop(1)
+          .stdout
+          .lines
+          .drop(1)
           .map { |line| line.chomp.split("\t") }
           .map { |pid, state, id| [pid.to_i, state.to_i, id] }
           .select do |(pid, _, id)|
@@ -460,12 +466,9 @@ module Cask
 
       sig { returns(T::Array[String]) }
       def running_bundle_ids
-        @running_bundle_ids ||= T.let(
-          system_command("osascript", args:         ["-l", "JavaScript", "-e", RUNNING_BUNDLE_IDS_SCRIPT],
-                                      print_stderr: true)
-            .stdout.split("\n").map(&:strip).reject(&:empty?),
-          T.nilable(T::Array[String]),
-        )
+        @running_bundle_ids ||= system_command(
+          "osascript", args: ["-l", "JavaScript", "-e", RUNNING_BUNDLE_IDS_SCRIPT], print_stderr: true
+        ).stdout.split("\n").map(&:strip).reject(&:empty?)
       end
 
       sig { params(bundle_id: String).returns(SystemCommand::Result) }
@@ -669,10 +672,15 @@ module Cask
 
       sig { params(paths: T.any(Pathname, String), command: T.class_of(SystemCommand), _kwargs: T.anything).void }
       def uninstall_delete(*paths, command:, **_kwargs)
-        return if paths.empty?
-
-        ohai "Removing files:"
+        heading_printed = T.let(false, T::Boolean)
         each_resolved_path(:delete, paths) do |path, resolved_paths|
+          next if resolved_paths.empty?
+
+          unless heading_printed
+            ohai "Removing files:"
+            heading_printed = true
+          end
+
           puts path
           command.run!(
             "/usr/bin/xargs",
@@ -721,8 +729,8 @@ module Cask
         directories.all?(&:directory?)
       end
 
-      sig { params(directories: Pathname, command: T.class_of(SystemCommand)).void }
-      def recursive_rmdir(*directories, command:)
+      sig { params(directories: T::Array[Pathname], command: T.class_of(SystemCommand)).returns(T::Boolean) }
+      def recursive_rmdir(directories, command:)
         directories.all? do |resolved_path|
           puts resolved_path.sub(Dir.home, "~")
           next false if resolved_path.symlink?
@@ -733,7 +741,9 @@ module Cask
             next false unless children.all? { |child| child.directory? || child.basename.to_s == ".DS_Store" }
           else
             lines = command.run!("/bin/ls", args: ["-A", "-F", "--", resolved_path], sudo: true, print_stderr: false)
-                           .stdout.lines.map(&:chomp)
+                           .stdout
+                           .lines
+                           .map(&:chomp)
                            .flat_map(&:chomp)
 
             # Using `-F` above outputs directories ending with `/`.
@@ -748,7 +758,7 @@ module Cask
             children.delete(ds_store)
           end
 
-          next false unless recursive_rmdir(*children, command:)
+          next false unless recursive_rmdir(children, command:)
 
           begin
             Utils.gain_permissions_rmdir(resolved_path, command:)
@@ -775,7 +785,7 @@ module Cask
         each_resolved_path(:rmdir, directories) do |_path, resolved_paths|
           next unless resolved_paths.all?(&:directory?)
 
-          recursive_rmdir(*resolved_paths, command:)
+          recursive_rmdir(resolved_paths, command:)
         end
       end
 

@@ -82,7 +82,8 @@ module Cask
     def self.all(core_tokens: CoreCaskTap.instance.cask_tokens)
       # Load core casks from tokens so they load from the API when the core cask is not tapped.
       tokens_and_files = core_tokens
-      tokens_and_files += Tap.reject(&:core_cask_tap?).flat_map(&:cask_files)
+      tokens_and_files += Tap.reject(&:core_cask_tap?)
+                             .flat_map(&:cask_files)
                              .then { |files| Homebrew::Trust.trusted_cask_files(files) }
       tokens_and_files.filter_map do |token_or_file|
         if token_or_file.is_a?(String)
@@ -130,6 +131,10 @@ module Cask
     def initialize(token, sourcefile_path: nil, source: nil, tap: nil, loaded_from_api: false,
                    loaded_from_internal_api: false, loaded_from_metadata: false, api_source: nil, config: nil,
                    allow_reassignment: false, loader: nil, &block)
+      @old_tokens = T.let(nil, T.nilable(T::Array[String]))
+      @new_download_sha = T.let(nil, T.nilable(String))
+      @ruby_source_checksum = T.let(nil, T.nilable(T::Hash[Symbol, T.nilable(String)]))
+
       @token = token
       @sourcefile_path = sourcefile_path
       @source = source
@@ -146,16 +151,15 @@ module Cask
       # https://github.com/sorbet/sorbet/issues/6843
       @block = T.let(block, T.untyped)
 
-      @default_config = T.let(config || Config.new, Config)
+      default_config = config || Config.new
+      @default_config = T.let(default_config, Config)
 
-      @config = T.let(
-        if config_path.exist?
-          Config.from_json(File.read(config_path), ignore_invalid_keys: true)
-        else
-          @default_config
-        end,
-        Config,
-      )
+      resolved_config = if config_path.exist?
+        Config.from_json(File.read(config_path), ignore_invalid_keys: true)
+      else
+        @default_config
+      end
+      @config = T.let(resolved_config, Config)
       refresh
     end
 
@@ -182,15 +186,12 @@ module Cask
     # An old name for the cask.
     sig { returns(T::Array[String]) }
     def old_tokens
-      @old_tokens ||= T.let(
-        if (t = tap)
-          Tap.tap_migration_oldnames(t, token, cask: true) +
-            t.cask_reverse_renames.fetch(token, [])
-        else
-          []
-        end,
-        T.nilable(T::Array[String]),
-      )
+      @old_tokens ||= if (t = tap)
+        Tap.tap_migration_oldnames(t, token, cask: true) +
+          t.cask_reverse_renames.fetch(token, [])
+      else
+        []
+      end
     end
 
     sig { params(config: Config).void }
@@ -315,11 +316,7 @@ module Cask
     end
 
     sig { returns(T::Boolean) }
-    def supports_linux?
-      return true if depends_on.requires_linux?
-
-      !depends_on.requires_macos?
-    end
+    def supports_linux? = !depends_on.requires_macos?
 
     sig { returns(T::Boolean) }
     def supports_macos?
@@ -334,6 +331,15 @@ module Cask
       else
         supports_linux?
       end
+    end
+
+    # True if this cask doesn't support this platform.
+    # Casks loaded from the internal API use the value stored there for this platform.
+    sig { returns(T::Boolean) }
+    def incompatible?
+      return api_source&.[]("incompatible") == true if loaded_from_internal_api?
+
+      !platform_supported?(Homebrew::SimulateSystem.current_tag)
     end
 
     sig { returns(T::Boolean) }
@@ -445,12 +451,9 @@ module Cask
       require "cask/installer"
 
       # Call checksumable? before hashing
-      @new_download_sha ||= T.let(
-        Installer.new(self, verify_download_integrity: false)
-                 .download(quiet: true)
-                 .instance_eval { |x| Digest::SHA256.file(x).hexdigest },
-        T.nilable(String),
-      )
+      @new_download_sha ||= Installer.new(self, verify_download_integrity: false)
+                                     .download(quiet: true)
+                                     .instance_eval { |x| Digest::SHA256.file(x).hexdigest }
     end
 
     sig { returns(T::Boolean) }
@@ -555,20 +558,18 @@ module Cask
       return unless (sfp = sourcefile_path)
       return unless (t = tap)
 
-      @ruby_source_path = T.let(sfp.relative_path_from(t.path).to_s, T.nilable(String))
+      ruby_source_path = sfp.relative_path_from(t.path).to_s
+      @ruby_source_path = T.let(ruby_source_path, T.nilable(String))
     end
 
     sig { returns(T::Hash[Symbol, T.nilable(String)]) }
     def ruby_source_checksum
-      @ruby_source_checksum ||= T.let(
-        begin
-          sfp = sourcefile_path
-          {
-            sha256: sfp ? Digest::SHA256.file(sfp).hexdigest : nil,
-          }.freeze
-        end,
-        T.nilable(T::Hash[Symbol, T.nilable(String)]),
-      )
+      @ruby_source_checksum ||= begin
+        sfp = sourcefile_path
+        {
+          sha256: (Digest::SHA256.file(sfp).hexdigest if sfp),
+        }.freeze
+      end
     end
 
     sig { returns(T::Array[String]) }
@@ -838,13 +839,14 @@ module Cask
 
     sig { returns(T.nilable(Homebrew::BundleVersion)) }
     def bundle_version
-      @bundle_version ||= T.let(
-        if (bundle = artifacts.find { |a| a.is_a?(Artifact::App) }&.target) &&
-           (plist = Pathname("#{bundle}/Contents/Info.plist")) && plist.exist? && plist.readable?
-          Homebrew::BundleVersion.from_info_plist(plist)
-        end,
-        T.nilable(Homebrew::BundleVersion),
-      )
+      return @bundle_version if @bundle_version
+
+      bundle_version = if (bundle = artifacts.find { |a| a.is_a?(Artifact::App) }&.target) &&
+                          (plist = Pathname("#{bundle}/Contents/Info.plist")) && plist.exist? && plist.readable?
+        Homebrew::BundleVersion.from_info_plist(plist)
+      end
+      @bundle_version = T.let(bundle_version, T.nilable(Homebrew::BundleVersion))
+      bundle_version
     end
 
     sig { returns(DSL) }
@@ -895,6 +897,11 @@ module Cask
       installed_short_version = nil if AUTO_UPDATES_BAD_BUNDLE_VERSIONS.include?(installed_short_version)
       return false if installed_short_version.nil? && installed_bundle_version.nil?
 
+      # Self-updates change the bundle version, so an app whose short and bundle versions
+      # still match a CSV installation record is the build Homebrew installed and a
+      # different tap version is outdated, as for casks without `auto_updates`.
+      return true if installed_version.to_s.split(",").first(2) == [installed_short_version, installed_bundle_version]
+
       # Some apps split a cask version like 2.61-2057 across the short
       # version and bundle version fields.
       if installed_short_version && installed_bundle_version
@@ -907,13 +914,10 @@ module Cask
                         installed_short_version == tap_short_version.rpartition("-").first
       end
 
-      return false if [installed_short_version, installed_bundle_version].any? do |installed_plist_version|
-        compare_version_strings(installed_plist_version, tap_short_version)&.zero?
-      end
+      return false if compare_version_strings(installed_bundle_version, tap_short_version)&.zero?
 
       short_comparison = compare_version_strings(installed_short_version, tap_short_version)
-      return true if short_comparison == -1
-      return false if short_comparison == 1
+      return short_comparison.negative? if short_comparison
 
       # A short version still matching Homebrew's installation record means a
       # different non-CSV tap version is outdated, as for casks without `auto_updates`.
@@ -922,8 +926,20 @@ module Cask
       build_comparisons = version.csv.filter_map do |candidate|
         compare_version_strings(installed_bundle_version, candidate.to_s)
       end
-      return false if build_comparisons.empty?
       return false if build_comparisons.include?(0)
+
+      short_segments = installed_short_version.to_s.split(".")
+      tap_segments = tap_short_version.split(".")
+      # A single number may identify the build. Prefer a comparable build in that case.
+      if build_comparisons.empty? || (short_segments.size > 1 && tap_segments.size > 1)
+        short_segments.zip(tap_segments) do |installed, tap|
+          break unless [installed, tap].all?(/\A\d+\z/)
+
+          comparison = installed.to_i <=> tap.to_i
+          return false if comparison.positive?
+          return build_comparisons.all?(&:negative?) if comparison.negative?
+        end
+      end
 
       build_comparisons.include?(-1)
     end

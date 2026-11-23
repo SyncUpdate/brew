@@ -39,6 +39,7 @@ class BuildEnvironment
 
     sig { overridable.params(settings: Symbol).returns(T.nilable(BuildEnvironment)) }
     def env(*settings)
+      # odeprecated "`env`" unless settings.empty?
       env = @env
       Kernel.raise ArgumentError, "#{self} has not been initialized with a BuildEnvironment" if env.nil?
 
@@ -79,7 +80,10 @@ class BuildEnvironment
       case key
       when "CC", "CXX", "LD"
         value = T.cast(value, String)
-        string << " => #{Pathname.new(value).realpath}" if value.present? && File.symlink?(value)
+        if value.present? && File.symlink?(value)
+          resolved_path = Pathname.new(value).realpath
+          string << " => #{resolved_path}"
+        end
       end
       string.freeze
       out.puts string

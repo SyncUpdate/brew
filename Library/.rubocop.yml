@@ -106,6 +106,11 @@ Homebrew/OSDependsOn:
 Homebrew/MoveToExtendOS:
   Enabled: false
 
+Homebrew/MultilineMethodChain:
+  Enabled: true
+  Include:
+    - "Homebrew/**/*.{rb,rbi}"
+
 Homebrew/NegateInclude:
   Exclude:
     # `exclude?` is not available here:
@@ -127,8 +132,21 @@ Homebrew/NoSendInTests:
   Exclude:
     - "Homebrew/test/support/fixtures/**/*"
 
+Homebrew/NoUntypedKeywordRest:
+  Description: "Name the keywords a method accepts instead of typing `**options` as `T.untyped`."
+  Include:
+    - "Homebrew/**/*.rb"
+  Exclude:
+    - "Homebrew/test/**/*"
+
+Homebrew/SimpleInterpolation:
+  Enabled: true
+
+Homebrew/SimpleTernary:
+  Enabled: true
+
 Homebrew/SimpleTypeAssertion:
-  Enabled: false
+  Enabled: true
 
 Homebrew/UnreferencedLet:
   Description: "Removes a lazy `let` whose name is never referenced (its block never runs)."

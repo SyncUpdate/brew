@@ -92,12 +92,11 @@ module Utils
       extend Forwardable
       include AST
 
-      PATCH_PLATFORM_BLOCKS = T.let(
-        [*OnSystem::ARCH_OPTIONS, *OnSystem::BASE_OS_OPTIONS, *MacOSVersion::SYMBOLS.keys, :system].map do |name|
-          :"on_#{name}"
-        end.freeze,
-        T::Array[Symbol],
-      )
+      patch_platform_blocks = [*OnSystem::ARCH_OPTIONS, *OnSystem::BASE_OS_OPTIONS, *MacOSVersion::SYMBOLS.keys,
+                               :system].map do |name|
+        :"on_#{name}"
+      end
+      PATCH_PLATFORM_BLOCKS = T.let(patch_platform_blocks.freeze, T::Array[Symbol])
 
       delegate process: :tree_rewriter
 
@@ -261,7 +260,8 @@ module Utils
           end
         end
         text = new_stanzas.map do |stanza_name, value|
-          "\n#{stanza_text(stanza_name, value, indent: preceding_component.source_range.column)}"
+          stanza = stanza_text(stanza_name, value, indent: preceding_component.source_range.column)
+          "\n#{stanza}"
         end.join
         tree_rewriter.insert_after(preceding_expr, text)
       end
@@ -336,10 +336,8 @@ module Utils
           end
         end
 
-        install_node = T.cast(
-          children.find { |child| child.def_type? && T.cast(child, DefNode).method_name == :install },
-          T.nilable(DefNode),
-        )
+        install_node = children.find { |child| child.def_type? && T.cast(child, DefNode).method_name == :install }
+        install_node = T.cast(install_node, T.nilable(DefNode))
         raise "Could not find 'install' method!" if install_node.blank?
 
         tree_rewriter.insert_before(whole_line_range(install_node.source_range), resource_section)
@@ -437,7 +435,8 @@ module Utils
           end
         end
 
-        tree_rewriter.insert_after(preceding_expr, "\n#{stanza_text(name, value, indent: 2)}")
+        stanza = stanza_text(name, value, indent: 2)
+        tree_rewriter.insert_after(preceding_expr, "\n#{stanza}")
       end
 
       private
@@ -572,7 +571,7 @@ module Utils
       sig { params(position: Integer).returns(Integer) }
       def line_end_pos(position)
         newline_pos = formula_contents.index("\n", position)
-        newline_pos ? newline_pos + 1 : formula_contents.length
+        newline_pos&.succ || formula_contents.length
       end
 
       sig { params(node: Node, target_name: Symbol, target_type: T.nilable(Symbol)).returns(T::Boolean) }
@@ -845,7 +844,7 @@ module Utils
       sig { params(position: Integer).returns(Integer) }
       def line_end_pos(position)
         newline_pos = cask_contents.index("\n", position)
-        newline_pos ? newline_pos + 1 : cask_contents.length
+        newline_pos&.succ || cask_contents.length
       end
     end
   end

@@ -152,22 +152,48 @@ module Utils
         Homebrew.failed = true
       end
 
-      sig { params(issues_url: String, homebrew: T::Boolean, read_this: T::Boolean).returns(String) }
-      def issue_reporting_message(issues_url, homebrew: false, read_this: false)
-        formatted_issues_url = Formatter.url(issues_url)
+      # Without a destination, return guidance only if this configuration redirects issue reports.
+      sig {
+        params(destination: T.nilable(T.any(String, Symbol, Tap)), tier: T.nilable(T.any(Integer, Symbol)),
+               formula: T.nilable(Formula), build_options: T::Array[String], tap_action: String)
+          .returns(T.nilable(String))
+      }
+      def issue_reporting_message(
+        destination = nil, tier: nil, formula: nil, build_options: [], tap_action: "Report this issue"
+      )
+        unless tier
+          require "diagnostic"
+          tier = Homebrew::Diagnostic.support_tier(formula:, build_options:)
+        end
+        provider = OS.third_party_homebrew
+        issues_url = OS::ISSUES_URL
+        if tier == :unsupported || provider&.tier == :unsupported || (tier == 1 && issues_url.nil?)
+          return Formatter.bold("Do not file issues for this configuration.")
+        end
 
-        if read_this
-          Formatter.error(formatted_issues_url, label: "READ THIS")
-        elsif homebrew
-          <<~EOS
-            #{Tty.bold}Please report this issue:#{Tty.reset}
-              #{formatted_issues_url}
+        if provider
+          message = "Report problems specific to this configuration to the third-party provider."
+          url = provider.issues_url
+          return url ? "#{message}\n  #{Formatter.url(url)}" : message
+        end
+
+        if destination.is_a?(Tap) && (tier == 1 || !destination.official?)
+          message = "#{tap_action} to the #{destination.full_name} tap"
+          url = destination.issues_url
+          return url ? "#{message}:\n  #{Formatter.url(url)}" : "#{message}."
+        end
+
+        if [2, 3].include?(tier)
+          return <<~EOS.chomp
+            Please do not file Homebrew issues for problems specific to Tier #{tier}.
+            Ask the community on Homebrew Discussions:
+              #{Formatter.url("https://github.com/orgs/Homebrew/discussions")}
           EOS
-        else
-          <<~EOS
-            If reporting this issue please do so at (not Homebrew/* repositories):
-              #{formatted_issues_url}
-          EOS
+        end
+
+        case destination
+        when :homebrew then "Before reporting this issue, read:\n  #{Formatter.url(issues_url)}" if issues_url
+        when String then "If reporting this issue, use:\n  #{Formatter.url(destination)}"
         end
       end
 
@@ -240,10 +266,7 @@ module Utils
           require "tap"
 
           tap = Tap.fetch(match[:user], match[:repository])
-          tap_message = "\nPlease report this issue to the #{tap.full_name} tap"
-          tap_message += " (not Homebrew/* repositories)" unless tap.official?
-          tap_message += ", or even better, submit a PR to fix it" if replacement
-          tap_message << ":\n  #{line.sub(/^(.*:\d+):.*$/, '\1')}\n\n"
+          tap_message = "\n#{issue_reporting_message(tap)}\n  #{line.sub(/^(.*:\d+):.*$/, '\1')}\n\n"
           break
         end
         file, line, = backtrace.first.split(":")
@@ -326,6 +349,15 @@ module Utils
       end
 
       sig { params(string: String).returns(String) }
+      def pretty_incompatible(string)
+        if $stdout.tty?
+          "#{string} #{Formatter.error("(incompatible)")}"
+        else
+          string
+        end
+      end
+
+      sig { params(string: String).returns(String) }
       def pretty_removed(string)
         if $stdout.tty?
           "#{string} #{Formatter.warning("(removed from tap)")}"
@@ -383,12 +415,12 @@ module Utils
 
       sig {
         params(string: String, installed: T::Boolean, warning: T::Boolean, outdated: T::Boolean,
-               deprecated: T::Boolean, disabled: T::Boolean, removed: T::Boolean, can_install: T::Boolean,
-               mark_uninstalled: T::Boolean, bold: T.nilable(T::Boolean)).returns(String)
+               deprecated: T::Boolean, disabled: T::Boolean, incompatible: T::Boolean, removed: T::Boolean,
+               can_install: T::Boolean, mark_uninstalled: T::Boolean, bold: T.nilable(T::Boolean)).returns(String)
       }
       def pretty_install_status(string, installed:, warning: false, outdated: false, deprecated: false,
-                                disabled: false, removed: false, can_install: true, mark_uninstalled: false,
-                                bold: nil)
+                                disabled: false, incompatible: false, removed: false, can_install: true,
+                                mark_uninstalled: false, bold: nil)
         bold = installed if bold.nil?
         status = if warning
           pretty_warning(string, bold:)
@@ -407,6 +439,8 @@ module Utils
           pretty_removed(status)
         elsif disabled
           pretty_disabled(status)
+        elsif incompatible
+          pretty_incompatible(status)
         elsif deprecated
           pretty_deprecated(status)
         else

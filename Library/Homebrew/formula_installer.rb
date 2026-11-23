@@ -42,7 +42,8 @@ class FormulaInstaller # rubocop:disable Metrics/ClassLength
   include Utils::Output::Mixin
   include Utils::Path
 
-  ETC_VAR_DIRS = T.let([HOMEBREW_PREFIX/"etc", HOMEBREW_PREFIX/"var"].freeze, T::Array[Pathname])
+  etc_var_dirs = [HOMEBREW_PREFIX/"etc", HOMEBREW_PREFIX/"var"]
+  ETC_VAR_DIRS = T.let(etc_var_dirs.freeze, T::Array[Pathname])
 
   sig { override.returns(Formula) }
   attr_reader :formula
@@ -508,7 +509,7 @@ class FormulaInstaller # rubocop:disable Metrics/ClassLength
     return if pinned_unsatisfied_deps.empty?
 
     raise CannotInstallFormulaError,
-          "You must `brew unpin #{pinned_unsatisfied_deps * " "}` as installing " \
+          "You must `brew unpin #{pinned_unsatisfied_deps.join(" ")}` as installing " \
           "#{formula.full_name} requires the latest version of pinned dependencies."
   end
 
@@ -687,8 +688,9 @@ on_request: installed_on_request?, options:)
 
       raise if Homebrew::EnvConfig.developer?
 
-      $stderr.puts "Please report this issue to the #{formula.tap&.full_name} tap".squeeze(" ")
-      $stderr.puts " (not Homebrew/* repositories)!" unless formula.core_formula?
+      if (message = issue_reporting_message(formula.tap, formula:, build_options: build_options_for_reporting))
+        $stderr.puts message
+      end
       false
     else
       f.linked_keg.exist? && f.opt_prefix.exist?
@@ -961,7 +963,10 @@ on_request: installed_on_request?, options:)
   sig { params(dep: Dependency, dep_formula: Formula).void }
   def install_dependency(dep, dep_formula = dep.to_formula)
     upgrading = dep_formula.outdated?
-    upgrade_from = "#{Keg.new(dep_formula.opt_prefix).version} -> " if upgrading && dep_formula.optlinked?
+    if upgrading && dep_formula.optlinked?
+      installed_version = Keg.new(dep_formula.opt_prefix).version
+      upgrade_from = "#{installed_version} -> "
+    end
 
     if dep_formula.linked_keg.directory?
       linked_keg = Keg.new(resolved_path(dep_formula.linked_keg))
@@ -1171,7 +1176,11 @@ on_request: installed_on_request?, options:)
 
   sig { returns(T.nilable(Float)) }
   def build_time
-    @build_time ||= T.let(Time.now - @start_time, T.nilable(Float)) if @start_time && !interactive?
+    return if !@start_time || interactive?
+    return @build_time if @build_time
+
+    elapsed = Time.now - @start_time
+    @build_time = T.let(elapsed, T.nilable(Float))
   end
 
   sig { returns(T::Array[String]) }
@@ -1210,6 +1219,18 @@ on_request: installed_on_request?, options:)
   sig { returns(T::Array[String]) }
   def build_argv = sanitized_argv_options + options.as_flags
 
+  sig { returns(T::Array[String]) }
+  def build_options_for_reporting
+    flags = build_argv
+    # gist-logs may run with a different developer setting from the build.
+    flags << "HOMEBREW_DEVELOPER=1" if build_bottle? && Homebrew::EnvConfig.developer?
+    if build_from_source?
+      flags | ["--build-from-source"]
+    else
+      flags
+    end
+  end
+
   sig { void }
   def build
     retain_tmp = keep_tmp? || debug_symbols? || interactive?
@@ -1222,6 +1243,10 @@ on_request: installed_on_request?, options:)
     # would point at a JSON file (e.g. formula.jws.json) which build.rb cannot
     # load. See: https://github.com/orgs/Homebrew/discussions/6455
     @formula = Homebrew::API::Formula.source_download_formula(formula) if formula.loaded_from_api?
+
+    logged_options = build_options_for_reporting
+    formula.logs.mkpath
+    formula.build_options_log.write([formula.full_name, *logged_options].join(" "))
 
     staging_path = (create_staging_path if formula.fetch_defined?)
     run_fetch(staging_path:) if staging_path
@@ -1266,6 +1291,7 @@ on_request: installed_on_request?, options:)
     if e.is_a? BuildError
       e.formula = formula
       e.options = display_options(formula)
+      e.build_flags = logged_options if logged_options
     end
 
     Utils::Interrupts.ignore do
@@ -1550,8 +1576,9 @@ on_request: installed_on_request?, options:)
         end
         # Created ahead of the sandbox so the Linux backend does not record it
         # as its own and remove it when it is still empty at cleanup.
-        (HOMEBREW_PREFIX/"libexec").mkpath
-        sandbox.allow_write_path "#{HOMEBREW_PREFIX}/libexec"
+        libexec = HOMEBREW_PREFIX/"libexec"
+        libexec.mkpath if HOMEBREW_PREFIX.writable?
+        sandbox.allow_write_path libexec if libexec.directory?
         sandbox.protect_homebrew_state
       end
     end
@@ -1841,7 +1868,8 @@ on_request: installed_on_request?, options:)
   def forbidden_license_check
     forbidden_licenses = Homebrew::EnvConfig.forbidden_licenses.to_s.dup
     SPDX::ALLOWED_LICENSE_SYMBOLS.each do |s|
-      pattern = /#{s.to_s.tr("_", " ")}/i
+      option_name = s.to_s.tr("_", " ")
+      pattern = /#{option_name}/i
       forbidden_licenses.sub!(pattern, s.to_s)
     end
 

@@ -54,9 +54,10 @@ RSpec.describe Cask::Artifact::App, :cask do
         end
       end
 
-      test_each([["0755", false], ["755", false], ["0755", true]]) do |mode, native|
-        it "prepares mode #{mode} before installing the app (native sandbox: #{native})", needs_sandbox: native do
-          if native
+      test_each([["0755", :stubbed], ["755", :stubbed], ["0755", :macos], ["0755", :linux]]) do |mode, platform|
+        it "prepares mode #{mode} with the #{platform} sandbox before installing the app",
+           needs_linux: platform == :linux, needs_macos: platform == :macos do
+          if platform != :stubbed
             allow(Sandbox).to receive(:available?).and_call_original
             skip "Sandbox is not available." unless Sandbox.available?
             skip "Nested sandboxing is not supported." if Sandbox.nested_sandbox?
@@ -78,7 +79,7 @@ RSpec.describe Cask::Artifact::App, :cask do
 
           expect(%w[installer.sh uninstaller.sh].map { |name| (target_path/name).stat.mode & 0777 })
             .to eq([0755, 0755])
-          unless native
+          if platform == :stubbed
             expect(prepared_steps).to eq([{
               "type" => "set_permissions", "permissions" => mode, "non_recursive" => true,
               "paths" => %w[installer.sh uninstaller.sh].map do |name|
@@ -172,7 +173,11 @@ RSpec.describe Cask::Artifact::App, :cask do
           outside.write "#!/bin/sh\n"
           outside.chmod 0644
           (source_path/"installer.sh").unlink
-          relative_path = (link_type == :directory_symlink) ? "linked/installer.sh" : "installer.sh"
+          relative_path = if link_type == :directory_symlink
+            "linked/installer.sh"
+          else
+            "installer.sh"
+          end
           case link_type
           when :directory_symlink
             File.symlink(outside.dirname, source_path/"linked")

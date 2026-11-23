@@ -31,8 +31,8 @@ module GitHub
   CREATE_GIST_SCOPES = ["gist"].freeze
   CREATE_ISSUE_FORK_OR_PR_SCOPES = ["repo"].freeze
   CREATE_WORKFLOW_SCOPES = ["workflow"].freeze
-  ALL_SCOPES = T.let((CREATE_GIST_SCOPES + CREATE_ISSUE_FORK_OR_PR_SCOPES + CREATE_WORKFLOW_SCOPES).freeze,
-                     T::Array[String])
+  all_scopes = (CREATE_GIST_SCOPES + CREATE_ISSUE_FORK_OR_PR_SCOPES + CREATE_WORKFLOW_SCOPES)
+  ALL_SCOPES = T.let(all_scopes.freeze, T::Array[String])
   private_constant :ALL_SCOPES
   GITHUB_ACCESS_TOKEN_REGEX = %r{
     ^(?:
@@ -49,6 +49,8 @@ module GitHub
   module API
     extend SystemCommand::Mixin
     extend Utils::Output::Mixin
+
+    @credentials_error_message = T.let(nil, T.nilable(String))
 
     # Generic API error.
     class Error < RuntimeError
@@ -84,9 +86,10 @@ module GitHub
         @reset = reset
         @resource = resource
         new_pat_message = ", or:\n#{GitHub.pat_blurb}" if API.credentials.blank?
+        limit_note = limit ? " (#{limit} limit)" : ""
         message = <<~EOS
           GitHub API Error: #{github_message}
-          Rate limit exceeded for #{resource} resource#{" (#{limit} limit)" if limit}.
+          Rate limit exceeded for #{resource} resource#{limit_note}.
           Try again in #{pretty_ratelimit_reset}#{new_pat_message}
         EOS
         super(message, github_message)
@@ -277,7 +280,7 @@ module GitHub
       credentials_scopes = "none" if credentials_scopes.blank?
 
       what = CREDENTIAL_NAMES.fetch(credentials_type)
-      @credentials_error_message ||= T.let(begin
+      @credentials_error_message ||= begin
         error_message = <<~EOS
           Your #{what} credentials do not have sufficient scope!
           Scopes required: #{needed_scopes}
@@ -286,7 +289,7 @@ module GitHub
         EOS
         onoe error_message
         error_message
-      end, T.nilable(String))
+      end
     end
 
     T::Sig::WithoutRuntime.sig {
@@ -304,7 +307,11 @@ module GitHub
     def self.open_rest(url, data: nil, data_binary_path: nil, request_method: nil,
                        scopes: [].freeze, parse_json: true, return_headers: false, &_block)
       # This is a no-op if the user is opting out of using the GitHub API.
-      return block_given? ? yield({}) : {} if Homebrew::EnvConfig.no_github_api?
+      if Homebrew::EnvConfig.no_github_api?
+        return yield({}) if block_given?
+
+        return {}
+      end
 
       # This is a Curl format token, not a Ruby one.
       # rubocop:disable Style/FormatStringToken

@@ -84,8 +84,9 @@ module Homebrew
 
               if rack.directory?
                 versions = rack.subdirs.map(&:basename)
+                verb = versions.one? ? "is" : "are"
                 puts <<~EOS
-                  #{keg.name} #{Utils::Text.to_sentence(versions)} #{versions.one? ? "is" : "are"} still installed.
+                  #{keg.name} #{Utils::Text.to_sentence(versions)} #{verb} still installed.
                   To remove all versions, run:
                     brew uninstall --force #{keg.name}
                 EOS
@@ -96,10 +97,11 @@ module Homebrew
               paths = f.pkgetc.find.map(&:to_s) if f.pkgetc.exist?
               if paths.present?
                 puts
+                paths_list = paths.sort.uniq.join("\n  ")
                 opoo <<~EOS
                   The following #{f.name} configuration files have not been removed!
                   If desired, remove them manually with `rm -rf`:
-                    #{paths.sort.uniq.join("\n  ")}
+                    #{paths_list}
                 EOS
               end
 
@@ -123,10 +125,11 @@ module Homebrew
               maybe_paths -= paths if paths.present?
               if maybe_paths.present?
                 puts
+                paths_list = maybe_paths.sort.uniq.join("\n  ")
                 opoo <<~EOS
                   The following may be #{f.name} configuration files and have not been removed!
                   If desired, remove them manually with `rm -rf`:
-                    #{maybe_paths.sort.uniq.join("\n  ")}
+                    #{paths_list}
                 EOS
               end
             end
@@ -167,9 +170,13 @@ module Homebrew
 
     sig { params(kegs: T::Array[Keg], casks: T::Array[Cask::Cask], named_args: T::Array[String]).returns(T::Boolean) }
     def self.check_for_dependents!(kegs, casks: [], named_args: [])
-      return false unless (result = InstalledDependents.find_some_installed_dependents(kegs, casks:))
-
-      DependentsMessage.new(*result, named_args:).output
+      if (result = InstalledDependents.find_some_installed_dependents(kegs, casks:))
+        DependentsMessage.new(*result, named_args:).output
+      elsif (result = InstalledDependents.find_installed_build_dependents(kegs))
+        DependentsMessage.new(*result, named_args:, build: true).output
+      else
+        return false
+      end
       true
     end
 

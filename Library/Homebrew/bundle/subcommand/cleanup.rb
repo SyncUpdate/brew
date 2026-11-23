@@ -7,6 +7,7 @@ require "cleanup"
 
 require "utils/formatter"
 require "utils"
+require "installed_dependents"
 require "bundle/dsl"
 require "bundle/extensions"
 require "bundle/trust"
@@ -107,7 +108,7 @@ module Homebrew
 
           @dsl = T.let(nil, T.nilable(Homebrew::Bundle::Dsl))
           @kept_casks = nil
-          @kept_formulae = nil
+          @kept_formulae = T.let(nil, T.nilable(T::Array[String]))
           Homebrew::Bundle::Cask.reset!
           Homebrew::Bundle::Brew.reset!
           Homebrew::Bundle::Tap.reset!
@@ -167,7 +168,8 @@ module Homebrew
                 []
               end
               if Kernel.system HOMEBREW_BREW_FILE, "uninstall", "--cask", *args, "--force", *casks
-                puts "Uninstalled #{Utils.pluralize("cask", casks.size, include_count: true)}"
+                cask_count = Utils.pluralize("cask", casks.size, include_count: true)
+                puts "Uninstalled #{cask_count}"
               else
                 ofail "Failed to uninstall casks. Some may have been removed."
               end
@@ -175,7 +177,8 @@ module Homebrew
 
             if formulae.any?
               if Kernel.system HOMEBREW_BREW_FILE, "uninstall", "--formula", "--force", *formulae
-                puts "Uninstalled #{Utils.pluralize("formula", formulae.size, include_count: true)}"
+                formula_count = Utils.pluralize("formula", formulae.size, include_count: true)
+                puts "Uninstalled #{formula_count}"
               else
                 ofail "Failed to uninstall formulae. Some may have been removed."
               end
@@ -240,15 +243,13 @@ module Homebrew
 
         sig { params(global: T::Boolean, file: T.nilable(String), dsl: T.nilable(Homebrew::Bundle::Dsl)).void }
         def self.read_dsl_from_brewfile!(global: false, file: nil, dsl: nil)
-          @dsl = T.let(
-            if dsl
-              dsl
-            else
-              require "bundle/brewfile"
-              Homebrew::Bundle::Brewfile.read(global:, file:)
-            end,
-            T.nilable(Homebrew::Bundle::Dsl),
-          )
+          resolved_dsl = if dsl
+            dsl
+          else
+            require "bundle/brewfile"
+            Homebrew::Bundle::Brewfile.read(global:, file:)
+          end
+          @dsl = T.let(resolved_dsl, T.nilable(Homebrew::Bundle::Dsl))
         end
 
         sig { returns(T.nilable(Homebrew::Bundle::Dsl)) }
@@ -275,13 +276,6 @@ module Homebrew
           current_formulae.reject! do |f|
             Homebrew::Bundle::Brew.formula_in_array?(f[:full_name], kept_formulae)
           end
-
-          # Don't try to uninstall formulae with keepme references
-          current_formulae.reject! do |f|
-            Formula[f[:full_name]].installed_kegs.any? do |keg|
-              keg.keepme_refs.present?
-            end
-          end
           current_formulae.map { |f| f[:full_name] }
         end
 
@@ -290,23 +284,33 @@ module Homebrew
           require "bundle/brew"
           require "bundle/cask"
 
-          @kept_formulae ||= T.let(
-            begin
-              raise ArgumentError, "dsl is unset!" unless @dsl
+          @kept_formulae ||= begin
+            raise ArgumentError, "dsl is unset!" unless @dsl
 
-              kept_formulae = @dsl.entries.select { |e| e.type == :brew }.map(&:name)
-              kept_formulae += Homebrew::Bundle::Cask.formula_dependencies(kept_casks)
-              kept_formulae.map! do |f|
-                Homebrew::Bundle::Brew.formula_aliases.fetch(
-                  f,
-                  Homebrew::Bundle::Brew.formula_oldnames.fetch(f, f),
-                )
-              end
+            kept_formulae = @dsl.entries.select { |e| e.type == :brew }.map(&:name)
+            kept_formulae += Homebrew::Bundle::Cask.formula_dependencies(kept_casks)
+            kept_formulae.map! do |f|
+              Homebrew::Bundle::Brew.formula_aliases.fetch(
+                f,
+                Homebrew::Bundle::Brew.formula_oldnames.fetch(f, f),
+              )
+            end
 
-              kept_formulae + recursive_dependencies(Homebrew::Bundle::Brew.formulae, kept_formulae)
-            end,
-            T.nilable(T::Array[String]),
-          )
+            # Keep formulae with keepme references and what `brew autoremove` keeps
+            # for them and the Brewfile, as `brew uninstall` refuses to remove it.
+            installed = Homebrew::Bundle::Brew.formulae.map do |f|
+              Formulary.resolve(f[:full_name])
+            rescue FormulaUnavailableError
+              # A formula that was deleted from its tap is loaded from its keg.
+              Formulary.from_rack(HOMEBREW_CELLAR/f[:name])
+            end
+            removable = installed.reject do |f|
+              Homebrew::Bundle::Brew.formula_in_array?(f.full_name, kept_formulae) ||
+                f.installed_kegs.any? { |keg| keg.keepme_refs.present? }
+            end
+            kept_formulae +
+              (installed - InstalledDependents.formulae_safe_to_remove(removable, installed)).map(&:full_name)
+          end
         end
 
         sig { params(global: T::Boolean, file: T.nilable(String)).returns(T::Array[String]) }
@@ -324,37 +328,6 @@ module Homebrew
           @kept_casks
         end
 
-        sig {
-          params(current_formulae: T::Array[T::Hash[Symbol, T.untyped]], formulae_names: T::Array[String],
-                 top_level: T::Boolean).returns(T::Array[String])
-        }
-        private_class_method def self.recursive_dependencies(current_formulae, formulae_names, top_level: true)
-          @checked_formulae_names = T.let([], T.nilable(T::Array[String])) if top_level
-          dependencies = T.let([], T::Array[String])
-
-          formulae_names.each do |name|
-            raise "checked_formulae_names is unset!" unless @checked_formulae_names
-            next if @checked_formulae_names.include?(name)
-
-            formula = current_formulae.find { |f| f[:full_name] == name }
-            next unless formula
-
-            f_deps = formula[:dependencies]
-            unless formula[:poured_from_bottle?]
-              f_deps += formula[:build_dependencies]
-              f_deps.uniq!
-            end
-            next unless f_deps
-            next if f_deps.empty?
-
-            @checked_formulae_names << name
-            f_deps += recursive_dependencies(current_formulae, f_deps, top_level: false)
-            dependencies += f_deps
-          end
-
-          dependencies.uniq
-        end
-
         IGNORED_TAPS = %w[homebrew/core].freeze
 
         sig { params(global: T::Boolean, file: T.nilable(String)).returns(T::Array[String]) }
@@ -370,7 +343,8 @@ module Homebrew
             when :brew
               Utils.tap_from_full_name(entry.name)
             when :cask
-              Utils.tap_from_full_name(T.cast(entry.options.fetch(:full_name, entry.name), String))
+              full_name = entry.options.fetch(:full_name, entry.name)
+              Utils.tap_from_full_name(T.cast(full_name, String))
             end
           end
           kept_taps += kept_formulae.filter_map(&:tap).map(&:name)
@@ -386,9 +360,9 @@ module Homebrew
           nil
         end
 
-        sig { params(cmd: T.any(Pathname, String), args: T.anything).returns(String) }
+        sig { params(cmd: T.any(Pathname, String), args: String).returns(String) }
         def self.system_output_no_stderr(cmd, *args)
-          Utils.safe_popen_read(cmd, *args, err: File::NULL)
+          Utils.safe_popen_read(cmd, args:, err: File::NULL)
         end
       end
     end

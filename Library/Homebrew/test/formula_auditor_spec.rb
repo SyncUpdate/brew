@@ -179,7 +179,8 @@ RSpec.describe Homebrew::FormulaAuditor do
 
     it "reports newly registered homepage domains" do
       allow(SharedAudits).to receive(:new_domain_problem)
-        .with("https://brew.sh").and_return(domain_problem)
+        .with("https://brew.sh")
+        .and_return(domain_problem)
 
       fa = homepage_auditor
       fa.audit_homepage_domain_age
@@ -1426,6 +1427,28 @@ RSpec.describe Homebrew::FormulaAuditor do
   end
 
   describe "#audit_deps" do
+    it "only asks dependents of a dependency that is also deprecated to be disabled" do
+      fa = formula_auditor "foo", <<~RUBY, core_tap: true
+        class Foo < Formula
+          url "https://brew.sh/foo-1.0.tgz"
+          homepage "https://brew.sh"
+
+          depends_on "bar"
+        end
+      RUBY
+      f_bar = formula("bar") do
+        T.bind(self, T.class_of(Formula))
+        url "https://brew.sh/bar-1.0.tgz"
+        deprecate! date: "2020-01-01", because: :unmaintained
+        disable! date: "2021-01-01", because: :unmaintained
+      end
+      allow(fa.formula.deps.first).to receive(:to_formula).and_return(f_bar)
+      fa.audit_deps
+
+      expect(fa.problems.map { |problem| problem[:message] }.grep(/but has un-/))
+        .to contain_exactly(a_string_starting_with("Dependency 'bar' is disabled"))
+    end
+
     describe "a dependency on a macOS-provided keg-only formula" do
       describe "which is allowlisted" do
         subject(:f_a) { fa }
@@ -2546,6 +2569,64 @@ RSpec.describe Homebrew::FormulaAuditor do
     end
   end
 
+  describe "#audit_disabled_bottle" do
+    let(:disable) { 'disable! date: "2020-01-01", because: :unmaintained' }
+    let(:bottle) { %Q(bottle do\n    sha256 cellar: :any, arm64_sequoia: "#{"a" * 64}"\n  end) }
+    let(:auditor) do
+      formula_auditor("foo", <<~RUBY).tap do |fa|
+        class Foo < Formula
+          url "https://brew.sh/foo-1.0.tgz"
+          revision 1
+          #{bottle}
+          #{disable}
+        end
+      RUBY
+        allow(fa.formula).to receive(:tap).and_return(instance_double(Tap, git?: true, path: dir))
+        allow(FormulaVersions).to receive(:new).and_return(
+          instance_double(FormulaVersions, formula_at_revision: PkgVersion.parse(base_pkg_version)),
+        )
+        fa.audit_disabled_bottle
+      end
+    end
+    let(:base_pkg_version) { "1.0" }
+
+    it "requires a disabled formula to drop its bottle block when its revision changes" do
+      expect(auditor.problems.first[:message]).to match(/remove the bottle block .* \(from 1\.0 to 1\.0_1\)/)
+    end
+
+    context "when the version and revision are unchanged" do
+      let(:base_pkg_version) { "1.0_1" }
+
+      it "accepts the bottle block of a disabled formula" do
+        expect(auditor.problems).to be_empty
+      end
+    end
+
+    context "when the version changes to one that compares equal" do
+      let(:base_pkg_version) { "1.0.0_1" }
+
+      it "requires the bottle block to be dropped, as bottle filenames contain the version" do
+        expect(auditor.problems.first&.fetch(:message)).to include("from 1.0.0_1 to 1.0_1")
+      end
+    end
+
+    context "when the formula has no bottle block" do
+      let(:bottle) { "" }
+
+      it "accepts a changed revision" do
+        expect(auditor.problems).to be_empty
+      end
+    end
+
+    context "when the formula is not disabled" do
+      let(:disable) { "" }
+
+      it "accepts a changed revision, as CI rebuilds its bottles" do
+        expect(auditor.problems).to be_empty
+      end
+    end
+  end
+
   describe "#audit_deprecate_disable" do
     specify "it warns when deprecate/disable reason is invalid" do
       fa = formula_auditor "foo", <<~RUBY
@@ -2574,6 +2655,28 @@ RSpec.describe Homebrew::FormulaAuditor do
       mkdir_p fa.formula.prefix
       fa.audit_deprecate_disable
       expect(fa.problems).to be_empty
+    end
+
+    test_each([
+      ["deprecation", :foobar, :repo_archived, "2021-01-01"],
+      ["disable", :repo_archived, :foobar, "2021-01-01"],
+      ["scheduled disable", :repo_archived, :foobar, (Date.today + 1).to_s],
+    ]) do |stanza, deprecate_reason, disable_reason, disable_date|
+      specify "it checks the #{stanza} reason when both stanzas are present" do
+        fa = formula_auditor "foo", <<~RUBY
+          class Foo < Formula
+            url "https://brew.sh/foo-1.0.tgz"
+
+          deprecate! date: "2020-01-01", because: :#{deprecate_reason}
+          disable! date: "#{disable_date}", because: :#{disable_reason}
+          end
+        RUBY
+
+        mkdir_p fa.formula.prefix
+        fa.audit_deprecate_disable
+        expect(fa.problems.map { |problem| problem[:message] })
+          .to include("foobar is not a valid deprecate! or disable! reason")
+      end
     end
   end
 

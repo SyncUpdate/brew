@@ -80,7 +80,8 @@ RSpec.describe FormulaCellarChecks do
 
     index = npm_cache/"index-v5/00/00/index"
     index.dirname.mkpath
-    integrity = "sha512-#{[[hex].pack("H*")].pack("m0")}"
+    digest = [[hex].pack("H*")].pack("m0")
+    integrity = "sha512-#{digest}"
     index.open("a") do |io|
       keys.each { |key| io.puts("0000\t#{JSON.generate({ key:, integrity: })}") }
     end
@@ -110,6 +111,26 @@ RSpec.describe FormulaCellarChecks do
     end
   end
 
+  it "reports the tier guidance regardless of whether rebuilding fixes broken linkage", :needs_macos do
+    allow(Tty).to receive(:color?).and_return(false)
+    allow(f).to receive(:prefix).and_return(f.prefix)
+    allow(Keg).to receive(:new).and_return(instance_double(Keg, tab: instance_double(Tab, poured_from_bottle: true)))
+    allow(LinkageChecker).to receive(:new).and_return(
+      instance_double(LinkageChecker, broken_library_linkage?: true, display_test_output: "missing library"),
+    )
+    allow(Homebrew::Diagnostic).to receive(:support_tier).and_return(:unsupported)
+    allow(OS).to receive(:third_party_homebrew).and_return(nil)
+
+    expect(checks).to receive(:problem_if_output).with(<<~EOS)
+      #{f} has broken dynamic library links:
+        missing library
+      Rebuild this from source with:
+        brew reinstall --build-from-source #{f}
+      Do not file issues for this configuration.
+    EOS
+    checks.check_linkage
+  end
+
   describe "#binary_program?", :needs_linux do
     def elf(name) = ELFPathname.wrap(TEST_FIXTURE_DIR/"elf"/name)
 
@@ -127,9 +148,14 @@ RSpec.describe FormulaCellarChecks do
   end
 
   describe "#check_prebuilt_npm_binaries" do
-    # A keg's binaries are enumerated by the macOS and Linux `Keg` extensions,
-    # so there is nothing for the check to look at on a generic OS.
-    before { skip "Binary enumeration is OS-specific." if !OS.mac? && !OS.linux? }
+    before do
+      if !OS.mac? && !OS.linux?
+        require "os/linux/elf"
+        allow_any_instance_of(Keg).to receive(:binary_executable_or_library_files) do |keg|
+          keg.find.select(&:file?).map { |path| path.extend(ELFShim) }.select(&:elf?)
+        end
+      end
+    end
 
     it "reports an executable that is byte-identical to a downloaded package file" do
       binary = install_at "lib/node_modules/foo/node_modules/foo-darwin-arm64/foo"

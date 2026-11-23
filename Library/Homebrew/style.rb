@@ -66,8 +66,9 @@ module Homebrew
     }
     def self.check_style_json(files, fix: false, todo: false, except_cops: nil, only_cops: nil,
                               reset_cache: false, debug: false, verbose: false)
-      T.cast(check_style_impl(files, :json, fix:, todo:, except_cops:, only_cops:,
-                              reset_cache:, debug:, verbose:), Offenses)
+      result = check_style_impl(files, :json, fix:, todo:, except_cops:, only_cops:,
+                              reset_cache:, debug:, verbose:)
+      T.cast(result, Offenses)
     end
 
     sig {
@@ -441,7 +442,7 @@ module Homebrew
     private_class_method def self.run_linter(executable, args, files, timeout:, env: {})
       system_command executable, args: [*args, *files], env:, print_stderr: false, timeout:
     rescue Timeout::Error
-      raise Timeout::Error, "#{Pathname(executable).basename} did not finish within #{timeout}s on " \
+      raise Timeout::Error, "#{File.basename(executable)} did not finish within #{timeout}s on " \
                             "#{files.length} file(s)."
     end
 
@@ -530,7 +531,9 @@ module Homebrew
         *HOMEBREW_REPOSITORY.glob(".github/scripts/*.sh"),
         *HOMEBREW_REPOSITORY.glob("package/scripts/*"),
         *HOMEBREW_LIBRARY.glob("Homebrew/**/*.sh").reject { |path| path.to_s.include?("/vendor/") },
-        *HOMEBREW_LIBRARY.glob("Homebrew/shims/**/*").map(&:realpath).uniq
+        *HOMEBREW_LIBRARY.glob("Homebrew/shims/**/*")
+                         .map(&:realpath)
+                         .uniq
                          .reject(&:directory?)
                          .reject { |path| path.basename.to_s == "cc" }
                          .select do |path|
@@ -549,9 +552,10 @@ module Homebrew
     sig { returns(Pathname) }
     def self.shellcheck
       require "formula"
-      T.cast(Formula["shellcheck"].ensure_installed!(latest:     true,
-                                                     reason:     "shell style checks",
-                                                     executable: "shellcheck"), Pathname)
+      executable = Formula["shellcheck"].ensure_installed!(latest:     true,
+                                                           reason:     "shell style checks",
+                                                           executable: "shellcheck")
+      T.cast(executable, Pathname)
     end
 
     sig { returns(Pathname) }
@@ -562,18 +566,20 @@ module Homebrew
     sig { returns(Pathname) }
     private_class_method def self.shfmt_executable
       require "formula"
-      T.cast(Formula["shfmt"].ensure_installed!(latest:     true,
-                                                reason:     "formatting shell scripts",
-                                                executable: "shfmt"), Pathname)
+      executable = Formula["shfmt"].ensure_installed!(latest:     true,
+                                                      reason:     "formatting shell scripts",
+                                                      executable: "shfmt")
+      T.cast(executable, Pathname)
     end
 
     sig { returns(Pathname) }
     def self.actionlint
       require "formula"
-      T.cast(Formula["actionlint"].ensure_installed!(latest:       true,
-                                                     reason:       "GitHub Actions checks",
-                                                     executable:   "actionlint",
-                                                     version_args: ["-version"]), Pathname)
+      executable = Formula["actionlint"].ensure_installed!(latest:       true,
+                                                           reason:       "GitHub Actions checks",
+                                                           executable:   "actionlint",
+                                                           version_args: ["-version"])
+      T.cast(executable, Pathname)
     end
 
     # Collection of style offenses.
@@ -634,7 +640,8 @@ module Homebrew
         @cop_name = T.let(json["cop_name"], T.nilable(String))
         @corrected = T.let(json["corrected"], T::Boolean)
         location = json.fetch("location")
-        @location = T.let(SourceLocation.new(location.fetch("line"), location["column"]), SourceLocation)
+        source_location = SourceLocation.new(location.fetch("line"), location["column"])
+        @location = T.let(source_location, SourceLocation)
       end
 
       sig { returns(T::Boolean) }

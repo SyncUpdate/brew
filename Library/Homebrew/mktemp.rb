@@ -32,7 +32,8 @@ class Mktemp
     @parent = parent
     @compact = compact
     @retain_in_cache = retain_in_cache
-    @retain = T.let(retain || @retain_in_cache, T::Boolean)
+    retain ||= @retain_in_cache
+    @retain = retain
     @quiet = T.let(false, T::Boolean)
     @tmpdir = T.let(nil, T.nilable(Pathname))
   end
@@ -113,7 +114,8 @@ class Mktemp
           # Cover for misconfigured NSS setups
           nil
         end
-        opoo "Failed setting group \"#{group_name || group_id}\" on #{tmpdir}"
+        group = group_name || group_id
+        opoo "Failed setting group \"#{group}\" on #{tmpdir}"
       end
 
       tmpdir

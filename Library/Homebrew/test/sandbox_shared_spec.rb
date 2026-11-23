@@ -269,43 +269,47 @@ RSpec.describe Sandbox do
       allow(described_class).to receive(:isolate_operation?).and_call_original
     end
 
-    it "allows reading only its private temporary directory under a denied parent" do
-      temporary_directory = mktmpdir
-      outside = temporary_directory/"outside"
-      outside.write("secret")
-      sandbox.deny_read_path temporary_directory
-      result = sandbox.capture(RbConfig.ruby, temporary_directory:, args: ["-e", <<~RUBY, outside])
-        file = File.join(ENV.fetch("TMPDIR"), "archive")
-        File.write(file, "contents")
-        puts File.read(file)
-        begin
-          File.read(ARGV.fetch(0))
-          abort "Read escaped the sandbox"
-        rescue Errno::EPERM, Errno::EACCES
-          nil
+    test_each(%w[macos linux]) do |platform|
+      context "with the #{platform} sandbox", needs_linux: platform == "linux", needs_macos: platform == "macos" do
+        it "allows reading only its private temporary directory under a denied parent" do
+          temporary_directory = mktmpdir
+          outside = temporary_directory/"outside"
+          outside.write("secret")
+          sandbox.deny_read_path temporary_directory
+          result = sandbox.capture(RbConfig.ruby, temporary_directory:, args: ["-e", <<~RUBY, outside])
+            file = File.join(ENV.fetch("TMPDIR"), "archive")
+            File.write(file, "contents")
+            puts File.read(file)
+            begin
+              File.read(ARGV.fetch(0))
+              abort "Read escaped the sandbox"
+            rescue Errno::EPERM, Errno::EACCES
+              nil
+            end
+          RUBY
+
+          expect(result.stdout).to eq("contents\n")
         end
-      RUBY
 
-      expect(result.stdout).to eq("contents\n")
-    end
+        it "allows its output directory and denies writes through an escaping symlink" do
+          directory = mktmpdir
+          output = directory/"output"
+          output.mkpath
+          (output/"escape").make_symlink(directory/"outside")
+          sandbox = described_class.for_operation(read_paths: [directory], write_paths: [output])
+          sandbox.capture(RbConfig.ruby, args: ["-e", <<~RUBY, output])
+            File.write(File.join(ARGV.fetch(0), "allowed"), "written")
+            begin
+              File.write(File.join(ARGV.fetch(0), "escape"), "escaped")
+              abort "Write escaped the sandbox"
+            rescue Errno::EPERM, Errno::EACCES
+              nil
+            end
+          RUBY
 
-    it "allows its output directory and denies writes through an escaping symlink" do
-      directory = mktmpdir
-      output = directory/"output"
-      output.mkpath
-      (output/"escape").make_symlink(directory/"outside")
-      sandbox = described_class.for_operation(read_paths: [directory], write_paths: [output])
-      sandbox.capture(RbConfig.ruby, args: ["-e", <<~RUBY, output])
-        File.write(File.join(ARGV.fetch(0), "allowed"), "written")
-        begin
-          File.write(File.join(ARGV.fetch(0), "escape"), "escaped")
-          abort "Write escaped the sandbox"
-        rescue Errno::EPERM, Errno::EACCES
-          nil
+          expect((output/"allowed").read).to eq("written")
         end
-      RUBY
-
-      expect((output/"allowed").read).to eq("written")
+      end
     end
 
     it "extracts a disk image in the sandbox", :needs_macos do
@@ -352,7 +356,8 @@ RSpec.describe Sandbox do
     it "warns once when the sandbox is unavailable" do
       allow(described_class).to receive(:available?).and_return(false)
       expect(described_class).to receive(:opoo)
-        .with("Sandbox unavailable: running install hooks without sandboxing!").once
+        .with("Sandbox unavailable: running install hooks without sandboxing!")
+        .once
 
       2.times { described_class.use_for?("running install hooks") }
     end
@@ -367,7 +372,8 @@ RSpec.describe Sandbox do
     it "warns once when relying on an outer sandbox" do
       allow(described_class).to receive_messages(available?: true, avoid_nested_sandboxing?: true)
       expect(described_class).to receive(:opoo)
-        .with("Running install hooks without Homebrew's sandbox; relying on the outer sandbox.").once
+        .with("Running install hooks without Homebrew's sandbox; relying on the outer sandbox.")
+        .once
 
       2.times { described_class.use_for?("running install hooks") }
     end
@@ -418,7 +424,9 @@ RSpec.describe Sandbox do
       sandbox.allow_write_system_temp
       sandbox.deny_all_network
       expect(sandbox).to receive(:sandbox_command) do |args, tmpdir|
-        expect(sandbox.profile.rules.select { |rule| rule.allow && rule.operation == "network*" }
+        expect(sandbox.profile
+          .rules
+          .select { |rule| rule.allow && rule.operation == "network*" }
           .map { |rule| [rule.filter&.path, rule.filter&.type] }).to eq([[tmpdir, :subpath]])
         args
       end
@@ -980,9 +988,10 @@ RSpec.describe Sandbox do
       stub_const("HOMEBREW_PREFIX", home/"Documents/homebrew")
       HOMEBREW_PREFIX.mkpath
 
+      documents = (home/"Documents").realpath
       expect(sandbox).to receive(:opoo).with(<<~EOS)
         The sandbox cannot prevent formulae from reading:
-          #{(home/"Documents").realpath}
+          #{documents}
         because this required path is inside it:
           #{HOMEBREW_PREFIX.realpath}
         Formulae may access personal data in this directory.

@@ -296,7 +296,8 @@ module Homebrew
       @dry_run = dry_run
       @scrub = scrub
       @prune = T.let(days.present?, T::Boolean)
-      @days = T.let(days || Homebrew::EnvConfig.cleanup_max_age_days.to_i, Integer)
+      days ||= Homebrew::EnvConfig.cleanup_max_age_days.to_i
+      @days = T.let(days, Integer)
       @cache = cache
       @output = output
       @cleaned_up_paths = T.let(Set.new, T::Set[Pathname])
@@ -373,7 +374,7 @@ module Homebrew
 
       formulae = install_cleanup_formulae(formulae).uniq(&:full_name)
       casks = casks.uniq(&:full_name)
-      packages = T.let(formulae + casks, T::Array[T.any(Formula, Cask::Cask)])
+      packages = formulae + casks
       return if packages.empty?
 
       output = InstallCleanupOutput.new($stdout, oh1_title("Cleanup"))
@@ -667,7 +668,8 @@ module Homebrew
     sig { returns(T::Array[{ path: Pathname, type: T.nilable(Symbol) }]) }
     def cache_files
       files = cache.directory? ? cache.children : []
-      cask_files = (cache/"Cask").directory? ? (cache/"Cask").children : []
+      cask_cache = cache/"Cask"
+      cask_files = cask_cache.directory? ? cask_cache.children : []
       api_internal = cache/"api/internal"
       api_package_files = if scrub? && api_internal.directory?
         current_api_package_basename = Homebrew::API::Internal.cached_packages_json_file_path.basename.to_s
@@ -692,7 +694,8 @@ module Homebrew
         directory.directory? ? directory.children : []
       end
       api_source_files = (cache/"api-source").glob("*/*/*/**/*").select { |path| path.file? || path.symlink? }
-      gh_actions_artifacts = (cache/"gh-actions-artifact").directory? ? (cache/"gh-actions-artifact").children : []
+      artifact_cache = cache/"gh-actions-artifact"
+      gh_actions_artifacts = artifact_cache.directory? ? artifact_cache.children : []
 
       cache_entries(files, type: nil) +
         cache_entries(cask_files, type: :cask) +
@@ -722,7 +725,8 @@ module Homebrew
 
       downloads = (cache/"downloads").children
 
-      referenced_downloads = cache_files.map { |file| file[:path] }.select(&:symlink?)
+      referenced_downloads = cache_files.map { |file| file[:path] }
+                                        .select(&:symlink?)
                                         .map { |path| resolved_path(path) }
 
       (downloads - referenced_downloads).each do |download|
@@ -861,8 +865,9 @@ module Homebrew
         next false if basename == ".homebrew_gem_groups"
         next true unless child.directory?
 
+        major_minor = Version.new(portable_ruby_latest_version).major_minor
         [
-          "#{Version.new(portable_ruby_latest_version).major_minor}.0",
+          "#{major_minor}.0",
           RbConfig::CONFIG["ruby_version"],
         ].uniq.exclude?(basename)
       end
@@ -1097,7 +1102,9 @@ module Homebrew
                                                                               formulae: installed_formulae))
         removable_formulae.reject! { |formula| required_kegs.include?(formula.any_installed_keg) }
       end
-      removable_formulae = Utils::Autoremove.formulae_safe_to_remove(removable_formulae, installed_formulae)
+      # Uninstalling skips pinned formulae, so they stay and keep their dependencies.
+      removable_formulae = InstalledDependents.formulae_safe_to_remove(removable_formulae.reject(&:pinned?),
+                                                                       installed_formulae)
 
       return if removable_formulae.blank?
 

@@ -56,6 +56,10 @@ class Descriptions
     ).void
   }
   def initialize(descriptions, status_data: {})
+    @installed_formulae = T.let(nil, T.nilable(T::Set[String]))
+    @installed_casks = T.let(nil, T.nilable(T::Set[String]))
+    @short_names = T.let(nil, T.nilable(T::Hash[String, String]))
+
     @descriptions = descriptions
     @status_data = status_data
   end
@@ -105,59 +109,41 @@ class Descriptions
     else
       installed_formulae.include?(full_name)
     end
-    printed_name = if installed
-      Homebrew::Search.pretty_installed(printed_name)
-    else
-      "#{Tty.bold}#{printed_name}#{Tty.reset}"
-    end
-
-    status_data = @status_data[full_name]
-    if status_data&.[](:deprecated)
-      Homebrew::Search.pretty_deprecated(printed_name)
-    elsif status_data&.[](:disabled)
-      Homebrew::Search.pretty_disabled(printed_name)
-    else
+    deprecated = @status_data.dig(full_name, :deprecated) == true
+    disabled = @status_data.dig(full_name, :disabled) == true
+    incompatible = @status_data.dig(full_name, :incompatible) == true
+    if !deprecated && !disabled && !incompatible
       formula_or_cask = begin
-        Formulary.factory(full_name)
-      rescue FormulaUnavailableError
-        Cask::CaskLoader.load(full_name)
-      rescue Cask::CaskUnavailableError
+        if description.is_a?(Array)
+          Cask::CaskLoader.load(full_name)
+        else
+          Formulary.factory(full_name)
+        end
+      rescue FormulaUnavailableError, Cask::CaskUnavailableError
         nil
       end
-      return printed_name if formula_or_cask.nil?
-
-      if formula_or_cask.deprecated?
-        Homebrew::Search.pretty_deprecated(printed_name)
-      elsif formula_or_cask.disabled?
-        Homebrew::Search.pretty_disabled(printed_name)
-      else
-        printed_name
-      end
+      deprecated = formula_or_cask&.deprecated? == true
+      disabled = formula_or_cask&.disabled? == true
+      incompatible = formula_or_cask&.incompatible? == true
     end
+
+    Homebrew::Search.pretty_install_status(printed_name, installed:, deprecated:, disabled:, incompatible:,
+                                           bold: true)
   end
 
   sig { returns(T::Set[String]) }
   def installed_formulae
-    @installed_formulae ||= T.let(
-      Formula.installed.flat_map { |formula| [formula.name, formula.full_name] }.to_set,
-      T.nilable(T::Set[String]),
-    )
+    @installed_formulae ||= Formula.installed.flat_map { |formula| [formula.name, formula.full_name] }.to_set
   end
 
   sig { returns(T::Set[String]) }
   def installed_casks
-    @installed_casks ||= T.let(
-      Cask::Caskroom.casks.flat_map { |cask| [cask.token, cask.full_name] }.to_set,
-      T.nilable(T::Set[String]),
-    )
+    @installed_casks ||= Cask::Caskroom.casks.flat_map { |cask| [cask.token, cask.full_name] }.to_set
   end
 
   sig { returns(T::Hash[String, String]) }
   def short_names
-    @short_names ||= T.let(
-      @descriptions.keys.to_h { |k| [k, Utils.name_from_full_name(k)] },
-      T.nilable(T::Hash[String, String]),
-    )
+    @short_names ||= @descriptions.keys.to_h { |k| [k, Utils.name_from_full_name(k)] }
   end
 
   sig { returns(T::Hash[String, Integer]) }

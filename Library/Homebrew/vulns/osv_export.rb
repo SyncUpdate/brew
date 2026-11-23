@@ -52,7 +52,8 @@ module Homebrew
       sig {
         params(annotated:   T::Array[[Formula, T::Array[T::Hash[String, T.untyped]]]],
                dir:         T.any(String, Pathname),
-               first_fixed: T.nilable(T.proc.params(formula: Formula, vuln_id: String)
+               first_fixed: T.nilable(T.proc
+                                         .params(formula: Formula, vuln_id: String)
                                          .returns(T.nilable(T.any(String, Symbol)))),
                now:         Time)
           .returns(T::Array[String])
@@ -354,7 +355,11 @@ module Homebrew
         limit = last["limit"] || last[:limit]
         return :open if limit == "*"
 
-        (last.key?("introduced") || last.key?(:introduced)) ? :open : :terminal
+        if last.key?("introduced") || last.key?(:introduced)
+          :open
+        else
+          :terminal
+        end
       end
       private_class_method :range_state
 
@@ -403,13 +408,15 @@ module Homebrew
       def self.record_for(formula, vuln_id, patches: formula.serialized_patches,
                           fixed: formula.pkg_version.to_s, upstream: nil, now: Time.now.utc)
         timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        id = record_id(formula, vuln_id)
+        entry = affected_entry(formula, vuln_id, patches, fixed)
         record = T.let({
           schema_version:    SCHEMA_VERSION,
-          id:                record_id(formula, vuln_id),
+          id:,
           published:         timestamp,
           modified:          timestamp,
           upstream:          [vuln_id],
-          affected:          [affected_entry(formula, vuln_id, patches, fixed)],
+          affected:          [entry],
           database_specific: { source: "generated" },
         }, T::Hash[Symbol, T.untyped])
 

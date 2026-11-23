@@ -171,7 +171,8 @@ module Homebrew
                         "`brew audit [name ...]`"
             end
 
-            args.named.to_formulae_and_casks_with_taps
+            args.named
+                .to_formulae_and_casks_with_taps
                 .partition { |formula_or_cask| formula_or_cask.is_a?(Formula) }
           end
         end
@@ -316,7 +317,8 @@ module Homebrew
         errors_summary += " detected"
 
         if corrected.positive?
-          errors_summary += ", #{Utils.pluralize("problem", corrected, include_count: true)} corrected"
+          corrected_problems = Utils.pluralize("problem", corrected, include_count: true)
+          errors_summary += ", #{corrected_problems} corrected"
         end
 
         errors_summary
@@ -334,7 +336,9 @@ module Homebrew
           os = :linux if os != :linux && !cask.supports_macos?
           os = :macos if os == :linux && !cask.supports_linux?
           cask_archs = SimulateSystem.with(os:, arch:) { reload_cask(cask) }
-                                     .depends_on.arch&.map { |cask_arch| cask_arch[:type] }
+                                     .depends_on
+                                     .arch
+                                     &.map { |cask_arch| cask_arch[:type] }
           arch = OnSystem::ARCH_OPTIONS.find { cask_archs.include?(it) } if cask_archs&.exclude?(arch)
 
           SimulateSystem.with(os:, arch:) do
@@ -413,10 +417,13 @@ module Homebrew
             status = " #{Formatter.success("[corrected]")}" if problem.fetch(:corrected)
             location = problem.fetch(:location)
             if location
-              location = "#{location.line&.to_s&.prepend("line ")}#{location.column&.to_s&.prepend(", col ")}: "
+              line_label = location.line&.to_s&.prepend("line ")
+              column_label = location.column&.to_s&.prepend(", col ")
+              location = "#{line_label}#{column_label}: "
             end
             message = problem.fetch(:message)
-            "* #{location}#{message.chomp.gsub("\n", "\n    ")}#{status}"
+            indented_message = message.chomp.gsub("\n", "\n    ")
+            "* #{location}#{indented_message}#{status}"
           end
 
           if args.display_filename?

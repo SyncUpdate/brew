@@ -110,12 +110,11 @@ module Homebrew
           {}, T.nilable(T::Hash[[T.nilable(Symbol), T.nilable(Symbol)],
                                 [T::Array[T.any(Formula, Keg)], T::Array[Cask::Cask]]])
         )
+        partitioned = to_formulae_and_casks(only:, method:).partition { |o| o.is_a?(Formula) || o.is_a?(Keg) }
+                                                           .map(&:freeze)
+                                                           .freeze
         @to_formulae_to_casks[[method, only]] =
-          T.cast(
-            to_formulae_and_casks(only:, method:).partition { |o| o.is_a?(Formula) || o.is_a?(Keg) }
-                    .map(&:freeze).freeze,
-            [T::Array[T.any(Formula, Keg)], T::Array[Cask::Cask]],
-          )
+          T.cast(partitioned, [T::Array[T.any(Formula, Keg)], T::Array[Cask::Cask]])
       end
 
       # Returns formulae and casks after validating that a tap is present for each of them.
@@ -132,10 +131,11 @@ module Homebrew
         types << "formulae" if formulae_and_casks_without_taps.any?(Formula)
         types << "casks" if formulae_and_casks_without_taps.any?(Cask::Cask)
 
+        package_names = formulae_and_casks_without_taps.sort_by(&:to_s).join("\n  ")
         odie <<~ERROR
           These #{types.join(" and ")} are not in any locally installed taps!
 
-            #{formulae_and_casks_without_taps.sort_by(&:to_s).join("\n  ")}
+            #{package_names}
 
           You may need to run `brew tap` to install additional taps.
         ERROR
@@ -166,10 +166,10 @@ module Homebrew
 
       sig { params(uniq: T::Boolean).returns(T::Array[Formula]) }
       def to_resolved_formulae(uniq: true)
-        @to_resolved_formulae ||= T.let(
-          to_formulae_and_casks(only: :formula, method: :resolve, uniq:).freeze,
-          T.nilable(T::Array[T.any(Formula, Keg, Cask::Cask)]),
-        )
+        unless @to_resolved_formulae
+          formulae = to_formulae_and_casks(only: :formula, method: :resolve, uniq:).freeze
+          @to_resolved_formulae = T.let(formulae, T.nilable(T::Array[T.any(Formula, Keg, Cask::Cask)]))
+        end
         T.cast(@to_resolved_formulae, T::Array[Formula])
       end
 
@@ -237,47 +237,17 @@ module Homebrew
 
       sig { returns(T::Array[Keg]) }
       def to_default_kegs
-        require "missing_formula"
-
-        @to_default_kegs ||= T.let(begin
-          to_formulae_and_casks(only: :formula, method: :default_kegs).freeze
-        rescue NoSuchKegError => e
-          if (reason = MissingFormula.suggest_command(e.name, "uninstall"))
-            $stderr.puts reason
-          end
-          raise e
-        end, T.nilable(T::Array[T.any(Formula, Keg, Cask::Cask)]))
-        T.cast(@to_default_kegs, T::Array[Keg])
+        @to_default_kegs ||= T.let(formula_kegs(:default_kegs), T.nilable(T::Array[Keg]))
       end
 
       sig { returns(T::Array[Keg]) }
       def to_latest_kegs
-        require "missing_formula"
-
-        @to_latest_kegs ||= T.let(begin
-          to_formulae_and_casks(only: :formula, method: :latest_kegs).freeze
-        rescue NoSuchKegError => e
-          if (reason = MissingFormula.suggest_command(e.name, "uninstall"))
-            $stderr.puts reason
-          end
-          raise e
-        end, T.nilable(T::Array[T.any(Formula, Keg, Cask::Cask)]))
-        T.cast(@to_latest_kegs, T::Array[Keg])
+        @to_latest_kegs ||= T.let(formula_kegs(:latest_kegs), T.nilable(T::Array[Keg]))
       end
 
       sig { returns(T::Array[Keg]) }
       def to_kegs
-        require "missing_formula"
-
-        @to_kegs ||= T.let(begin
-          to_formulae_and_casks(only: :formula, method: :kegs).freeze
-        rescue NoSuchKegError => e
-          if (reason = MissingFormula.suggest_command(e.name, "uninstall"))
-            $stderr.puts reason
-          end
-          raise e
-        end, T.nilable(T::Array[T.any(Formula, Keg, Cask::Cask)]))
-        T.cast(@to_kegs, T::Array[Keg])
+        @to_kegs ||= T.let(formula_kegs(:kegs), T.nilable(T::Array[Keg]))
       end
 
       sig {
@@ -296,24 +266,33 @@ module Homebrew
             ],
           ),
         )
-        @to_kegs_to_casks[key] ||= T.cast(
-          to_formulae_and_casks(only:, ignore_unavailable:, method:)
-            .partition { |o| o.is_a?(Keg) }
-            .map(&:freeze).freeze,
-          [T::Array[Keg], T::Array[Cask::Cask]],
-        )
+        @to_kegs_to_casks[key] ||= begin
+          partitioned = to_formulae_and_casks(only:, ignore_unavailable:, method:)
+                        .partition { |o| o.is_a?(Keg) }
+                        .map(&:freeze)
+                        .freeze
+          T.cast(partitioned, [T::Array[Keg], T::Array[Cask::Cask]])
+        end
       end
 
       sig { returns(T::Array[Tap]) }
       def to_taps
-        @to_taps ||= T.let(downcased_unique_named.map { |name| Tap.fetch name }.uniq.freeze, T.nilable(T::Array[Tap]))
+        return @to_taps if @to_taps
+
+        to_taps = downcased_unique_named.map { |name| Tap.fetch name }.uniq.freeze
+        @to_taps = T.let(to_taps, T.nilable(T::Array[Tap]))
+        to_taps
       end
 
       sig { returns(T::Array[Tap]) }
       def to_installed_taps
-        @to_installed_taps ||= T.let(to_taps.each do |tap|
+        return @to_installed_taps if @to_installed_taps
+
+        to_installed_taps = to_taps.each do |tap|
           raise TapUnavailableError, tap.name unless tap.installed?
-        end.uniq.freeze, T.nilable(T::Array[Tap]))
+        end.uniq.freeze
+        @to_installed_taps = T.let(to_installed_taps, T.nilable(T::Array[Tap]))
+        to_installed_taps
       end
 
       sig { returns(T::Array[String]) }
@@ -335,6 +314,19 @@ module Homebrew
 
       private
 
+      sig { params(method: Symbol).returns(T::Array[Keg]) }
+      def formula_kegs(method)
+        require "missing_formula"
+
+        kegs = to_formulae_and_casks(only: :formula, method:).freeze
+        T.cast(kegs, T::Array[Keg])
+      rescue NoSuchKegError => e
+        if (reason = MissingFormula.suggest_command(e.name, "uninstall"))
+          $stderr.puts reason
+        end
+        raise
+      end
+
       sig {
         params(name: String, only: T.nilable(Symbol), method: T.nilable(Symbol), warn: T::Boolean)
           .returns(T.any(Formula, Keg, Cask::Cask, T::Array[Keg]))
@@ -344,7 +336,7 @@ module Homebrew
 
         Homebrew::API.with_no_api_env_if_needed(@without_api) do
           if method == :bottle && only != :cask && HOMEBREW_BOTTLES_EXTNAME_REGEX.match?(name)
-            return Formulary.from_bottle(name, *@override_spec, force_bottle: @force_bottle, flags: @flags)
+            return Formulary.from_bottle(name, @override_spec || :stable, force_bottle: @force_bottle, flags: @flags)
           end
 
           unreadable_error = nil
@@ -353,7 +345,7 @@ module Homebrew
             begin
               case method
               when nil, :factory, :bottle, :resolve_cask
-                Formulary.factory(name, *@override_spec, warn:, force_bottle: @force_bottle, flags: @flags)
+                Formulary.factory(name, @override_spec || :stable, warn:, force_bottle: @force_bottle, flags: @flags)
               when :resolve
                 resolve_formula(name)
               when :latest_kegs
@@ -361,7 +353,7 @@ module Homebrew
               when :default_kegs
                 resolve_default_keg(name)
               when :kegs
-                resolve_kegs(name).fetch(1)
+                resolve_kegs(name)[1]
               else
                 raise
               end
@@ -523,7 +515,11 @@ module Homebrew
 
         rack = Formulary.to_rack(name.downcase)
 
-        kegs = rack.directory? ? rack.subdirs.map { |d| Keg.new(d) } : []
+        kegs = if rack.directory?
+          rack.subdirs.map { |d| Keg.new(d) }
+        else
+          []
+        end
 
         requested_tap, requested_formula = Tap.with_formula_name(name)
         if requested_tap && requested_formula

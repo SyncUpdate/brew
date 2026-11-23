@@ -4,7 +4,7 @@
 require "downloadable"
 require "formula_creator"
 require "mktemp"
-require "livecheck"
+require "livecheck/dsl"
 require "on_system"
 require "utils/output"
 
@@ -14,6 +14,7 @@ require "utils/output"
 class Resource
   include Downloadable
   include FileUtils
+  include Livecheck::DSL
   include OnSystem::MacOSAndLinux
   include Utils::Output::Mixin
 
@@ -55,7 +56,6 @@ class Resource
     @patches = T.let([], T::Array[T.any(EmbeddedPatch, ExternalPatch)])
     @owner = T.let(nil, T.nilable(Owner))
     @livecheck = T.let(Livecheck.new(self), Livecheck)
-    @livecheck_defined = T.let(false, T::Boolean)
     @insecure = T.let(false, T::Boolean)
     instance_eval(&block) if block
   end
@@ -128,7 +128,10 @@ class Resource
 
   sig { void }
   def prepare_patches
-    patches.grep(DATAPatch) { |p| p.path = T.cast(T.cast(owner, SoftwareSpec).owner, ::Formula).path }
+    patches.grep(DATAPatch) do |patch|
+      spec = T.cast(owner, SoftwareSpec)
+      patch.path = T.cast(spec.owner, ::Formula).path
+    end
   end
 
   sig { params(skip_downloaded: T::Boolean).void }
@@ -259,22 +262,8 @@ class Resource
   #   regex /foo-(\d+(?:\.\d+)+)\.tar/
   # end
   # ```
-  sig { params(block: T.nilable(T.proc.bind(Livecheck).void)).returns(T.untyped) }
-  def livecheck(&block)
-    return @livecheck unless block
-
-    @livecheck_defined = true
-    @livecheck.instance_eval(&block)
-  end
-
-  # Whether a livecheck specification is defined or not.
-  #
-  # It returns `true` when a `livecheck` block is present in the {Resource}
-  # and `false` otherwise.
-  sig { returns(T::Boolean) }
-  def livecheck_defined?
-    @livecheck_defined == true
-  end
+  sig { params(block: T.nilable(T.proc.bind(Livecheck).void)).returns(Livecheck) }
+  def livecheck(&block) = configure_livecheck(@livecheck, &block)
 
   sig { params(val: String).returns(Checksum) }
   def sha256(val)
@@ -409,7 +398,8 @@ class Resource
     sig { params(path: String).void }
     def initialize(path)
       super(File.basename(path))
-      @downloader = T.let(LocalBottleDownloadStrategy.new(Pathname(path)), LocalBottleDownloadStrategy)
+      downloader = LocalBottleDownloadStrategy.new(Pathname(path))
+      @downloader = T.let(downloader, LocalBottleDownloadStrategy)
     end
   end
 
@@ -511,12 +501,23 @@ class Resource
       nil
     end
 
+    # The name an index gives the manifest of this bottle's build for a tag.
+    sig { params(tag: T.any(String, Symbol, Utils::Bottles::Tag)).returns(String) }
+    def image_ref(tag)
+      version = bottle.resource.version
+      raise "Version is nil" if version.nil?
+
+      GitHubPackages.version_rebuild(version, bottle.rebuild, tag.to_s)
+    end
+
     # The SHA-256 of each bottle's own manifest in a downloaded index, keyed
-    # by the SHA-256 of that bottle.
-    sig { returns(T::Hash[String, String]) }
+    # by that manifest's name and the SHA-256 of its bottle. Bottles for
+    # several tags can share a SHA-256 but a client accepts only the manifest
+    # named for its own tag.
+    sig { returns(T::Hash[[String, String], String]) }
     def platform_manifest_sha256s
       JSON.parse(cached_manifest).fetch("manifests").to_h do |manifest|
-        [manifest.fetch("annotations").fetch("sh.brew.bottle.digest"),
+        [manifest.fetch("annotations").fetch_values("org.opencontainers.image.ref.name", "sh.brew.bottle.digest"),
          manifest.fetch("digest").delete_prefix("sha256:")]
       end
     end
@@ -564,14 +565,11 @@ class Resource
       raise "Checksum is nil" if checksum.nil?
 
       bottle_digest = checksum.hexdigest
-      version = bottle.resource.version
-      raise "Version is nil" if version.nil?
-
-      image_ref = GitHubPackages.version_rebuild(version, bottle.rebuild, bottle.tag.to_s)
+      bottle_image_ref = image_ref(bottle.tag)
       manifests_annotation = manifests_annotations.find do |m|
         next if m["sh.brew.bottle.digest"] != bottle_digest
 
-        m["org.opencontainers.image.ref.name"] == image_ref
+        m["org.opencontainers.image.ref.name"] == bottle_image_ref
       end
       raise Error, "Couldn't find manifest matching bottle checksum." if manifests_annotation.blank?
 
@@ -611,8 +609,10 @@ class Resource
     sig { params(val: T.nilable(Symbol)).returns(T.nilable(Symbol)) }
     def type(val = nil)
       return @type if val.nil?
+
       unless ::Patch::TYPES.key?(val)
-        raise ArgumentError, "Patch type must be one of: #{::Patch::TYPES.keys.map(&:inspect).join(", ")}"
+        patch_types = ::Patch::TYPES.keys.map(&:inspect).join(", ")
+        raise ArgumentError, "Patch type must be one of: #{patch_types}"
       end
 
       @type = val

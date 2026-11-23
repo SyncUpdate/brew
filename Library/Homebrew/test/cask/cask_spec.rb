@@ -426,11 +426,36 @@ RSpec.describe Cask::Cask, :cask do
         expect(cask.outdated_version).to be_nil
       end
 
-      it "is not outdated when plist version segment counts differ from the tap version" do
-        tap_version = "1.0"
-        cask = write_auto_updates_cask(cask_file, version: tap_version, artifacts:)
-        allow(cask).to receive(:installed_version).and_return("0.9")
-        stub_cask_bundle_version(cask.config.appdir/"MyFancyApp.app", short_version: "1", bundle_version: "200")
+      it "is not outdated when the self-updated short version is a prefix of the tap version" do
+        cask = write_auto_updates_cask(cask_file, version: "2.4.5", artifacts:)
+        allow(cask).to receive(:installed_version).and_return("2.3")
+        stub_cask_bundle_version(cask.config.appdir/"MyFancyApp.app", short_version: "2.4", bundle_version: "200")
+
+        expect(cask.outdated_version).to be_nil
+      end
+
+      it "is outdated when a self-updated short version is lower than a tap version with fewer segments" do
+        cask = write_auto_updates_cask(cask_file, version: "7.3", artifacts:)
+        allow(cask).to receive(:installed_version).and_return("7.1.4")
+        stub_cask_bundle_version(cask.config.appdir/"MyFancyApp.app", short_version: "7.2.1", bundle_version: "7224")
+
+        expect(cask.outdated_version).to eq("7.1.4")
+      end
+
+      it "compares a single-number tap version with the build when the short version looks newer" do
+        cask = write_auto_updates_cask(cask_file, version: "820", artifacts:)
+        allow(cask).to receive(:installed_version).and_return("800")
+        stub_cask_bundle_version(cask.config.appdir/"MyFancyApp.app", short_version:  "2026.5.1",
+                                                                      bundle_version: "810")
+
+        expect(cask.outdated_version).to eq("800")
+      end
+
+      it "skips an older dotted build even when the shared short version segments suggest an upgrade" do
+        cask = write_auto_updates_cask(cask_file, version: "2026.4", artifacts:)
+        allow(cask).to receive(:installed_version).and_return("2026.3")
+        stub_cask_bundle_version(cask.config.appdir/"MyFancyApp.app", short_version:  "7.2.1",
+                                                                      bundle_version: "2026.5")
 
         expect(cask.outdated_version).to be_nil
       end
@@ -455,12 +480,11 @@ RSpec.describe Cask::Cask, :cask do
         expect(cask.outdated_version).to eq("156.0.1")
       end
 
-      it "is not outdated when a self-updated short version cannot be compared with the tap version" do
-        tap_version = "158.0.1"
-        cask = write_auto_updates_cask(cask_file, version: tap_version, artifacts:)
+      it "is not outdated when a self-updated short version is higher than a tap version with more segments" do
+        cask = write_auto_updates_cask(cask_file, version: "158.0.1", artifacts:)
         allow(cask).to receive(:installed_version).and_return("158.0")
         stub_cask_bundle_version(cask.config.appdir/"MyFancyApp.app", short_version:  "159.0",
-                                                                      bundle_version: "15926.11.10")
+                                                                      bundle_version: "42.1.0")
 
         expect(cask.outdated_version).to be_nil
       end
@@ -483,6 +507,32 @@ RSpec.describe Cask::Cask, :cask do
 
         expect(cask.outdated_version).to eq("158.0.1")
       end
+
+      it "is outdated when the unchanged short and bundle versions match a CSV installation record" do
+        tap_version = "2.61,2058"
+        cask = write_auto_updates_cask(cask_file, version: tap_version, artifacts:)
+        allow(cask).to receive(:installed_version).and_return("2.61,2057")
+        stub_cask_bundle_version(cask.config.appdir/"MyFancyApp.app", short_version: "2.61", bundle_version: "2057")
+
+        expect(cask.outdated_version).to eq("2.61,2057")
+      end
+
+      it "follows a tap build rollback when the app still matches the CSV installation record" do
+        cask = write_auto_updates_cask(cask_file, version: "2.61,2056", artifacts:)
+        allow(cask).to receive(:installed_version).and_return("2.61,2057")
+        stub_cask_bundle_version(cask.config.appdir/"MyFancyApp.app", short_version: "2.61", bundle_version: "2057")
+
+        expect(cask.outdated_version).to eq("2.61,2057")
+      end
+
+      it "is not outdated when a self-updated bundle version no longer matches a CSV installation record" do
+        tap_version = "2.61,2058"
+        cask = write_auto_updates_cask(cask_file, version: tap_version, artifacts:)
+        allow(cask).to receive(:installed_version).and_return("2.61,2056")
+        stub_cask_bundle_version(cask.config.appdir/"MyFancyApp.app", short_version: "2.61", bundle_version: "2057")
+
+        expect(cask.outdated_version).to be_nil
+      end
     end
 
     describe ":latest casks" do
@@ -490,8 +540,7 @@ RSpec.describe Cask::Cask, :cask do
         let(:cask) { described_class.new("basic-cask") }
 
         context "when versions #{installed_version} are installed and the " \
-                "tap version is #{tap_version}, #{"not " unless greedy}greedy " \
-                "and sha is #{"not " unless outdated_sha}outdated" do
+                "tap version is #{tap_version}, greedy is #{greedy} and outdated_sha is #{outdated_sha}" do
           it {
             allow(cask).to receive_messages(installed_version:,
                                             version:                Cask::DSL::Version.new(tap_version),
@@ -648,6 +697,42 @@ RSpec.describe Cask::Cask, :cask do
     it "returns false for casks with bare depends_on :linux" do
       expect(Cask::CaskLoader.load("with-depends-on-linux-bare").supports_macos?).to be false
     end
+
+    it "returns false on ARM for casks with depends_on :linux inside on_arm" do
+      allow(Hardware::CPU).to receive(:type).and_return(:arm)
+      cask = described_class.new("example") { on_arm { depends_on :linux } }
+
+      expect(cask.supports_macos?).to be false
+    end
+  end
+
+  describe "#incompatible?" do
+    let(:cask) do
+      described_class.new("example") do
+        version "1.2.3"
+        sha256 :no_check
+        url "https://brew.sh/example.zip"
+        depends_on macos: :sonoma
+        depends_on arch: :arm64
+        app "Example.app"
+      end
+    end
+
+    test_each([[:sonoma, :arm, false], [:ventura, :arm, true], [:sonoma, :intel, true],
+               [:linux, :arm, true]]) do |(os, arch, incompatible)|
+      it "is #{incompatible} on #{os} #{arch}" do
+        Homebrew::SimulateSystem.with(os:, arch:) do
+          expect(cask.incompatible?).to be(incompatible)
+        end
+      end
+    end
+
+    it "reads the value stored in the internal API" do
+      cask = described_class.new("example", loaded_from_api: true, loaded_from_internal_api: true,
+                                            api_source: { "incompatible" => true })
+
+      expect(cask.incompatible?).to be(true)
+    end
   end
 
   describe "#outdated_info" do
@@ -787,7 +872,8 @@ RSpec.describe Cask::Cask, :cask do
           version "1.2.3"
         end
         sha256 :no_check
-        url "https://brew.sh/foo-#{version&.major_minor || raise(Cask::CaskInvalidError.new(cask, "version is only set on macOS"))}.zip"
+        major_minor = version&.major_minor || raise(Cask::CaskInvalidError.new(cask, "version is only set on macOS"))
+        url "https://brew.sh/foo-#{major_minor}.zip"
       end
 
       tag = Utils::Bottles::Tag.new(system: :linux, arch: :arm)
@@ -1263,7 +1349,8 @@ RSpec.describe Cask::Cask, :cask do
 
     context "when loaded from json file" do
       let(:expected_json) do
-        (TEST_FIXTURE_DIR/"cask/everything-with-variations.json").read.strip
+        (TEST_FIXTURE_DIR/"cask/everything-with-variations.json").read
+          .strip
           .gsub("$APPDIR", "#{TEST_TMPDIR}/cask-appdir")
       end
 

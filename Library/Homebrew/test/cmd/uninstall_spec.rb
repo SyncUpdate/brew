@@ -98,7 +98,8 @@ RSpec.describe Homebrew::Cmd::UninstallCmd do
 
     it "reports an error when the requested package does not exist" do
       cmd = described_class.new(["--dry-run", "--formula", "missing-package"])
-      error_message = /No such keg: #{Regexp.escape((HOMEBREW_CELLAR/"missing-package").to_s)}/
+      missing_path = Regexp.escape((HOMEBREW_CELLAR/"missing-package").to_s)
+      error_message = /No such keg: #{missing_path}/
 
       expect { cmd.run }
         .to output(error_message).to_stderr
@@ -160,7 +161,8 @@ RSpec.describe Homebrew::Cmd::UninstallCmd do
       allow(Cask::Uninstall).to receive(:check_dependent_casks)
 
       expect(Cask::Uninstall).to receive(:unpin_for_removal?)
-        .with(cask, force: false, dry_run: true).and_call_original
+        .with(cask, force: false, dry_run: true)
+        .and_call_original
       expect(Homebrew::Cleanup).not_to receive(:autoremove)
       expect { cmd.run }
         .to output(/testball is pinned.*test-cask is pinned/m).to_stderr

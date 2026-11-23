@@ -5,7 +5,6 @@ require "utils/browser"
 require "utils/info_display"
 
 require "abstract_command"
-require "missing_formula"
 require "caveats"
 require "options"
 require "formula"
@@ -13,7 +12,8 @@ require "formula_pin"
 require "keg"
 require "tab"
 require "json"
-require "cask/cask_loader"
+require "cask/cask_base"
+require "cask/caskroom"
 require "utils/spdx"
 require "utils/analytics"
 require "deprecate_disable"
@@ -32,7 +32,8 @@ module Homebrew
 
       VALID_DAYS = %w[30 90 365].freeze
       VALID_FORMULA_CATEGORIES = %w[install install-on-request build-error].freeze
-      VALID_CATEGORIES = T.let((VALID_FORMULA_CATEGORIES + %w[cask-install os-version]).freeze, T::Array[String])
+      valid_categories = (VALID_FORMULA_CATEGORIES + %w[cask-install os-version])
+      VALID_CATEGORIES = T.let(valid_categories.freeze, T::Array[String])
 
       cmd_args do
         description <<~EOS
@@ -126,10 +127,10 @@ module Homebrew
         elsif (json = args.json)
           print_json(json, args.no_named? && !args.installed?)
         elsif args.installed?
-          T.let([
+          [
             *(args.cask? ? [] : Formula.installed.sort),
             *(args.formula? ? [] : Cask::Caskroom.casks.sort_by(&:full_name)),
-          ], T::Array[T.any(Formula, Cask::Cask)]).each_with_index do |formula_or_cask, i|
+          ].each_with_index do |formula_or_cask, i|
             puts unless i.zero?
 
             info_formula_or_cask(formula_or_cask, quiet: !args.verbose?)
@@ -157,25 +158,26 @@ module Homebrew
         end
       end
 
-      sig { params(names: T::Array[String]).returns(T::Array[String]) }
-      def self.installed_dependent_names(names)
+      sig { params(names: T::Array[String], build: T::Boolean).returns(T::Array[String]) }
+      def self.installed_dependent_names(names, build: false)
         Formula.racks.filter_map do |rack|
           keg = Keg.from_rack(rack)
           next unless keg
 
           tab_path = keg/AbstractTab::FILENAME
           next unless tab_path.file?
+          # Only kegs built from source need their build dependencies again.
+          next if build && keg.tab.poured_from_bottle
 
-          dependencies = begin
-            keg.to_formula.runtime_dependencies(keg:)
-          rescue FormulaUnavailableError, TapFormulaAmbiguityError, Homebrew::UntrustedTapError
-            (keg.runtime_dependencies || []).filter_map do |dep|
-              full_name = T.cast(dep, T::Hash[String, T.untyped])["full_name"]
-              Dependency.new(full_name) if full_name
-            end
+          dependency_names = if build
+            keg.to_formula.deps.select(&:build?).map(&:name)
+          elsif (tab_dependencies = keg.runtime_dependencies)
+            # Loading every installed formula is slow, so read the receipt's list.
+            tab_dependencies.filter_map { it["full_name"] }
+          else
+            keg.to_formula.runtime_dependencies(keg:).map(&:name)
           end
-          dependent = dependencies.any? { names.include?(Utils.name_from_full_name(it.name)) }
-          keg.name if dependent
+          keg.name if dependency_names.any? { names.include?(Utils.name_from_full_name(it)) }
         rescue FormulaUnavailableError, TapFormulaAmbiguityError, Homebrew::UntrustedTapError,
                JSON::ParserError
           nil
@@ -209,6 +211,7 @@ module Homebrew
             # The formula/cask could not be found
             ofail obj.message
             # No formula with this name, try a missing formula lookup
+            require "missing_formula"
             if (reason = MissingFormula.reason(obj.name, show_info: true))
               $stderr.puts reason
             end
@@ -302,10 +305,11 @@ module Homebrew
           puts "Formula from #{github_info(formula)}"
           puts "Not installed"
         else
-          puts "Formula from #{formula.tap&.name ||
-                                T.cast(tab.source["tap"], T.nilable(String)) ||
-                                T.cast(tab.source["path"], T.nilable(String)) ||
-                                github_info(formula)}"
+          source = formula.tap&.name ||
+                   T.cast(tab.source["tap"], T.nilable(String)) ||
+                   T.cast(tab.source["path"], T.nilable(String)) ||
+                   github_info(formula)
+          puts "Formula from #{source}"
           puts Utils::InfoDisplay.installation_summary(version, tab)
         end
       end
@@ -397,11 +401,6 @@ module Homebrew
         else
           tab_runtime_deps
         end
-        installed_dependents = if $stdout.tty? && kegs.any?
-          self.class.installed_dependent_names(formula.possible_names)
-        else
-          [].freeze
-        end
         built_from_source = kegs.any? { |keg| !keg.tab.poured_from_bottle }
         installs_from_source = !installed && Utils::InfoDisplay.formula_installs_from_source?(formula)
         dependency_lines = %w[build required recommended optional].filter_map do |type|
@@ -411,11 +410,11 @@ module Homebrew
           next if deps.empty?
 
           optional_type = ["recommended", "optional"].include?(type)
-          tab_deps = tab_runtime_deps if kegs.any? && type == "required"
-          mark_uninstalled = kegs.any? && !optional_type
-          "#{type.capitalize} (#{deps.count}): " \
-            "#{decorate_dependencies(deps, tab_runtime_deps: tab_deps, mark_uninstalled:,
-                                     formula_outdated: outdated, missing_library_deps:)}"
+          tab_deps = tab_runtime_deps if installed && type == "required"
+          mark_uninstalled = installed && !optional_type
+          dependency_list = decorate_dependencies(deps, tab_runtime_deps: tab_deps, mark_uninstalled:,
+                                                  formula_outdated: outdated, missing_library_deps:)
+          "#{type.capitalize} (#{deps.count}): #{dependency_list}"
         end
         missing_library_names = missing_libraries.map { |lib| File.basename(lib) }.uniq
         if missing_library_names.present?
@@ -433,11 +432,16 @@ module Homebrew
             installed_count, runtime_deps.count, mark_uninstalled: !outdated
           )
         end
-        if installed_dependents.any?
-          dependency_lines << if verbose
-            "Dependents (#{installed_dependents.count}): #{installed_dependents.join(", ")}"
-          else
-            "Dependents: #{installed_dependents.count}"
+        if $stdout.tty? && kegs.any?
+          { "Dependents" => false, "Build dependents" => true }.each do |type, build|
+            names = self.class.installed_dependent_names(formula.possible_names, build:)
+            next if names.empty?
+
+            dependency_lines << if verbose
+              "#{type} (#{names.count}): #{names.join(", ")}"
+            else
+              "#{type}: #{names.count}"
+            end
           end
         end
         puts Utils::InfoDisplay.section("Dependencies", dependency_lines) if dependency_lines.present?
@@ -499,7 +503,8 @@ module Homebrew
         return unless HOMEBREW_CELLAR.exist?
 
         count = Formula.racks.length
-        puts "#{Utils.pluralize("keg", count, include_count: true)}, #{HOMEBREW_CELLAR.dup.abv}"
+        keg_count = Utils.pluralize("keg", count, include_count: true)
+        puts "#{keg_count}, #{HOMEBREW_CELLAR.dup.abv}"
       end
 
       sig { void }
@@ -550,18 +555,20 @@ module Homebrew
             puts oh1_title(info_summary_title(
                              formula_or_cask.full_name,
                              formula_or_cask.desc.presence&.then do |desc|
-                               "#{if formula_or_cask.name.present?
-                                    "(#{formula_or_cask.name.join(", ")}) "
-                               end}#{desc}"
+                               display_names = if formula_or_cask.name.present?
+                                 "(#{formula_or_cask.name.join(", ")}) "
+                               end
+                               "#{display_names}#{desc}"
                              end,
                              installed:,
                            ))
             if installed
-              puts "Cask from #{T.cast(formula_or_cask.tap, T.nilable(Tap))&.name ||
-                                 T.cast(tab.source["tap"], T.nilable(String)) ||
-                                 formula_or_cask.sourcefile_path&.to_s ||
-                                 T.cast(tab.source["path"], T.nilable(String)) ||
-                                 github_info(formula_or_cask)}"
+              source = T.cast(formula_or_cask.tap, T.nilable(Tap))&.name ||
+                       T.cast(tab.source["tap"], T.nilable(String)) ||
+                       formula_or_cask.sourcefile_path&.to_s ||
+                       T.cast(tab.source["path"], T.nilable(String)) ||
+                       github_info(formula_or_cask)
+              puts "Cask from #{source}"
               puts Utils::InfoDisplay.installation_summary(installed_version, tab)
             else
               puts "Cask from #{github_info(formula_or_cask)}"
@@ -623,26 +630,25 @@ module Homebrew
             formulae.map(&:to_hash)
           end
         when :v2
-          formulae, casks = T.let(
-            if all_packages
-              formulae = [] if args.cask?
-              formulae ||= Formula.all.sort
-              casks = [] if args.formula?
-              casks ||= Cask::Cask.all.sort_by(&:full_name)
-              [formulae, casks]
-            elsif args.installed?
-              formulae = [] if args.cask?
-              formulae ||= Formula.installed.sort
-              casks = [] if args.formula?
-              casks ||= Cask::Caskroom.casks.sort_by(&:full_name)
-              [formulae, casks]
-            else
-              named_formulae, named_casks = T.cast(
-                args.named.to_formulae_to_casks(method: :resolve_cask), [T::Array[Formula], T::Array[Cask::Cask]]
-              )
-              [named_formulae.map { |f| swap_to_installed_formula(f, qualified_inputs) }, named_casks]
-            end, [T::Array[Formula], T::Array[Cask::Cask]]
-          )
+          formulae, casks = if all_packages
+            formulae = [] if args.cask?
+            formulae ||= Formula.all.sort
+            casks = [] if args.formula?
+            require "cask/cask"
+            casks ||= Cask::Cask.all.sort_by(&:full_name)
+            [formulae, casks]
+          elsif args.installed?
+            formulae = [] if args.cask?
+            formulae ||= Formula.installed.sort
+            casks = [] if args.formula?
+            casks ||= Cask::Caskroom.casks.sort_by(&:full_name)
+            [formulae, casks]
+          else
+            named_formulae, named_casks = T.cast(
+              args.named.to_formulae_to_casks(method: :resolve_cask), [T::Array[Formula], T::Array[Cask::Cask]]
+            )
+            [named_formulae.map { |f| swap_to_installed_formula(f, qualified_inputs) }, named_casks]
+          end
 
           if args.variations?
             {
@@ -666,7 +672,8 @@ module Homebrew
       def info_summary_title(name, description, installed:)
         name = pretty_installed(name) if installed
 
-        "#{name}#{": #{description}" if description.present?}"
+        description_suffix = description.present? ? ": #{description}" : ""
+        "#{name}#{description_suffix}"
       end
 
       sig { params(formula: Formula, verbose: T::Boolean).returns(T::Array[Utils::InfoDisplay::InstalledVersion]) }
@@ -738,7 +745,7 @@ module Homebrew
             nil
           end
           installed ||= formula.any_version_installed? if !installed && formula
-          outdated = T.let(installed && formula&.outdated? == true, T::Boolean)
+          outdated = installed && formula&.outdated? == true
           warning = missing_library_deps.include?(Utils.name_from_full_name(dep.name))
           needed_by_installed_keg = if formula_outdated && tab_runtime_deps
             matching_tab_dep.present?
@@ -754,7 +761,8 @@ module Homebrew
       def dep_display_s(dep)
         return dep.name if dep.option_tags.empty?
 
-        "#{dep.name} #{dep.option_tags.map { |o| "--#{o}" }.join(" ")}"
+        options = dep.option_tags.map { |o| "--#{o}" }.join(" ")
+        "#{dep.name} #{options}"
       end
 
       sig { params(cask: Cask::Cask).void }

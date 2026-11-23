@@ -61,7 +61,10 @@ module Utils
         CATEGORIES.each do |category|
           category_name = category.delete_prefix("core-")
           all_core = category != category_name
-          data_source = ((category_name == "cask-install") ? "homebrew-cask" : "homebrew-core") if all_core
+          if all_core
+            cask_install = category_name == "cask-install"
+            data_source = cask_install ? "homebrew-cask" : "homebrew-core"
+          end
           measurement = case category_name
           when "install" then :formula_install
           when "install-on-request" then :formula_install_on_request
@@ -98,7 +101,8 @@ module Utils
         return [] unless path
 
         Utils.safe_popen_read("git", "-C", path, "ls-tree", "-r", "--name-only", "HEAD", "--", "_posts")
-             .lines(chomp: true).filter_map do |file|
+             .lines(chomp: true)
+             .filter_map do |file|
           match = file.match(
             %r{\A_posts/(\d{4})-(\d{2})-(\d{2})-(homebrew-\d+\.\d+\.\d+|security-incident-disclosure)\.md\z},
           )
@@ -268,9 +272,9 @@ module Utils
         if previous && Date.iso8601(from).year == Date.iso8601(to).year
           cutoff = previous.basename.to_s.delete_prefix("#{from}-").delete_suffix(".json")
           records = {}
-          (budget - 2).times do |page|
+          1.upto(budget - 2) do |page|
             entries = GitHub::API.open_rest("https://api.github.com/repos/#{repository}/issues?" \
-                                            "state=all&sort=created&direction=desc&per_page=100&page=#{page + 1}" \
+                                            "state=all&sort=created&direction=desc&per_page=100&page=#{page}" \
                                             "&since=#{cutoff}T00:00:00Z")
             requests += 1
             entries.each do |entry|
@@ -297,7 +301,8 @@ module Utils
         }.to_h do |metric, (type, date)|
           # Search has a separate limit: 30 requests/minute authenticated, 10 otherwise.
           sleep GitHub::API.credentials ? 2.1 : 6.1
-          query = "repo:#{repository} is:#{type} #{date}:#{from}..#{Date.iso8601(to) - 1}"
+          range_end = Date.iso8601(to) - 1
+          query = "repo:#{repository} is:#{type} #{date}:#{from}..#{range_end}"
           result = GitHub::API.open_rest("https://api.github.com/search/issues?" \
                                          "q=#{URI.encode_www_form_component(query)}&per_page=1")
           raise "Incomplete GitHub search for #{repository}: #{metric}" if result.fetch("incomplete_results")
@@ -407,7 +412,7 @@ module Utils
               to = if period == today.year.to_s
                 today.iso8601
               else
-                "#{period.to_i + 1}-01-01"
+                "#{period.to_i.succ}-01-01"
               end
               activity = if repo == "Homebrew/legacy-homebrew" && historical_rows.any?
                 { "pull_requests_opened" => 0, "issues_opened" => 0 }
@@ -435,12 +440,16 @@ module Utils
         data[:security_disclosures] = disclosures
         data[:maintainer_history] = archived["maintainer_history"] if archived["maintainer_history"]
         combined = git_repositories.slice("Homebrew/brew", "Homebrew/homebrew-core", "Homebrew/homebrew-cask")
-        first_years = combined.values.flat_map { |repository| repository.author_identities.keys }.uniq.sort
+        first_years = combined.values
+                              .flat_map { |repository| repository.author_identities.keys }
+                              .uniq
+                              .sort
                               .each_with_object({}) do |period, first|
           combined.each_value do |repository|
             repository.author_identities.fetch(period, []).each { |identity| first[identity] ||= period }
           end
-        end.values.tally
+        end.values
+           .tally
         data[:combined_contributors] = {
           repositories: combined.keys,
           rows:         ["current", *(2009..today.year).to_a.reverse.map(&:to_s)].map do |period|
@@ -451,8 +460,13 @@ module Utils
                 repository.author_identities.fetch(period, [])
               end
             end
+            new_contributors = if period == "current"
+              identities.uniq.size
+            else
+              first_years.fetch(period, 0)
+            end
             { period:, contributors: identities.uniq.size,
-              new_contributors: (period == "current") ? identities.uniq.size : first_years.fetch(period, 0) }
+              new_contributors: new_contributors }
           end,
         }
         case saved = archived["combined_contributors"]

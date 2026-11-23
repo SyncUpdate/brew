@@ -388,7 +388,11 @@ RSpec.describe Homebrew::Vulns::Match do
       bypass = "CVE-2026-111171"
       identifiers = [*original, bypass]
       advisories = identifiers.to_h do |id|
-        excluded = (id == bypass) ? original : [bypass]
+        excluded = if id == bypass
+          original
+        else
+          [bypass]
+        end
         [id, { "excluded_aliases" => excluded }]
       end
       overrides = Homebrew::Vulns::AdvisoryOverrides.new({ "slither-analyzer" => { "advisories" => advisories } })
@@ -673,7 +677,8 @@ RSpec.describe Homebrew::Vulns::Match do
       allow(Homebrew::Vulns::OSV).to receive(:vulnerability).with("DSA-1")
                                                             .and_return({ "id"       => "DSA-1",
                                                                           "upstream" => ["CVE-2024-0404"] })
-      expect(Homebrew::Vulns::OSV).to receive(:vulnerability).with("CVE-2024-0404").once
+      expect(Homebrew::Vulns::OSV).to receive(:vulnerability).with("CVE-2024-0404")
+                                                             .once
                                                              .and_raise(Homebrew::Vulns::OSV::NotFoundError, "404")
       hits = Array.new(2) { strict.resolve_upstream({ "DSA-1" => [ev(:distro)] }, identity) }
 
@@ -727,14 +732,18 @@ RSpec.describe Homebrew::Vulns::Match do
 
       before do
         allow(Homebrew::Vulns::OSV).to receive(:query_batch) do |queries|
-          queries.map { |query| [{ "id" => query[:name].include?("other") ? "CVE-2024-0002" : "DSA-1" }] }
+          queries.map do |query|
+            other = query[:name].include?("other")
+            [{ "id" => other ? "CVE-2024-0002" : "DSA-1" }]
+          end
         end
         allow(Homebrew::Vulns::OSV).to receive(:vulnerability).with("CVE-2024-0002")
                                                               .and_return({ "id" => "CVE-2024-0002" })
       end
 
       it "holds only dependent formulae when a prefetched record fails" do
-        expect(Homebrew::Vulns::OSV).to receive(:vulnerability).with("DSA-1").once
+        expect(Homebrew::Vulns::OSV).to receive(:vulnerability).with("DSA-1")
+                                                               .once
                                                                .and_raise(Homebrew::Vulns::OSV::NotFoundError, "404")
         held = []
         yielded = []
@@ -950,9 +959,10 @@ RSpec.describe Homebrew::Vulns::Match do
 
     it "deduplicates exported evidence after removing internal provenance" do
       records = ["CVE-2024-1234", "GHSA-abcd"].map do |id|
+        cve = id == "CVE-2024-1234"
         vulnerability = vuln(
           "id"       => id,
-          "aliases"  => [(id == "CVE-2024-1234") ? "GHSA-abcd" : "CVE-2024-1234"],
+          "aliases"  => [cve ? "GHSA-abcd" : "CVE-2024-1234"],
           "affected" => [{
             "package" => { "ecosystem" => "PyPI", "name" => "requests" },
             "ranges"  => [{ "type" => "ECOSYSTEM", "events" => [
@@ -985,7 +995,8 @@ RSpec.describe Homebrew::Vulns::Match do
       hit = make_hit(vulnerability, *evidence)
 
       expect(matcher.to_brew_record(requests, hit, now:)
-                    .dig(:database_specific, :upstream_evidence).map { |row| row[:resource] })
+                    .dig(:database_specific, :upstream_evidence)
+                    .map { |row| row[:resource] })
         .to eq ["first", "second"]
     end
 

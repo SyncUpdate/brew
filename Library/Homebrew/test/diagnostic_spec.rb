@@ -18,6 +18,7 @@ RSpec.describe Homebrew::Diagnostic do
                              ])
     allow(Homebrew::Diagnostic::Checks).to receive(:new).and_return(checks)
 
+    tier_message = Homebrew::Diagnostic::Finding.support_tier_message(tier: 3)&.chomp
     expect do
       described_class.checks(:supported_configuration_checks, fatal: false)
       described_class.report_support_tier
@@ -26,11 +27,12 @@ RSpec.describe Homebrew::Diagnostic do
       Warning: First warning
       Warning: Second warning
 
-      #{Homebrew::Diagnostic::Finding.support_tier_message(tier: 3)&.chomp}
+      #{tier_message}
     EOS
   end
 
   it "includes a custom compiler in the final tier without repeating the tier warning" do
+    tier_message = Homebrew::Diagnostic::Finding.support_tier_message(tier: 3)&.chomp
     expect do
       Homebrew::Install.check_cc_argv("clang")
       described_class.support_tiers << 2
@@ -38,7 +40,7 @@ RSpec.describe Homebrew::Diagnostic do
     end.to output(<<~EOS).to_stderr
       Warning: You passed `--cc=clang`.
 
-      #{Homebrew::Diagnostic::Finding.support_tier_message(tier: 3)&.chomp}
+      #{tier_message}
     EOS
   end
 
@@ -73,6 +75,14 @@ RSpec.describe Homebrew::Diagnostic do
     it "adds no blank line after the final checks of a failed build" do
       expect { described_class.checks(:build_error_checks, fatal: false) }
         .to output("Warning: First line\nSecond line\n").to_stderr
+    end
+  end
+
+  describe "::formula_build_finding" do
+    it "reports a formula that is also deprecated as disabled" do
+      formula = instance_double(Formula, name: "testball", head?: false, deprecated?: true, disabled?: true)
+
+      expect(described_class.formula_build_finding(formula)&.text).to eq("testball's formula is disabled.")
     end
   end
 end

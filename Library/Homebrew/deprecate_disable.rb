@@ -36,7 +36,8 @@ module DeprecateDisable
   # Keep in sync with RemoveDisabledPackages::REMOVE_DISABLED_MONTHS in
   # Homebrew/actions/remove-disabled-packages/main.rb.
   REMOVE_DISABLED_TIME_WINDOW = 12
-  REMOVE_DISABLED_BEFORE = T.let((Date.today << REMOVE_DISABLED_TIME_WINDOW).freeze, Date)
+  remove_disabled_before = Date.today << REMOVE_DISABLED_TIME_WINDOW
+  REMOVE_DISABLED_BEFORE = T.let(remove_disabled_before.freeze, Date)
 
   # Whether a formula or cask is disabled on every OS/architecture combination.
   sig { params(formula_or_cask: T.any(Formula, Cask::Cask)).returns(T::Boolean) }
@@ -51,9 +52,9 @@ module DeprecateDisable
 
   sig { params(formula_or_cask: T.any(Formula, Cask::Cask)).returns(T.nilable(Symbol)) }
   def type(formula_or_cask)
-    return :deprecated if formula_or_cask.deprecated?
+    return :disabled if formula_or_cask.disabled?
 
-    :disabled if formula_or_cask.disabled?
+    :deprecated if formula_or_cask.deprecated?
   end
 
   sig {
@@ -74,12 +75,21 @@ module DeprecateDisable
 
   sig { params(formula_or_cask: T.any(Formula, Cask::Cask)).returns(T.nilable(String)) }
   def message(formula_or_cask)
-    return if type(formula_or_cask).blank?
+    status = type(formula_or_cask)
+    return if status.nil?
 
-    reason = if formula_or_cask.deprecated?
-      formula_or_cask.deprecation_reason
-    elsif formula_or_cask.disabled?
-      formula_or_cask.disable_reason
+    if status == :disabled
+      reason = formula_or_cask.disable_reason
+      replacement = replacement_with_type(
+        formula_or_cask.disable_replacement_formula,
+        formula_or_cask.disable_replacement_cask,
+      )
+    else
+      reason = formula_or_cask.deprecation_reason
+      replacement = replacement_with_type(
+        formula_or_cask.deprecation_replacement_formula,
+        formula_or_cask.deprecation_replacement_cask,
+      )
     end
 
     reason = if formula_or_cask.is_a?(Formula) && FORMULA_DEPRECATE_DISABLE_REASONS.key?(reason)
@@ -91,9 +101,9 @@ module DeprecateDisable
     end
 
     message = if reason.present?
-      "#{type(formula_or_cask)} because it #{reason}!"
+      "#{status} because it #{reason}!"
     else
-      "#{type(formula_or_cask)}!"
+      "#{status}!"
     end
 
     disable_date = formula_or_cask.disable_date
@@ -102,23 +112,11 @@ module DeprecateDisable
       disable_date = estimated_disable_date if estimated_disable_date >= Date.today
     end
     if disable_date
-      message += if disable_date < Date.today
+      message += if status == :disabled
         " It was disabled on #{disable_date}."
       else
         " It will be disabled on #{disable_date}."
       end
-    end
-
-    replacement = if formula_or_cask.disabled?
-      replacement_with_type(
-        formula_or_cask.disable_replacement_formula,
-        formula_or_cask.disable_replacement_cask,
-      )
-    elsif formula_or_cask.deprecated?
-      replacement_with_type(
-        formula_or_cask.deprecation_replacement_formula,
-        formula_or_cask.deprecation_replacement_cask,
-      )
     end
 
     if replacement.present?

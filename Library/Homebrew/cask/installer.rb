@@ -46,6 +46,8 @@ module Cask
                    verify_download_integrity: true, quiet: false,
                    download_queue: Homebrew::DownloadQueue.default, defer_fetch: false,
                    default_uninstall_artifacts: nil)
+      @metadata_subdir = T.let(nil, T.nilable(Pathname))
+
       @cask = cask
       @command = command
       @force = force
@@ -288,23 +290,25 @@ module Cask
     def summary
       s = +""
       s << "#{Homebrew::EnvConfig.install_badge}  " unless Homebrew::EnvConfig.no_emoji?
-      s << "#{@cask} was successfully #{upgrade? ? "upgraded" : "installed"}!"
+      action = upgrade? ? "upgraded" : "installed"
+      s << "#{@cask} was successfully #{action}!"
       s.freeze
     end
 
     sig { returns(Download) }
     def downloader
-      @downloader ||= T.let(
-        (if @cask.loaded_from_internal_api?
-           Homebrew::API::CaskDownload.download(
-             token:       @cask.token,
-             cask_struct: Homebrew::API::Internal.cask_struct(@cask.token),
-             languages:   @cask.config.languages,
-             require_sha: require_sha?,
-           )
-        end) || Download.new(@cask, require_sha: require_sha?),
-        T.nilable(Download),
-      )
+      return @downloader if @downloader
+
+      downloader = (if @cask.loaded_from_internal_api?
+                      Homebrew::API::CaskDownload.download(
+                        token:       @cask.token,
+                        cask_struct: Homebrew::API::Internal.cask_struct(@cask.token),
+                        languages:   @cask.config.languages,
+                        require_sha: require_sha?,
+                      )
+      end) || Download.new(@cask, require_sha: require_sha?)
+      @downloader = T.let(downloader, T.nilable(Download))
+      downloader
     end
 
     sig { params(quiet: T.nilable(T::Boolean), timeout: T.nilable(T.any(Integer, Float))).returns(Pathname) }
@@ -449,10 +453,10 @@ module Cask
         Array(arch[:bits]).include?(@current_arch[:bits])
       end
 
+      architectures = @cask.depends_on.arch.join(", ")
       raise CaskError,
             "#{@cask}: This cask depends on hardware architecture being one of " \
-            "[#{@cask.depends_on.arch.join(", ")}], " \
-            "but you are running #{@current_arch}."
+            "[#{architectures}], but you are running #{@current_arch}."
     end
 
     sig { returns(T::Array[T.any(Formula, ::Cask::Cask)]) }
@@ -597,15 +601,12 @@ module Cask
 
     sig { returns(Pathname) }
     def metadata_subdir
-      @metadata_subdir ||= T.let(
-        begin
-          msd = @cask.metadata_subdir("Casks", timestamp: :now, create: true)
-          raise "unexpected nil metadata_subdir" unless msd
+      @metadata_subdir ||= begin
+        msd = @cask.metadata_subdir("Casks", timestamp: :now, create: true)
+        raise "unexpected nil metadata_subdir" unless msd
 
-          msd
-        end,
-        T.nilable(Pathname),
-      )
+        msd
+      end
     end
 
     sig { void }
@@ -744,12 +745,14 @@ module Cask
     }
     def uninstall_artifacts(clear: false, successor: nil, quit: true, zap_stanzas: [])
       odebug "Uninstalling artifacts"
-      odebug "#{::Utils.pluralize("artifact", artifacts.length, include_count: true)} defined", artifacts
+      artifact_count = ::Utils.pluralize("artifact", artifacts.length, include_count: true)
+      odebug "#{artifact_count} defined", artifacts
 
       directive_artifacts = [*artifacts.grep(Artifact::Uninstall), *zap_stanzas]
 
+      uninstall_artifacts = artifacts.grep_v(Artifact::AbstractUninstall).select { |artifact| artifact.respond_to?(:uninstall_phase) }
       preflight, removable = T.cast(
-        artifacts.grep_v(Artifact::AbstractUninstall).select { |artifact| artifact.respond_to?(:uninstall_phase) },
+        uninstall_artifacts,
         T::Array[
           T.any(
             Artifact::AbstractFlightBlock,

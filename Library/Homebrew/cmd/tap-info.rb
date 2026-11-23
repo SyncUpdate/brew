@@ -53,8 +53,10 @@ module Homebrew
           private_count = tap_stats.count { |_, _, private_tap| private_tap }
           info = Utils.pluralize("tap", tap_count, include_count: true)
           info += ", #{private_count} private"
-          info += ", #{Utils.pluralize("formula", formula_count, include_count: true)}"
-          info += ", #{Utils.pluralize("command", command_count, include_count: true)}"
+          formula_count_label = Utils.pluralize("formula", formula_count, include_count: true)
+          info += ", #{formula_count_label}"
+          command_count_label = Utils.pluralize("command", command_count, include_count: true)
+          info += ", #{command_count_label}"
           info += ", #{HOMEBREW_TAP_DIRECTORY.dup.abv}" if HOMEBREW_TAP_DIRECTORY.directory?
           puts info
 
@@ -71,7 +73,8 @@ module Homebrew
             info += "Installed"
             if Homebrew::EnvConfig.require_tap_trust?
               require "trust"
-              info += "\n#{Homebrew::Trust.trusted_tap?(tap) ? "Trusted" : "Untrusted"}"
+              trust_status = Homebrew::Trust.trusted_tap?(tap) ? "Trusted" : "Untrusted"
+              info += "\n#{trust_status}"
             end
             info += if (contents = tap.contents).blank?
               "\nNo commands/casks/formulae"
@@ -80,11 +83,17 @@ module Homebrew
             end
             info += "\nPrivate" if tap.private?
             info += "\n#{tap.path} (#{tap.path.abv})"
-            info += "\nFrom: #{tap.remote.presence || "N/A"}"
+            remote = tap.remote.presence || "N/A"
+            info += "\nFrom: #{remote}"
             info += "\norigin: #{tap.remote}" if tap.remote != tap.default_remote
-            info += "\nHEAD: #{tap.git_head || "(none)"}"
-            info += "\nlast commit: #{tap.git_last_commit || "never"}"
-            info += "\nbranch: #{tap.git_branch || "(none)"}" if default_branches.exclude?(tap.git_branch)
+            head = tap.git_head || "(none)"
+            info += "\nHEAD: #{head}"
+            last_commit = tap.git_last_commit || "never"
+            info += "\nlast commit: #{last_commit}"
+            if default_branches.exclude?(tap.git_branch)
+              branch = tap.git_branch || "(none)"
+              info += "\nbranch: #{branch}"
+            end
             puts info
             print_tap_listings(tap)
           else
@@ -124,13 +133,15 @@ module Homebrew
       sig { params(tap: Tap, name: String, installed: T::Boolean).returns(String) }
       def decorate_formula(tap, name, installed:)
         formula = Formulary.factory("#{tap.name}/#{name}")
+        incompatible = formula.incompatible?
         pretty_install_status(
           name,
           installed:,
           outdated:         installed && formula.outdated?,
           deprecated:       formula.deprecated?,
           disabled:         formula.disabled?,
-          can_install:      formula.valid_platform? && !formula.disabled?,
+          incompatible:,
+          can_install:      formula.valid_platform? && !formula.disabled? && !incompatible,
           mark_uninstalled: false,
         )
       rescue
@@ -140,13 +151,15 @@ module Homebrew
       sig { params(tap: Tap, token: String, installed: T::Boolean).returns(String) }
       def decorate_cask(tap, token, installed:)
         cask = Cask::CaskLoader.load("#{tap.name}/#{token}")
+        incompatible = cask.incompatible?
         pretty_install_status(
           token,
           installed:,
           outdated:         installed && cask.outdated?,
           deprecated:       cask.deprecated?,
           disabled:         cask.disabled?,
-          can_install:      cask.valid_platform? && !cask.disabled?,
+          incompatible:,
+          can_install:      cask.valid_platform? && !cask.disabled? && !incompatible,
           mark_uninstalled: false,
         )
       rescue

@@ -283,6 +283,98 @@ RSpec.describe Formula do
     end
   end
 
+  describe "#deps" do
+    let(:f) do
+      formula "dependency-lookup" do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+        depends_on "postgresql-client"
+        depends_on "postgresql@17" => :build
+        depends_on "postgresql" => :test
+        depends_on "user/tap/postgresql@18"
+        depends_on "ffmpeg@7"
+        depends_on "ffmpeg-full"
+        depends_on "ffmpeg@7-full"
+      end
+    end
+
+    it "returns all direct dependencies when no name is given" do
+      expect(f.deps).to eq(f.active_spec.deps)
+    end
+
+    it "finds direct dependencies by base name in declaration order" do
+      expect(f.deps("postgresql").map(&:name))
+        .to eq ["postgresql@17", "postgresql", "user/tap/postgresql@18"]
+    end
+
+    it "can limit matches to a tap" do
+      expect(f.deps("user/tap/postgresql").map(&:name)).to eq ["user/tap/postgresql@18"]
+    end
+
+    it "finds both unversioned and versioned full formulae" do
+      expect(f.deps("ffmpeg-full").map(&:name)).to eq ["ffmpeg-full", "ffmpeg@7-full"]
+    end
+
+    it "accepts a regular expression" do
+      expect(f.deps(/\Apostgresql@\d+\z/).map(&:name)).to eq ["postgresql@17", "user/tap/postgresql@18"]
+    end
+
+    it "keeps dependency tag filters available on filtered dependencies" do
+      expect(f.deps("postgresql").build.map(&:name)).to eq ["postgresql@17"]
+    end
+
+    it "returns an empty collection when no dependency matches" do
+      expect(f.deps("sqlite")).to be_empty
+    end
+  end
+
+  describe "#dep" do
+    let(:f) do
+      formula "dependency-lookup" do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+        depends_on "openssl@4" => :build
+        depends_on "openssl@4" => :test
+        depends_on "python@3.14"
+        depends_on "python@3.15"
+      end
+    end
+
+    it "returns the dependency when its name is declared with separate tags" do
+      expect(f.dep("openssl").name).to eq("openssl@4")
+    end
+
+    it "raises a descriptive error when no dependency matches" do
+      expect { f.dep("llvm") }
+        .to raise_error(RuntimeError,
+                        '`dependency-lookup` must declare exactly one dependency matching "llvm"; found none.')
+    end
+
+    it "raises a descriptive error when distinct dependency names match" do
+      expect { f.dep("python") }
+        .to raise_error(RuntimeError, '`dependency-lookup` must declare exactly one dependency matching "python"; ' \
+                                      "found python@3.14, python@3.15.")
+    end
+  end
+
+  describe "#python3_interpreters" do
+    it "returns one libexec interpreter path for each direct versioned Python 3 dependency" do
+      f = formula "multiple-python-interpreters" do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+        depends_on "python"
+        depends_on "python@3.14" => :build
+        depends_on "python@3.14" => :test
+        depends_on "user/tap/python@3.13" => [:build, :test]
+      end
+
+      expect(f.python3_interpreters).to eq [
+        HOMEBREW_PREFIX/"opt/python@3.14/libexec/bin/python",
+        HOMEBREW_PREFIX/"opt/python@3.13/libexec/bin/python",
+      ]
+    end
+  end
+
   describe "#python3" do
     it "returns the stable executable for a direct Python dependency" do
       f = formula "python-runtime-dependent" do
@@ -407,10 +499,12 @@ RSpec.describe Formula do
       allow(DevelopmentTools).to receive_messages(needs_libc_formula?: false, needs_compiler_formula?: false)
 
       allow(Formulary).to receive(:load_formula_from_path)
-        .with(f2.name, f2.path, flags: [], ignore_errors: false).and_return(f2)
+        .with(f2.name, f2.path, flags: [], ignore_errors: false)
+        .and_return(f2)
       allow(Formulary).to receive(:factory).with(f2.name).and_return(f2)
       allow(Formulary).to receive(:load_formula_from_path)
-        .with(f_full2.name, f_full2.path, flags: [], ignore_errors: false).and_return(f_full2)
+        .with(f_full2.name, f_full2.path, flags: [], ignore_errors: false)
+        .and_return(f_full2)
       allow(Formulary).to receive(:factory).with(f_full2.name).and_return(f_full2)
       allow(f).to receive(:versioned_formulae_names).and_return([f2.name])
     end
@@ -585,7 +679,8 @@ RSpec.describe Formula do
     before do
       [f, f_full, f_versioned, f_versioned_full].each do |formula|
         allow(Formulary).to receive(:load_formula_from_path)
-          .with(formula.name, formula.path, flags: [], ignore_errors: false).and_return(formula)
+          .with(formula.name, formula.path, flags: [], ignore_errors: false)
+          .and_return(formula)
         allow(Formulary).to receive(:factory).with(formula.name).and_return(formula)
         FileUtils.touch formula.path
       end
@@ -1207,6 +1302,15 @@ RSpec.describe Formula do
     end.to raise_error(ArgumentError, "`browsed` requires a homepage URL")
   end
 
+  it "clears the browser check when a formula changes homepage" do
+    klass = Class.new(Formula) do
+      homepage "https://brew.sh/", browsed: "2026-07-26"
+      homepage "https://docs.brew.sh/"
+    end
+
+    expect(klass.homepage_browsed).to be_nil
+  end
+
   specify "spec integration" do
     f = formula do
       T.bind(self, T.class_of(Formula))
@@ -1656,6 +1760,11 @@ RSpec.describe Formula do
   end
 
   describe "#livecheck_defined?" do
+    it "returns the configured livecheck from a formula block" do
+      klass = Class.new(described_class)
+      expect(klass.livecheck { skip "archived" }).to equal(klass.livecheck)
+    end
+
     specify "no `livecheck` block defined" do
       f = formula do
         T.bind(self, T.class_of(Formula))
@@ -1991,6 +2100,32 @@ RSpec.describe Formula do
     end
   end
 
+  describe "#installed_runtime_dependency_names" do
+    let(:f) do
+      formula do
+        T.bind(self, T.class_of(Formula))
+        url "foo-1.0"
+      end
+    end
+
+    it "reads the names from the install receipt without their taps" do
+      tab = instance_double(Tab, runtime_dependencies: [{ "full_name" => "homebrew/core/bar" }, {}])
+      allow(f).to receive(:any_installed_keg).and_return(instance_double(Keg, tab:))
+
+      expect(f.installed_runtime_dependency_names).to eq(["bar"])
+    end
+
+    it "falls back to the installed runtime dependencies for receipts without a list" do
+      dependency = formula("bar") do
+        T.bind(self, T.class_of(Formula))
+        url "bar-1.0"
+      end
+      allow(f).to receive_messages(any_installed_keg: nil, installed_runtime_formula_dependencies: [dependency])
+
+      expect(f.installed_runtime_dependency_names).to eq(["bar"])
+    end
+  end
+
   describe "#missing_dependencies" do
     let(:f) do
       formula("foo") do
@@ -2051,7 +2186,8 @@ RSpec.describe Formula do
       allow(Formulary).to receive(:loader_for).and_call_original
       allow(Formulary).to receive(:loader_for).with(dependency_name, warn: false).and_return(loader)
       allow(Homebrew::Trust).to receive(:trusted?)
-        .with(:formula, "#{untrusted_tap}/#{dependency_name}").and_return(false)
+        .with(:formula, "#{untrusted_tap}/#{dependency_name}")
+        .and_return(false)
       expect(Formulary).not_to receive(:factory).with(dependency_name, any_args)
 
       expect(formula.missing_dependencies(hide: [dependency_name]).map(&:name)).to eq([dependency_name])
@@ -2073,7 +2209,8 @@ RSpec.describe Formula do
       allow(Formulary).to receive(:loader_for).and_call_original
       allow(Formulary).to receive(:loader_for).with(dependency_name, any_args).and_return(loader)
       allow(Homebrew::Trust).to receive(:trusted?)
-        .with(:formula, "#{untrusted_tap}/new").and_return(false)
+        .with(:formula, "#{untrusted_tap}/new")
+        .and_return(false)
       expect(Formulary).not_to receive(:factory).with(dependency_name, any_args)
       (HOMEBREW_CELLAR/"new").mkpath
 
@@ -2155,6 +2292,40 @@ RSpec.describe Formula do
       )
       allow(LinkageChecker).to receive(:new).and_return(linkage_checker)
       expect(f.missing_library_linkage.last).to eq(Set["gmp"])
+    end
+  end
+
+  describe "#incompatible?" do
+    it "is true when an architecture requirement isn't met" do
+      allow(Hardware::CPU).to receive(:type).and_return(:arm)
+      f = formula do
+        T.bind(self, T.class_of(Formula))
+        url "https://brew.sh/example-1.0.tar.gz"
+        depends_on arch: :x86_64
+      end
+
+      expect(f.incompatible?).to be(true)
+    end
+
+    it "ignores requirements that depend on more than the platform" do
+      f = formula do
+        T.bind(self, T.class_of(Formula))
+        url "https://brew.sh/example-1.0.tar.gz"
+        depends_on xcode: "99.0"
+      end
+
+      expect(f.incompatible?).to be(false)
+    end
+
+    it "ignores requirements that are only needed to build" do
+      allow(Hardware::CPU).to receive(:type).and_return(:arm)
+      f = formula do
+        T.bind(self, T.class_of(Formula))
+        url "https://brew.sh/example-1.0.tar.gz"
+        depends_on arch: [:x86_64, :build]
+      end
+
+      expect(f.incompatible?).to be(false)
     end
   end
 
@@ -3477,6 +3648,54 @@ RSpec.describe Formula do
   end
 
   describe "OS support" do
+    it "preserves an enclosing OS block when entering a software spec" do
+      Homebrew::SimulateSystem.with(os: :tahoe) do
+        f = formula do
+          T.bind(self, T.class_of(Formula))
+          url "https://brew.sh/test-1.0.tar.gz"
+          on_macos { stable { depends_on macos: :ventura } }
+        end
+        expect(f.supports_linux?).to be(true)
+      end
+    end
+
+    it "detects platform blocks declared inside a software spec for API variations" do
+      f = formula do
+        T.bind(self, T.class_of(Formula))
+        url "https://brew.sh/test-1.0.tar.gz"
+        head do
+          url "https://brew.sh/test.git", branch: "main"
+          on_macos { depends_on macos: :ventura }
+        end
+      end
+      expect(f.on_system_blocks_exist?).to be(true)
+    end
+
+    it "requires macOS when an architecture block declares the requirement" do
+      Homebrew::SimulateSystem.with(os: :linux, arch: :arm) do
+        f = formula do
+          T.bind(self, T.class_of(Formula))
+          url "https://brew.sh/test-1.0.tar.gz"
+          on_arm { depends_on macos: :ventura }
+        end
+        expect(f.supports_linux?).to be(false)
+      end
+    end
+
+    it "keeps later dependencies in the outer OS block after a nested block" do
+      Homebrew::SimulateSystem.with(os: :tahoe, arch: :arm) do
+        f = formula do
+          T.bind(self, T.class_of(Formula))
+          url "https://brew.sh/test-1.0.tar.gz"
+          on_macos do
+            on_arm { depends_on "foo" }
+            depends_on macos: :ventura
+          end
+        end
+        expect(f.supports_linux?).to be(true)
+      end
+    end
+
     it "returns false for Linux when macOS is required at the top level" do
       f = formula do
         T.bind(self, T.class_of(Formula))
@@ -3536,6 +3755,15 @@ RSpec.describe Formula do
           depends_on :macos
         end
       end.to raise_error(ArgumentError, "`depends_on :macos` cannot be combined with another macOS `depends_on`")
+    end
+
+    it "does not allow duplicate top-level Linux requirements" do
+      expect do
+        Class.new(Formula) do
+          depends_on :linux
+          depends_on :linux
+        end
+      end.to raise_error(ArgumentError, /Only a single 'depends_on linux' is allowed/)
     end
 
     it "returns false for Linux when maximum macOS is required at the top level" do

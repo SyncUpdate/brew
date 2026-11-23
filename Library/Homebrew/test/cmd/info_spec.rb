@@ -42,6 +42,20 @@ RSpec.describe Homebrew::Cmd::Info do
 
   it_behaves_like "parseable arguments"
 
+  it "defers the cask implementation and missing formula lookup at command load" do
+    stdout, stderr, status = Open3.capture3(
+      *HOMEBREW_RUBY_EXEC_ARGS,
+      "-I", $LOAD_PATH.join(File::PATH_SEPARATOR),
+      "-rglobal", "-rcmd/info",
+      "-e", <<~RUBY
+        deferred = %w[cask/cask.rb missing_formula.rb].map { |path| HOMEBREW_LIBRARY_PATH/path }
+        puts $LOADED_FEATURES & deferred.map(&:to_s)
+      RUBY
+    )
+
+    expect([stdout, stderr, status.success?]).to eq(["", "", true])
+  end
+
   describe "#formula_conflicts" do
     subject(:command) { described_class.new([]) }
 
@@ -351,7 +365,8 @@ RSpec.describe Homebrew::Cmd::Info do
     allow(Cask::Info).to receive(:repo_url).and_return(nil)
     expect(Cask::Caskroom).to receive(:casks).with(no_args).once.and_return(casks)
     expect(Cask::Caskroom).to receive(:casks).with(tokens: contain_exactly("example", "example@dev"))
-                                             .twice.and_return(casks)
+                                             .twice
+                                             .and_return(casks)
 
     expect { described_class.new(["--installed", "--cask", "--verbose"]).run }.to output(<<~EOS).to_stdout
       ==> example: 1.0
@@ -543,7 +558,8 @@ RSpec.describe Homebrew::Cmd::Info do
       allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
       allow(Homebrew::SimulateSystem).to receive_messages(simulating_or_running_on_macos?: macos,
                                                           simulating_or_running_on_linux?: linux)
-      allow(formula).to receive(:requirements).and_return(requirement_class ? [requirement_class.new] : [])
+      allow(formula).to receive_messages(requirements:  requirement_class ? [requirement_class.new] : [],
+                                         incompatible?: false)
 
       expect { info.info_formula(formula) }
         .to output(/Build \(1\): builddep/).to_stdout
@@ -959,6 +975,49 @@ RSpec.describe Homebrew::Cmd::Info do
       .and not_to_output.to_stderr
   end
 
+  it "lists installed dependents built from source that need the formula to build" do
+    allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
+
+    info = described_class.new(["--verbose"])
+    formula = formula("testball") do
+      T.bind(self, T.class_of(Formula))
+      url "https://brew.sh/testball-0.1.tar.gz"
+      homepage "https://brew.sh/testball"
+      desc "Some test"
+    end
+    stub_formula_loader formula
+
+    keg_path = HOMEBREW_CELLAR/"testball/0.1"
+    keg_path.mkpath
+    tab = Tab.empty
+    tab.tabfile = keg_path/AbstractTab::FILENAME
+    tab.write
+
+    { "source-dependent" => false, "bottle-dependent" => true }.each do |dependent_name, poured_from_bottle|
+      stub_formula_loader(formula(dependent_name) do
+        T.bind(self, T.class_of(Formula))
+        url "https://brew.sh/#{dependent_name}-1.0.tar.gz"
+
+        depends_on "testball" => :build
+      end)
+
+      dependent_keg_path = HOMEBREW_CELLAR/"#{dependent_name}/1.0"
+      dependent_keg_path.mkpath
+      dependent_tab = Tab.empty
+      dependent_tab.tabfile = dependent_keg_path/AbstractTab::FILENAME
+      dependent_tab.poured_from_bottle = poured_from_bottle
+      dependent_tab.write
+    end
+
+    allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
+    allow(formula).to receive_messages(core_formula?: false, missing_library_linkage: [[], Set.new])
+
+    expect { info.info_formula(formula) }
+      .to output(/^Build dependents \(1\): source-dependent$/).to_stdout
+      .and not_to_output(/^Dependents/).to_stdout
+      .and not_to_output.to_stderr
+  end
+
   it "lists installed dependents whose receipts use another name of the formula" do
     allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
 
@@ -1070,6 +1129,19 @@ RSpec.describe Homebrew::Cmd::Info do
     dependent_tab.write
 
     expect(described_class.installed_dependent_names(["testball"])).to eq(["valid-dependent"])
+  end
+
+  it "doesn't load the formulae of installed dependents whose receipts have a list" do
+    keg_path = HOMEBREW_CELLAR/"dependent/1.0"
+    keg_path.mkpath
+    tab = Tab.empty
+    tab.tabfile = keg_path/AbstractTab::FILENAME
+    tab.runtime_dependencies = [{ "full_name" => "testball" }]
+    tab.write
+
+    expect(Formulary).not_to receive(:from_keg)
+
+    described_class.installed_dependent_names(["testball"])
   end
 
   it "uses formula dependencies without rereading the receipt when the list is missing" do
@@ -1784,6 +1856,61 @@ RSpec.describe Homebrew::Cmd::Info do
       .and not_to_output.to_stderr
   end
 
+  it "hides source install metadata for incompatible formulae" do
+    allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
+
+    info = described_class.new([])
+    formula = formula("testball") do
+      T.bind(self, T.class_of(Formula))
+      url "https://brew.sh/testball-0.1.tar.gz"
+      homepage "https://brew.sh/testball"
+      desc "Some test"
+    end
+    allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
+    allow(formula).to receive_messages(core_formula?: false, incompatible?: true)
+
+    expect { info.info_formula(formula) }
+      .to not_to_output(/Installs from source: yes/).to_stdout
+      .and not_to_output.to_stderr
+  end
+
+  it "hides source install metadata for formulae that can't be installed on this platform" do
+    allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
+
+    info = described_class.new([])
+    formula = formula("testball") do
+      T.bind(self, T.class_of(Formula))
+      url "https://brew.sh/testball-0.1.tar.gz"
+      homepage "https://brew.sh/testball"
+      desc "Some test"
+    end
+    allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
+    allow(formula).to receive_messages(core_formula?: false, valid_platform?: false)
+
+    expect { info.info_formula(formula) }
+      .to not_to_output(/Installs from source: yes/).to_stdout
+      .and not_to_output.to_stderr
+  end
+
+  it "hides source install metadata for disabled formulae" do
+    allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
+
+    info = described_class.new([])
+    formula = formula("testball") do
+      T.bind(self, T.class_of(Formula))
+      url "https://brew.sh/testball-0.1.tar.gz"
+      homepage "https://brew.sh/testball"
+      desc "Some test"
+      disable! date: "2024-01-01", because: :unmaintained
+    end
+    allow(info).to receive(:github_info).with(formula).and_return("https://example.com/testball.rb")
+    allow(formula).to receive(:core_formula?).and_return(false)
+
+    expect { info.info_formula(formula) }
+      .to not_to_output(/Installs from source: yes/).to_stdout
+      .and not_to_output.to_stderr
+  end
+
   it "prints a Binaries section listing executables in bin and sbin with --verbose" do
     info = described_class.new(["--verbose"])
     formula = formula("testball") do
@@ -2409,7 +2536,8 @@ RSpec.describe Homebrew::Cmd::Info do
         allow(Utils).to receive(:popen_read).and_call_original
 
         expect(Utils).to receive(:popen_read).with(Utils::Git.git, "-C", tap.path, "ls-files", "-z")
-                                             .once.and_call_original
+                                             .once
+                                             .and_call_original
 
         %w[testball testball2].each do |name|
           info.github_info(Formulary.from_path(formula_path.dirname/"#{name}.rb"))

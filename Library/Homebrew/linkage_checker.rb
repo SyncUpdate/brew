@@ -37,7 +37,8 @@ class LinkageChecker
   }
   def initialize(keg, formula = nil, cache_db:, rebuild_cache: false, stop_at_untrusted: false)
     @keg = keg
-    @formula = T.let(formula || resolve_formula(keg), T.nilable(Formula))
+    formula ||= resolve_formula(keg)
+    @formula = formula
     @stop_at_untrusted = stop_at_untrusted
     @store = T.let(LinkageCacheStore.new(keg.to_s, cache_db), LinkageCacheStore)
 
@@ -136,8 +137,9 @@ class LinkageChecker
     when "julia"
       file.start_with?("#{formula.prefix.realpath}/share/julia/compiled/")
     when "cyan"
+      prefix_pattern = formula.prefix.realpath.to_s
       file.match?(
-        %r{\A#{Regexp.escape(formula.prefix.realpath.to_s)}/libexec/lib/python\d+\.\d+/site-packages/cyan/extras/},
+        %r{\A#{Regexp.escape(prefix_pattern)}/libexec/lib/python\d+\.\d+/site-packages/cyan/extras/},
       )
     else
       false

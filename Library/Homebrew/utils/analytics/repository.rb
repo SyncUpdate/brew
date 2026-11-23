@@ -84,7 +84,8 @@ module Utils
           excluded << "^#{split}^"
         end
         git("log", "--first-parent", "--reverse", "--format=%ct%x00%B%x00", range, *excluded)
-          .split("\0").each_slice(2) do |timestamp, message|
+          .split("\0")
+          .each_slice(2) do |timestamp, message|
             next if message.nil?
 
             pull_request_numbers(message).each do |number|
@@ -141,7 +142,11 @@ module Utils
         maintainers = data.fetch("maintainers", {})
         rows = ["current", *(2009..year).map(&:to_s).reverse].map do |period|
           current = period == "current"
-          revision = (current || period == year.to_s) ? head : revisions[period]
+          revision = if current || period == year.to_s
+            head
+          else
+            revisions[period]
+          end
           catalogue = if @name == "Homebrew/brew" || revision.nil?
             0
           else
@@ -247,7 +252,7 @@ module Utils
 
       sig { params(args: String).returns(String) }
       def git(*args)
-        Utils.safe_popen_read("git", "-C", @path.to_s, *args).strip
+        Utils.safe_popen_read("git", "-C", @path.to_s, args:).strip
       end
     end
   end

@@ -290,7 +290,11 @@ module ELFShim
       # `unpack` directives for the specification's Elf_Half, Elf_Word and
       # Elf_Xword in the file's byte order. Elf_Addr and Elf_Off are a word in
       # 32-bit files and an xword in 64-bit ones.
-      half, word, xword = (ident.getbyte(DATA_OFFSET) == ELFDATA2LSB) ? ["v", "V", "Q<"] : ["n", "N", "Q>"]
+      half, word, xword = if ident.getbyte(DATA_OFFSET) == ELFDATA2LSB
+        ["v", "V", "Q<"]
+      else
+        ["n", "N", "Q>"]
+      end
       address = elf64 ? xword : word
 
       # The ELF header after e_ident and each program header, field by field in
@@ -336,7 +340,10 @@ module ELFShim
       # The dynamic section's [d_tag, d_val] pairs up to DT_NULL. Like elftools,
       # use the first entry for each tag, which is the one `assoc` finds.
       entries = read_bytes(file, dynamic_header.fetch(:p_offset), dynamic_header.fetch(:p_filesz))
-                .unpack("#{address}*").map { |value| Integer(value) }.each_slice(2).to_a
+                .unpack("#{address}*")
+                .map { |value| Integer(value) }
+                .each_slice(2)
+                .to_a
       return unless (null_index = entries.index { |d_tag, _| d_tag == DT_NULL })
 
       entries = entries.first(null_index)

@@ -124,7 +124,7 @@ module Utils
           common = 0
           common += 1 while common < path_names.length && path_names[common] == base_names[common]
           names = Array.new(base_names.length - common, "..") + path_names.drop(common)
-          return Pathname(names.empty? ? "." : File.join(*names))
+          return Pathname(names.empty? ? "." : File.join(names))
         end
 
         path.relative_path_from(base)
@@ -302,7 +302,11 @@ module Utils
       end
 
       files = Homebrew::API.with_no_api_env do
-        (package_type == :formula) ? tap.formula_files : tap.cask_files
+        if package_type == :formula
+          tap.formula_files
+        else
+          tap.cask_files
+        end
       end
       # Tap caches file lists sorted by full path.
       return path if files.bsearch { |file| file.to_s >= path.to_s } == path

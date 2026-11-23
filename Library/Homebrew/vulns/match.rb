@@ -160,7 +160,11 @@ module Homebrew
                             :advisory, :source_record, keyword_init: true) do
         sig { params(record: Vulnerability).returns(T.untyped) }
         def with_source(record)
-          source_record ? self : self.class.new(**to_h, source_record: record).freeze
+          if source_record
+            self
+          else
+            self.class.new(**to_h, source_record: record).freeze
+          end
         end
       end
 
@@ -183,11 +187,10 @@ module Homebrew
           raise ArgumentError, "Hit requires at least one Evidence" if evidence.empty?
 
           @vulnerability = vulnerability
-          @evidence = T.let(
-            evidence.map { |e| e.with_source(vulnerability) }
-                    .sort_by { |e| -STRATEGY_PRECISION.fetch(e.strategy) }.freeze,
-            T::Array[Evidence],
-          )
+          resolved_evidence = evidence.map { |e| e.with_source(vulnerability) }
+                                      .sort_by { |e| -STRATEGY_PRECISION.fetch(e.strategy) }
+                                      .freeze
+          @evidence = T.let(resolved_evidence, T::Array[Evidence])
         end
 
         sig { returns(Evidence) }
@@ -212,9 +215,7 @@ module Homebrew
 
         sig { returns(T::Array[String]) }
         def identifiers
-          evidence.flat_map { |item| item.source_record&.identifiers || [] }
-                  .prepend(*vulnerability.identifiers)
-                  .uniq
+          (vulnerability.identifiers + evidence.flat_map { |item| item.source_record&.identifiers || [] }).uniq
         end
       end
 
@@ -543,7 +544,11 @@ module Homebrew
           end
 
           resolved.each do |cve_record|
-            ev = cve_record.equal?(record) ? evidence : evidence + own
+            ev = if cve_record.equal?(record)
+              evidence
+            else
+              evidence + own
+            end
             hits << Hit.new(vulnerability: cve_record, evidence: ev)
           end
         end
@@ -574,7 +579,11 @@ module Homebrew
           next [] unless seen.add?(ref)
 
           upstream = corrected_vulnerability(ref, formula_name:)
-          upstream ? resolve_to_cves(upstream, seen, budget - 1, formula_name:) : []
+          if upstream
+            resolve_to_cves(upstream, seen, budget - 1, formula_name:)
+          else
+            []
+          end
         rescue OSV::NotFoundError
           # A dangling upstream link supplies no record. Keep the cached error
           # so fetching this ID directly from query results still fails closed.
@@ -730,8 +739,10 @@ module Homebrew
         override = @overrides&.advisory_override(formula_name, hit.identifiers) if formula_name
         return if !override&.state && current_prerelease_boundary?(hit)
 
-        subjects = hit.evidence.reject { |ev| ev.strategy == :distro && ev.subject_version.nil? }
-                      .group_by(&:resource).map do |_, evidence|
+        subjects = hit.evidence
+                      .reject { |ev| ev.strategy == :distro && ev.subject_version.nil? }
+                      .group_by(&:resource)
+                      .map do |_, evidence|
           results = evidence.filter_map do |ev|
             status = evidence_range_status(ev, ev.subject_version)
             [status, ev] if status
@@ -813,11 +824,16 @@ module Homebrew
 
         fixed = history ? history.fixed : first_fixed
         fixed ||= formula.pkg_version.to_s if !history && status&.fixed?
-        events = T.let(history ? history.events : [{ introduced: first_introduced || "0" }],
-                       T::Array[T::Hash[Symbol, String]])
-        events << { fixed: } if !history && fixed
+        events = if history
+          history.events
+        else
+          range_events = T.let([], T::Array[T::Hash[Symbol, String]])
+          range_events << { introduced: first_introduced || "0" }
+          range_events << { fixed: } if fixed
+          range_events
+        end
 
-        record = T.let({
+        record = {
           schema_version:    OsvExport::SCHEMA_VERSION,
           id:                record_id(formula, hit),
           published:         timestamp,
@@ -830,7 +846,7 @@ module Homebrew
             confidence:        confidence_for(hit, status),
             upstream_evidence: hit.evidence.map { |e| e.to_h.except(:advisory, :source_record).compact }.uniq,
           },
-        }, T::Hash[Symbol, T.untyped])
+        }
 
         if history
           record.fetch(:affected).fetch(0).fetch(:ecosystem_specific)[:range_state] = fixed ? "fixed" : "affected"
@@ -868,7 +884,11 @@ module Homebrew
         return base if status
 
         # No comparable range: the reviewer must set the boundary by hand.
-        (base == "high") ? "medium" : "low"
+        if base == "high"
+          "medium"
+        else
+          "low"
+        end
       end
 
       sig {
@@ -878,7 +898,7 @@ module Homebrew
           .returns(T::Hash[Symbol, T.untyped])
       }
       def affected_entry(formula, hit, events, fixed, status, status_evidence)
-        eco = T.let({ fix: fixed ? "bump" : nil }, T::Hash[Symbol, T.nilable(String)])
+        eco = { fix: fixed ? "bump" : nil }
         eco[:range_state] = status.state.to_s if status
         eco[:upstream_fixed_in] = status.fixed_in if status&.fixed_in
         # Attribute the resource whose subject decided the state, falling back
@@ -970,7 +990,11 @@ module Homebrew
           return ReconciledHistory.new(state: :preserved, reasons: [])
         end
 
-        unseen = require_resource_presence ? hit.evidence.select(&:resource).dup : []
+        unseen = if require_resource_presence
+          hit.evidence.select(&:resource).dup
+        else
+          []
+        end
         # Matching metadata alone does not identify an observation: constraints
         # and the alias family (including patch annotations) must also agree.
         observation_key = [hit.identifiers, hit.evidence]
@@ -1034,8 +1058,10 @@ module Homebrew
       sig { params(formula: Formula, hit: Hit).returns(HistoricalObservation) }
       def reconciliation_observation(formula, hit)
         reasons = T.let([], T::Array[Symbol])
-        subjects = hit.evidence.reject { |ev| ev.strategy == :distro && ev.subject_version.nil? }
-                      .group_by { |ev| [ev.ecosystem, ev.name, ev.resource] }.map do |_, evidence|
+        subjects = hit.evidence
+                      .reject { |ev| ev.strategy == :distro && ev.subject_version.nil? }
+                      .group_by { |ev| [ev.ecosystem, ev.name, ev.resource] }
+                      .map do |_, evidence|
           states = evidence.map do |ev|
             next :unknown if ev.subject_version.nil?
 
@@ -1086,7 +1112,12 @@ module Homebrew
 
         affected_versions = T.let([], T::Array[PkgVersion])
         unaffected_versions = T.let([], T::Array[PkgVersion])
-        ((current_state == :affected) ? affected_versions : unaffected_versions) << formula.pkg_version
+        versions = if current_state == :affected
+          affected_versions
+        else
+          unaffected_versions
+        end
+        versions << formula.pkg_version
         result = @history.walk(formula) do |old|
           case aggregate_state_at(old, hit)
           when :affected then affected_versions << old.pkg_version
@@ -1181,7 +1212,11 @@ module Homebrew
           # commit-only GIT range) does not hide a comparison of the same
           # subject from another source. Other subjects still fail closed.
           states -= [:unknown] if states.intersect?([:affected, :fixed, :not_applicable])
-          states.map { |state| (state == :absent) ? :fixed : state }
+          states.map do |state|
+            next :fixed if state == :absent
+
+            state
+          end
         end
         return if results.empty? || results.include?(:prerelease_boundary)
         return :affected if results.include?(:affected)

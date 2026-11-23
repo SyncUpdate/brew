@@ -66,14 +66,15 @@ module Cask
         arguments = words.drop(variables.length + 1)
         # `environment` takes precedence over the same variables in `exec`.
         variables.reject! { |variable| environment.key?(variable.split("=", 2).fetch(0)) }
-        variables.unshift(*environment.map { |name, value| "#{name}=#{value}" })
+        variables = environment.map { |name, value| "#{name}=#{value}" } + variables
         # `%` starts a field code like `%U`, so a literal one in `program` must be doubled.
         ["env", *variables, program.gsub("%", "%%"), *arguments].map do |word|
           # Quote only what needs it, as some launchers split `Exec` on spaces and keep the quotes.
           next word unless word.match?(EXEC_RESERVED_CHARACTERS)
 
           # Surround with quotes and precede `"`, `` ` ``, `$` and `\` with `\`.
-          "\"#{word.gsub(/["`$\\]/) { |character| "\\#{character}" }}\""
+          quoted_word = word.gsub(/["`$\\]/) { |character| "\\#{character}" }
+          "\"#{quoted_word}\""
         end.join(" ")
       end
     end

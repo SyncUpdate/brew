@@ -13,6 +13,8 @@ module OS
   module Mac
     extend Utils::Output::Mixin
 
+    @active_developer_dir = T.let(nil, T.nilable(String))
+
     raise "Loaded OS::Mac on generic OS!" if ENV["HOMEBREW_TEST_GENERIC_OS"]
 
     # This check is the only acceptable or necessary one in this file.
@@ -96,10 +98,7 @@ module OS
 
     sig { returns(String) }
     def self.active_developer_dir
-      @active_developer_dir ||= T.let(
-        Utils.popen_read("/usr/bin/xcode-select", "-print-path").strip,
-        T.nilable(String),
-      )
+      @active_developer_dir ||= Utils.popen_read("/usr/bin/xcode-select", "-print-path").strip
     end
 
     sig { returns(T.any(CLTSDKLocator, XcodeSDKLocator)) }
@@ -187,7 +186,7 @@ module OS
     def self.mdfind(*ids)
       @mdfind ||= T.let(nil, T.nilable(T::Hash[T::Array[String], T::Array[String]]))
       (@mdfind ||= {}).fetch(ids) do
-        @mdfind[ids] = Utils.popen_read("/usr/bin/mdfind", mdfind_query(*ids)).split("\n")
+        @mdfind[ids] = Utils.popen_read("/usr/bin/mdfind", mdfind_query(ids)).split("\n")
       end
     end
 
@@ -199,9 +198,9 @@ module OS
       end
     end
 
-    sig { params(ids: String).returns(String) }
-    def self.mdfind_query(*ids)
-      ids.map! { |id| "kMDItemCFBundleIdentifier == #{id}" }.join(" || ")
+    sig { params(ids: T::Array[String]).returns(String) }
+    def self.mdfind_query(ids)
+      ids.map { |id| "kMDItemCFBundleIdentifier == #{id}" }.join(" || ")
     end
   end
 end

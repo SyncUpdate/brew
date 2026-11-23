@@ -82,8 +82,9 @@ module Homebrew
           Homebrew.failed = true
         end
         if results.outdated_without_sbom.any?
+          package_names = results.outdated_without_sbom.sort.join(", ")
           opoo <<~EOS
-            The installed source of #{results.outdated_without_sbom.sort.join(", ")} could not be determined
+            The installed source of #{package_names} could not be determined
             (older than the current formula and no SBOM was written at install time). Results above reflect
             the current formula version, not what is installed. Run `brew upgrade` for accurate results.
           EOS
@@ -103,7 +104,8 @@ module Homebrew
         list = T.let([], T::Array[Formula])
         if (brewfile = args.brewfile)
           require "bundle/brewfile"
-          list += Homebrew::Bundle::Brewfile.read(file: brewfile_path(brewfile)).entries
+          list += Homebrew::Bundle::Brewfile.read(file: brewfile_path(brewfile))
+                                            .entries
                                             .select { |e| e.type == :brew }
                                             .map { |e| Formulary.resolve(e.name) }
         end

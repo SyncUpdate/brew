@@ -64,7 +64,7 @@ class MacOSRequirement < Requirement
 
   sig { params(tags: T.untyped, comparator: String).void }
   def initialize(tags = [], comparator: ">=")
-    @version = T.let(begin
+    version = begin
       if comparator == "==" && tags.first.respond_to?(:map)
         tags.first.map { |s| MacOSVersion.from_symbol(s) }
       else
@@ -89,7 +89,8 @@ class MacOSRequirement < Requirement
 
       # Otherwise fallback to the oldest allowed if comparator is >=.
       MacOSVersion.new(HOMEBREW_MACOS_OLDEST_ALLOWED) if comparator == ">="
-    end, T.nilable(T.any(MacOSVersion, T::Array[MacOSVersion])))
+    end
+    @version = T.let(version, T.nilable(T.any(MacOSVersion, T::Array[MacOSVersion])))
 
     @comparator = comparator
     super(tags.drop(1))
@@ -143,9 +144,18 @@ class MacOSRequirement < Requirement
     end
   end
 
+  sig { override.params(bottle_tag: Utils::Bottles::Tag).returns(T::Boolean) }
+  def platform_supported?(bottle_tag)
+    return allows?(bottle_tag.to_macos_version) if bottle_tag.macos?
+
+    # A macOS version too new to be known can't be ruled out.
+    bottle_tag.system == :dunno
+  end
+
   sig { override.params(type: Symbol).returns(String) }
   def message(type: :formula)
-    subject = (type == :cask) ? "This cask" : "This formula"
+    for_cask = type == :cask
+    subject = for_cask ? "This cask" : "This formula"
     "#{subject} requires macOS."
   end
 

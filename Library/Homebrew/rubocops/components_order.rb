@@ -184,8 +184,9 @@ module RuboCop
             @offensive_node = child
             next if valid_node
 
+            allowed_methods = ::Utils::Text.to_sentence(on_system_allowed_methods.map { |m| "`#{m}`" })
             problem "`#{on_system_block.method_name}` cannot include `#{child.method_name}`. " \
-                    "Only #{::Utils::Text.to_sentence(on_system_allowed_methods.map { |m| "`#{m}`" })} are allowed."
+                    "Only #{allowed_methods} are allowed."
           end
         end
 
@@ -208,7 +209,11 @@ module RuboCop
           else
             indentation = " " * (start_column(node2) - line_start_column(node2))
             # No line breaks up to version_scheme, order_idx == 8
-            line_breaks = (order_idx > 8) ? "\n\n" : "\n"
+            line_breaks = if order_idx > 8
+              "\n\n"
+            else
+              "\n"
+            end
             corrector.insert_before(node2.source_range, node1.source + line_breaks + indentation)
           end
           corrector.remove(range_with_surrounding_space(range: node1.source_range, side: :left))
@@ -228,7 +233,7 @@ module RuboCop
           params(
             component_precedence_list: T::Array[T::Array[{ name: Symbol, type: Symbol }]],
             body_node:                 RuboCop::AST::Node,
-          ).returns(T.nilable([T::Array[T::Array[RuboCop::AST::Node]], T::Array[RuboCop::AST::Node]]))
+          ).returns(T.nilable([T::Array[T::Array[RuboCop::AST::Node]], [RuboCop::AST::Node, RuboCop::AST::Node]]))
         }
         def check_order(component_precedence_list, body_node)
           present_components = component_precedence_list.map do |components|
@@ -245,7 +250,7 @@ module RuboCop
           end
 
           # Check if each present_components is above rest of the present_components
-          offensive_nodes = T.let(nil, T.nilable(T::Array[RuboCop::AST::Node]))
+          offensive_nodes = T.let(nil, T.nilable([RuboCop::AST::Node, RuboCop::AST::Node]))
           present_components.take(present_components.size - 1).each_with_index do |preceding_component, p_idx|
             next if preceding_component.empty?
 

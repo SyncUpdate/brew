@@ -22,13 +22,16 @@ module Homebrew
     sig { params(retries: Integer, force: T::Boolean, pour: T::Boolean).void }
     def initialize(retries: 1, force: false, pour: false)
       @concurrency = T.let(EnvConfig.download_concurrency, Integer)
-      @quiet = T.let(@concurrency > 1, T::Boolean)
-      @tries = T.let(retries + 1, Integer)
+      quiet = @concurrency > 1
+      @quiet = T.let(quiet, T::Boolean)
+      tries = retries + 1
+      @tries = T.let(tries, Integer)
       @force = force
       @pour = pour
       @pool = T.let(Concurrent::FixedThreadPool.new(concurrency), Concurrent::FixedThreadPool)
       @tty = T.let($stdout.tty?, T::Boolean)
-      @dumb_tty = T.let(ENV["TERM"] == "dumb", T::Boolean)
+      dumb_tty = ENV["TERM"] == "dumb"
+      @dumb_tty = T.let(dumb_tty, T::Boolean)
       @spinner = T.let(nil, T.nilable(Spinner))
       @symlink_targets = T.let({}, T::Hash[Pathname, T::Set[Downloadable]])
       @downloads_by_location = T.let({}, T::Hash[Pathname, Concurrent::Promises::Future])
@@ -179,8 +182,7 @@ module Homebrew
         return
       end
 
-      message_length_max = fetchable_downloads.each_key.map { |download| download.download_queue_message.length }
-                                              .max || 0
+      message_length_max = fetchable_downloads.each_key.map { it.download_queue_message.length }.max || 0
       remaining_downloads = fetchable_downloads.dup.to_a
       previous_pending_line_count = 0
       max_lines = [concurrency, Tty.height].min
@@ -198,7 +200,7 @@ module Homebrew
       trap(:WINCH) { Tty.size_stale! }
       frame_width = Tty.width if tty_with_cursor_move_support?
       begin
-        stdout_print_and_flush_if_tty Tty.hide_cursor
+        stdout_print_and_flush_if_tty "#{Tty.hide_cursor}#{Tty.disable_line_wrap}"
 
         output_message = lambda do |downloadable, future, last|
           status = status_from_future(future)
@@ -208,7 +210,8 @@ module Homebrew
           message = downloadable.download_queue_message
           if tty_with_cursor_move_support?
             message = message_with_progress(downloadable, future, message, message_length_max)
-            stdout_print_and_flush "#{status} #{message}#{"\n" unless last}"
+            newline = last ? "" : "\n"
+            stdout_print_and_flush "\r#{status} #{message}#{Tty.clear_to_end}#{newline}"
           elsif status
             $stderr.puts "#{status} #{message}"
           end
@@ -275,7 +278,6 @@ module Homebrew
 
               last = i == max_lines - 1 || i == remaining_downloads.count - 1
               previous_pending_line_count += output_message.call(downloadable, future, last)
-              stdout_print_and_flush_if_tty Tty.clear_to_end
             end
 
             if (previous_pending_line_count - 1).zero?
@@ -307,7 +309,7 @@ module Homebrew
         end
       ensure
         stdout_print_and_flush_if_tty Tty.end_synchronized_update
-        stdout_print_and_flush_if_tty Tty.show_cursor
+        stdout_print_and_flush_if_tty "#{Tty.restore_line_wrap}#{Tty.show_cursor}"
         @deferred_failure_messages.each(&:call)
       end
     # `Interrupt` inherits from `Exception`, so rescue it to cancel active workers
@@ -546,7 +548,8 @@ module Homebrew
       message_length = available_width - progress.length
       return message[0, available_width].to_s unless message_length.positive?
 
-      "#{message[0, message_length].to_s.ljust(message_length)}#{progress}"
+      padded_message = message[0, message_length].to_s.ljust(message_length)
+      "#{padded_message}#{progress}"
     end
 
     # Animated spinner for download progress display.

@@ -196,7 +196,8 @@ RSpec.describe SharedAudits do
     end
 
     it "ignores the IANA record for the TLD when the registry publishes no date" do
-      mock_whois stdout: "#{whois_output.lines.take(5).join}Domain: brew.sh\nStatus: connect\n"
+      whois_header = whois_output.lines.take(5).join
+      mock_whois stdout: "#{whois_header}Domain: brew.sh\nStatus: connect\n"
 
       expect(described_class.new_domain_problem("https://brew.sh")).to be_nil
     end
@@ -265,7 +266,8 @@ RSpec.describe SharedAudits do
       first_page = [{ "commit" => { "author" => { "email" => "Jo@Acme.io" } } }]
       second_page = [{ "commit" => { "author" => { "email" => "x@brew.sh" } } }]
       allow(GitHub::API).to receive(:paginate_rest).with(commits_url)
-                                                   .and_yield(first_page, 1).and_yield(second_page, 2)
+                                                   .and_yield(first_page, 1)
+                                                   .and_yield(second_page, 2)
 
       expect(described_class.pull_request_commit_email_domains).to eq(["acme.io", "brew.sh"])
     end

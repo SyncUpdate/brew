@@ -59,10 +59,11 @@ module Homebrew
           new_audit_args = args.online? ? ["--new"] : ["--strict"]
 
           Utils.popen_read("git", "diff", "--name-only", "--no-relative", "--diff-filter=AMR", "main")
-               .split("\n").each do |file|
+               .split("\n")
+               .each do |file|
             next if file.blank?
 
-            tapped_name = "#{tap.name}/#{Pathname(file).basename(".rb")}"
+            tapped_name = "#{tap.name}/#{File.basename(file, ".rb")}"
 
             if tap.formula_file?(file)
               (added_files.include?(file) ? new_formulae : changed_formulae) << tapped_name

@@ -111,14 +111,10 @@ module Cask
     def initialize(default: nil, env: nil, explicit: {}, ignore_invalid_keys: false)
       # Define all instance variables in a consistent order so every instance
       # shares one object shape, avoiding Ruby's shape-variation warning.
-      @default = T.let(
-        default ? self.class.canonicalize(self.class.defaults.merge(default)) : nil,
-        T.nilable(ConfigHash),
-      )
-      @env = T.let(
-        env ? self.class.canonicalize(env) : nil,
-        T.nilable(ConfigHash),
-      )
+      default = self.class.canonicalize(self.class.defaults.merge(default)) if default
+      @default = default
+      env = self.class.canonicalize(env) if env
+      @env = env
       @explicit = T.let(
         self.class.canonicalize(explicit),
         ConfigHash,
@@ -139,8 +135,8 @@ module Cask
         return
       end
 
-      ::Utils::Data.assert_valid_keys(@env, *self.class.defaults.keys) if @env
-      ::Utils::Data.assert_valid_keys(@explicit, *self.class.defaults.keys)
+      ::Utils::Data.assert_valid_keys(@env, self.class.defaults.keys) if @env
+      ::Utils::Data.assert_valid_keys(@explicit, self.class.defaults.keys)
     end
 
     # runtime recursive evaluation forces the LazyObject to be evaluated

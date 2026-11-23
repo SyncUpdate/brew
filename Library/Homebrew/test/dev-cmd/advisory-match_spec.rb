@@ -69,9 +69,10 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
   end
 
   def history_result(introduced: "2.27.0", fixed: "2.28.1", state: :range, reasons: [])
+    range = state == :range
     Homebrew::Vulns::Match::ReconciledHistory.new(
       state:, reasons:,
-      intervals: (state == :range) ? [Homebrew::Vulns::Match::Interval.new(introduced:, fixed:)] : []
+      intervals: range ? [Homebrew::Vulns::Match::Interval.new(introduced:, fixed:)] : []
     )
   end
 
@@ -143,7 +144,11 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
       before do
         allow(matcher).to receive(:reconcile_history).and_call_original
         allow(Homebrew::Vulns::OSV).to receive(:query_batch) do |packages|
-          packages.map { |pkg| (pkg[:name] == "certifi") ? [{ "id" => "CVE-2024-1234" }] : [] }
+          packages.map do |pkg|
+            next [] if pkg[:name] != "certifi"
+
+            [{ "id" => "CVE-2024-1234" }]
+          end
         end
         allow(Homebrew::Vulns::OSV).to receive(:vulnerability).with("CVE-2024-1234")
                                                               .and_return(resource_data)
@@ -190,7 +195,11 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
       it "does not create records for additional fresh upstream hits" do
         allow(Homebrew::Vulns::OSV).to receive(:query_batch) do |packages|
           packages.map do |pkg|
-            (pkg[:name] == "certifi") ? [{ "id" => "CVE-2024-1234" }, { "id" => "CVE-2024-9999" }] : []
+            if pkg[:name] == "certifi"
+              [{ "id" => "CVE-2024-1234" }, { "id" => "CVE-2024-9999" }]
+            else
+              []
+            end
           end
         end
         allow(Homebrew::Vulns::OSV).to receive(:vulnerability).with("CVE-2024-9999")
@@ -1473,7 +1482,9 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
     matcher = Homebrew::Vulns::Match.new
     allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
     expect(matcher).to receive(:reconcile_history).with(requests, anything, reuse_platforms: true)
-                                                  .exactly(4).times.and_return(history_result)
+                                                  .exactly(4)
+                                                  .times
+                                                  .and_return(history_result)
     expect(matcher).not_to receive(:advisories_for)
     expect(Formulary).not_to receive(:from_path).with(requests.path)
 
@@ -1485,7 +1496,8 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
     requests.path.write "class Requests < Formula; end"
     matcher = Homebrew::Vulns::Match.new
     allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
-    expect(matcher).to receive(:reconcile_history).with(requests, anything, reuse_platforms: true).once
+    expect(matcher).to receive(:reconcile_history).with(requests, anything, reuse_platforms: true)
+                                                  .once
                                                   .and_return(history_result(state:   :unresolved,
                                                                              reasons: [:history_unavailable]))
     expect(matcher).not_to receive(:advisories_for)
@@ -2133,7 +2145,8 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
     stub_osv_hit("CVE-2024-1234", fixed: "2.32.0")
     matcher = Homebrew::Vulns::Match.new
     expect(matcher).not_to receive(:first_fixed_version)
-    expect(matcher).to receive(:reconcile_history).exactly(4).times
+    expect(matcher).to receive(:reconcile_history).exactly(4)
+                                                  .times
                                                   .and_return(history_result(introduced: "2.30.0", fixed: nil))
     allow(Homebrew::Vulns::Match).to receive(:new).and_return(matcher)
 
@@ -2367,7 +2380,8 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
 
   it "requires manual ranges for a new record when state overrides conflict with upstream history" do
     %w[affected fixed].each do |state|
-      stub_osv_hit("CVE-2024-1234", fixed: (state == "affected") ? "2.28.1" : "2.32.0")
+      affected = state == "affected"
+      stub_osv_hit("CVE-2024-1234", fixed: affected ? "2.28.1" : "2.32.0")
       expect(FormulaVersions).not_to receive(:new)
 
       Dir.mktmpdir do |dir|
@@ -2546,7 +2560,8 @@ RSpec.describe Homebrew::DevCmd::AdvisoryMatch do
         matcher = Homebrew::Vulns::Match.new(bulk: true)
         allow(matcher).to receive(:reconcile_history).and_return(history_result(introduced: "2.20.0"))
         expect(Homebrew::Vulns::Match).to receive(:new)
-          .with(repology: nil, overrides: nil, bulk: true, strict_upstream: false).and_return(matcher)
+          .with(repology: nil, overrides: nil, bulk: true, strict_upstream: false)
+          .and_return(matcher)
         expect(Formulary).to receive(:factory).with("requests").once.and_return(requests)
         expect(Formulary).not_to receive(:factory).with("unselected")
         expect(Homebrew::Vulns::Repology).not_to receive(:lookup)

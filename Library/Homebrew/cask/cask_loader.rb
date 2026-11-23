@@ -298,17 +298,16 @@ module Cask
       def initialize(token, from_json: nil, path: nil, from_installed_caskfile: false,
                      from_internal_json: false, api_fallback: true)
         @token = T.let(token.sub(%r{^homebrew/(?:homebrew-)?cask/}i, ""), String)
-        @sourcefile_path = T.let(
-          if path
-            path
-          elsif from_json
-            from_internal_json ? Homebrew::API::Internal.cached_packages_json_file_path : Homebrew::API::Cask.cached_json_file_path
-          else
-            Homebrew::API.cached_cask_json_file_path
-          end,
-          Pathname,
-        )
-        @path = T.let(path || CaskLoader.default_path(@token), Pathname)
+        sourcefile_path = if path
+          path
+        elsif from_json
+          from_internal_json ? Homebrew::API::Internal.cached_packages_json_file_path : Homebrew::API::Cask.cached_json_file_path
+        else
+          Homebrew::API.cached_cask_json_file_path
+        end
+        @sourcefile_path = T.let(sourcefile_path, Pathname)
+        path ||= CaskLoader.default_path(@token)
+        @path = T.let(path, Pathname)
         @from_json = from_json
         @from_installed_caskfile = from_installed_caskfile
         @from_internal_json = from_internal_json
@@ -405,6 +404,10 @@ module Cask
           deprecate!(**localised_cask_struct.deprecate_args) if localised_cask_struct.deprecate?
           disable!(**localised_cask_struct.disable_args) if localised_cask_struct.disable?
 
+          if (reason = localised_cask_struct.no_autobump_message)
+            set_no_autobump(because: reason, from_metadata: cask.loaded_from_metadata?)
+          end
+
           auto_updates localised_cask_struct.auto_updates if localised_cask_struct.auto_updates?
           conflicts_with(**localised_cask_struct.conflicts_with_args) if localised_cask_struct.conflicts?
 
@@ -474,8 +477,8 @@ module Cask
 
           if warn && [:rename, :migration].include?(type) &&
              !(type == :migration && migrated_tap.core_tap?)
-            opoo "Cask #{token} was renamed to " \
-                 "#{migrated_tap.core_cask_tap? ? migrated_token : "#{migrated_tap}/#{migrated_token}"}."
+            new_name = migrated_tap.core_cask_tap? ? migrated_token : "#{migrated_tap}/#{migrated_token}"
+            opoo "Cask #{token} was renamed to #{new_name}."
           end
 
           if (core_cask_loader = loader_from_token_tap_type(token_tap_type))&.path&.exist?

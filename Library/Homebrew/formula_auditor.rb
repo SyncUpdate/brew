@@ -22,6 +22,8 @@ module Homebrew
     include Utils::Curl
     include Utils::Output::Mixin
 
+    @aliases = T.let(nil, T.nilable(T::Array[String]))
+
     sig { override.returns(Formula) }
     attr_reader :formula
 
@@ -65,10 +67,12 @@ module Homebrew
       # Accept precomputed style offense results, for efficiency
       @style_offenses = style_offenses
       # Allow the formula tap to be set as homebrew/core, for testing purposes
-      @core_tap = T.let(formula.tap&.core_tap? || core_tap || false, T::Boolean)
+      @core_tap = core_tap
+      @core_tap = true if formula.tap&.core_tap?
       @problems = T.let([], T::Array[T.any(String, T::Hash[Symbol, T.untyped])])
       @new_formula_problems = T.let([], T::Array[T.any(String, T::Hash[Symbol, T.untyped])])
-      @text = T.let(Formulary.formula_contents(formula.path).b, String)
+      text = Formulary.formula_contents(formula.path).b
+      @text = T.let(text, String)
       @specs = T.let([formula.stable, formula.head].compact, T::Array[SoftwareSpec])
       @spdx_license_data = spdx_license_data
       @spdx_exception_data = spdx_exception_data
@@ -142,10 +146,11 @@ module Homebrew
 
         if valid_versioned_aliases.empty? && alias_name != latest_versioned_formula
           if formula.tap
+            relative_path = formula.path.to_s.gsub(formula.tap!.path.to_s, "..")
             problem <<~EOS
               Formula has other versions so create a versioned alias:
                 cd #{formula.tap!.alias_dir}
-                ln -s #{formula.path.to_s.gsub(formula.tap!.path.to_s, "..")} #{alias_name}
+                ln -s #{relative_path} #{alias_name}
             EOS
           else
             problem "Formula has other versions so create an alias named '#{alias_name}'."
@@ -172,7 +177,7 @@ module Homebrew
     sig { returns(T::Array[String]) }
     def self.aliases
       # core aliases + tap alias names + tap alias full name
-      @aliases ||= T.let(Formula.aliases + Formula.tap_aliases, T.nilable(T::Array[String]))
+      @aliases ||= Formula.aliases + Formula.tap_aliases
     end
 
     sig { void }
@@ -408,26 +413,24 @@ module Homebrew
             EOS
           end
 
-          if dep_f.deprecated? && !formula.deprecated? && !formula.disabled?
+          if dep_f.disabled? && !formula.disabled?
+            problem <<~EOS
+              Dependency '#{dep.name}' is disabled but has un-disabled dependents. Either
+              un-disable '#{dep.name}' or disable it and all of its dependents.
+            EOS
+          elsif dep_f.deprecated? && !formula.deprecated? && !formula.disabled?
             problem <<~EOS
               Dependency '#{dep.name}' is deprecated but has un-deprecated dependents. Either
               un-deprecate '#{dep.name}' or deprecate it and all of its dependents.
             EOS
           end
 
-          if dep_f.disabled? && !formula.disabled?
-            problem <<~EOS
-              Dependency '#{dep.name}' is disabled but has un-disabled dependents. Either
-              un-disable '#{dep.name}' or disable it and all of its dependents.
-            EOS
-          end
-
           # we can only verify the OS requirement of the currently running platform
           os_req = if Homebrew::SimulateSystem.simulating_or_running_on_linux? &&
-                      !dep_f.supports_linux? && !spec.depends_on_macos_set_top_level?
+                      !dep_f.supports_linux? && !spec.requires_macos?
             "macOS"
           elsif Homebrew::SimulateSystem.simulating_or_running_on_macos? &&
-                !dep_f.supports_macos? && !spec.depends_on_linux_set_top_level?
+                !dep_f.supports_macos? && !spec.requires_linux?
             "Linux"
           end
           problem <<~EOS if os_req
@@ -1006,9 +1009,6 @@ module Homebrew
 
     sig { void }
     def audit_stable_version
-      return unless @git
-      return unless formula.tap # skip formula not from core or any taps
-      return unless formula.tap!.git? # git log is required
       return unless (stable = formula.stable)
 
       current_version = stable.version
@@ -1164,11 +1164,6 @@ module Homebrew
 
     sig { void }
     def audit_version_scheme
-      return unless @git
-      return unless formula.tap # skip formula not from core or any taps
-      return unless formula.tap!.git? # git log is required
-      return if formula.stable.blank?
-
       current_version_scheme = formula.version_scheme
 
       _, base_ref_version_info = committed_version_info
@@ -1184,9 +1179,6 @@ module Homebrew
 
     sig { void }
     def audit_unconfirmed_checksum_change
-      return unless @git
-      return unless formula.tap # skip formula not from core or any taps
-      return unless formula.tap!.git? # git log is required
       return unless (current_stable = formula.stable)
 
       current_version = current_stable.version
@@ -1210,9 +1202,7 @@ module Homebrew
 
     sig { void }
     def audit_text
-      bin_names = Set.new
-      bin_names << formula.name
-      bin_names += formula.aliases
+      bin_names = [formula.name, *formula.aliases].to_set
       [formula.bin, formula.sbin].each do |dir|
         next unless dir.exist?
 
@@ -1231,8 +1221,7 @@ module Homebrew
     sig { void }
     def audit_reverse_migration
       # Only enforce for new formula being re-added to core
-      return unless @strict
-      return unless @core_tap
+      return if !@strict || !@core_tap
       return unless formula.tap!.tap_migrations.key?(formula.name)
 
       problem <<~EOS
@@ -1258,6 +1247,24 @@ module Homebrew
     def audit_deprecate_disable
       error = SharedAudits.check_deprecate_disable_reason(formula)
       problem error if error
+    end
+
+    # CI does not build bottles for a disabled formula, so once its version or
+    # revision changes its bottle block names bottles that will never exist.
+    sig { void }
+    def audit_disabled_bottle
+      return if !formula.disabled? || formula.bottle_specification.checksums.empty?
+
+      tap = formula.tap
+      return if tap.nil? || !tap.git?
+
+      # Few formulae get this far, so unlike the other history checks this does not need `--git`.
+      base_pkg_version = FormulaVersions.new(formula).formula_at_revision(git_audit_base_ref(tap), &:pkg_version)
+      # Compared as strings because bottle filenames differ for versions that compare equal, e.g. 1.0 and 1.0.0.
+      return if base_pkg_version.nil? || base_pkg_version.to_s == formula.pkg_version.to_s
+
+      problem "Disabled formulae are not rebottled: remove the bottle block when changing the version or revision " \
+              "(from #{base_pkg_version} to #{formula.pkg_version}), e.g. `brew bump-revision --remove-bottle-block`."
     end
 
     sig { override.params(output: T.nilable(String)).void }
@@ -1307,6 +1314,7 @@ module Homebrew
       changed_paths.select { |path| expected_paths.include?(path.expand_path.to_s) }
     end
 
+    # Both are empty without `--git`, a tap with Git history or a stable version.
     sig { params(formula: Formula).returns([T::Hash[Symbol, T.untyped], T::Hash[Symbol, T.untyped]]) }
     def committed_version_info(formula: @formula)
       empty_result = [{}, {}]

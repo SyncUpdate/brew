@@ -88,12 +88,12 @@ class SystemCommand
   module Helpers
     sig { params(executable: T.any(String, Pathname), args: T.any(String, Pathname)).void }
     def safe_system(executable, *args)
-      SystemCommand.safe_system(executable, *args)
+      SystemCommand.safe_system(executable, args:)
     end
 
     sig { params(executable: T.any(String, Pathname), args: T.any(String, Pathname)).returns(T::Boolean) }
     def quiet_system(executable, *args)
-      SystemCommand.quiet_system(executable, *args)
+      SystemCommand.quiet_system(executable, args:)
     end
   end
 
@@ -181,24 +181,31 @@ class SystemCommand
 
   # Run a command attached to the caller's standard streams and terminal,
   # raising if it fails. Unlike {SystemCommand.run!} nothing is captured, so
-  # interactive programs such as editors and pagers work.
+  # interactive programs such as editors and pagers work. Pass a built-up
+  # array of arguments as `args:` rather than splatting it.
   sig {
     params(
-      executable: T.nilable(T.any(String, Pathname)),
-      args:       T.nilable(T.any(String, Pathname)),
-      env:        T::Hash[String, T.nilable(T.any(String, T::Boolean, PATH))],
-      out:        T.nilable(Symbol),
+      executable:      T.nilable(T.any(String, Pathname)),
+      positional_args: T.nilable(T.any(String, Pathname)),
+      args:            T::Array[T.nilable(T.any(String, Pathname))],
+      env:             T::Hash[String, T.nilable(T.any(String, T::Boolean, PATH))],
+      out:             T.nilable(Symbol),
     ).void
   }
-  def self.safe_system(executable, *args, env: {}, out: nil)
+  def self.safe_system(executable, *positional_args, args: [], env: {}, out: nil)
     raise ArgumentError, "Missing executable" if executable.nil?
-    raise ArgumentError, "Invalid nil command argument" if args.any?(&:nil?)
+    raise ArgumentError, "Invalid nil command argument" if positional_args.any?(&:nil?) || args.any?(&:nil?)
 
-    args = args.compact
+    args = positional_args.compact + args.compact
     if Context.current.verbose?
-      command = "#{executable} #{args * " "}".gsub(RUBY_PATH.to_s, "ruby")
-                                             .gsub($LOAD_PATH.join(File::PATH_SEPARATOR), "$LOAD_PATH")
-      ((out == :err) ? $stderr : $stdout).puts Formatter.redact_secrets(command, secrets)
+      command = "#{executable} #{args.join(" ")}".gsub(RUBY_PATH.to_s, "ruby")
+                                                 .gsub($LOAD_PATH.join(File::PATH_SEPARATOR), "$LOAD_PATH")
+      stream = if out == :err
+        $stderr
+      else
+        $stdout
+      end
+      stream.puts Formatter.redact_secrets(command, secrets)
     end
     return if attached_success?(executable, args, env:, out:)
 
@@ -206,22 +213,24 @@ class SystemCommand
   end
 
   # Run a command attached to the caller's standard input with its output
-  # discarded, returning whether it succeeded.
+  # discarded, returning whether it succeeded. Pass a built-up array of
+  # arguments as `args:` rather than splatting it.
   # Preserve the existing Formula DSL method name.
   # rubocop:disable Naming/PredicateMethod
   sig {
     params(
-      executable: T.nilable(T.any(String, Pathname)),
-      args:       T.nilable(T.any(String, Pathname)),
-      env:        T::Hash[String, T.nilable(T.any(String, T::Boolean, PATH))],
+      executable:      T.nilable(T.any(String, Pathname)),
+      positional_args: T.nilable(T.any(String, Pathname)),
+      args:            T::Array[T.nilable(T.any(String, Pathname))],
+      env:             T::Hash[String, T.nilable(T.any(String, T::Boolean, PATH))],
     ).returns(T::Boolean)
   }
-  def self.quiet_system(executable, *args, env: {})
-    return false if executable.nil? || args.any?(&:nil?)
+  def self.quiet_system(executable, *positional_args, args: [], env: {})
+    return false if executable.nil? || positional_args.any?(&:nil?) || args.any?(&:nil?)
 
     # Redirect output streams to `/dev/null` instead of closing as some programs
     # will fail to execute if they can't write to an open stream.
-    attached_success?(executable, args.compact, env:, out: File::NULL, err: File::NULL)
+    attached_success?(executable, positional_args.compact + args.compact, env:, out: File::NULL, err: File::NULL)
   end
   # rubocop:enable Naming/PredicateMethod
 
@@ -311,6 +320,8 @@ class SystemCommand
   def initialize(executable, args: [], sudo: false, sudo_as_root: false, env: {}, input: [], must_succeed: false,
                  print_stdout: false, print_stderr: true, debug: nil, verbose: nil, secrets: [], chdir: nil,
                  timeout: nil)
+    @expanded_args = T.let(nil, T.nilable(T::Array[String]))
+
     require "extend/ENV"
     @executable = executable
     @args = args
@@ -338,7 +349,8 @@ class SystemCommand
     @print_stderr = print_stderr
     @debug = debug
     @verbose = verbose
-    @secrets = T.let((Array(secrets) + ENV.sensitive_environment.values).uniq, T::Array[String])
+    resolved_secrets = (Array(secrets) + ENV.sensitive_environment.values).uniq
+    @secrets = T.let(resolved_secrets, T::Array[String])
     @chdir = chdir
     @timeout = timeout
     @sandbox = T.let(nil, T.nilable(Sandbox))
@@ -427,13 +439,13 @@ class SystemCommand
 
   sig { returns(T::Array[String]) }
   def expanded_args
-    @expanded_args ||= T.let(args.map do |arg|
+    @expanded_args ||= args.map do |arg|
       if arg.is_a?(Pathname)
         File.absolute_path(arg)
       else
         arg.to_s
       end
-    end, T.nilable(T::Array[String]))
+    end
   end
 
   class ProcessTerminatedInterrupt < StandardError; end
@@ -519,7 +531,7 @@ class SystemCommand
       env:        T::Hash[String, T.nilable(T.any(String, T::Boolean, PATH))],
       executable: String,
       args:       String,
-      options:    T.untyped,
+      options:    T.anything,
     ).returns([IO, IO, IO, Thread])
   }
   def exec3(env, executable, *args, **options)
@@ -633,6 +645,10 @@ class SystemCommand
       ).void
     }
     def initialize(command, output, status, secrets:)
+      @stdout = T.let(nil, T.nilable(String))
+      @stderr = T.let(nil, T.nilable(String))
+      @merged_output = T.let(nil, T.nilable(String))
+
       @command       = command
       @output        = output
       @status        = status
@@ -649,21 +665,21 @@ class SystemCommand
 
     sig { returns(String) }
     def stdout
-      @stdout ||= T.let(@output.select { |type,| type == :stdout }
-                               .map { |_, line| line }
-                               .join, T.nilable(String))
+      @stdout ||= @output.select { |type,| type == :stdout }
+                         .map { |_, line| line }
+                         .join
     end
 
     sig { returns(String) }
     def stderr
-      @stderr ||= T.let(@output.select { |type,| type == :stderr }
-                               .map { |_, line| line }
-                               .join, T.nilable(String))
+      @stderr ||= @output.select { |type,| type == :stderr }
+                         .map { |_, line| line }
+                         .join
     end
 
     sig { returns(String) }
     def merged_output
-      @merged_output ||= T.let(@output.map { |_, line| line }.join, T.nilable(String))
+      @merged_output ||= @output.map { |_, line| line }.join
     end
 
     sig { returns(T::Boolean) }
@@ -682,21 +698,21 @@ class SystemCommand
     sig { returns(T.untyped) }
     def plist
       require "plist"
-      @plist ||= T.let(begin
-        output = stdout
+      return @plist if @plist
 
-        output = output.sub(/\A(.*?)(\s*<\?\s*xml)/m) do
-          warn_plist_garbage(Regexp.last_match(1))
-          Regexp.last_match(2)
-        end
+      output = stdout
 
-        output = output.sub(%r{(<\s*/\s*plist\s*>\s*)(.*?)\Z}m) do
-          warn_plist_garbage(Regexp.last_match(2))
-          Regexp.last_match(1)
-        end
+      output = output.sub(/\A(.*?)(\s*<\?\s*xml)/m) do
+        warn_plist_garbage(Regexp.last_match(1))
+        Regexp.last_match(2)
+      end
 
-        Plist.parse_xml(output, marshal: false)
-      end, T.untyped)
+      output = output.sub(%r{(<\s*/\s*plist\s*>\s*)(.*?)\Z}m) do
+        warn_plist_garbage(Regexp.last_match(2))
+        Regexp.last_match(1)
+      end
+      resolved_plist = Plist.parse_xml(output, marshal: false)
+      @plist = T.let(resolved_plist, T.untyped)
     end
 
     sig { params(garbage: T.nilable(String)).void }

@@ -26,7 +26,8 @@ module Utils
     }
     def self.completion_shell_parameter(format, shell, executable, env)
       # Go's cobra and Rust's clap accept "powershell".
-      shell_parameter = (shell == :pwsh) ? "powershell" : shell.to_s
+      powershell = shell == :pwsh
+      shell_parameter = powershell ? "powershell" : shell.to_s
 
       case format
       when nil
@@ -63,10 +64,10 @@ module Utils
       ).returns(String)
     }
     def self.generate_completion_output(commands, shell_parameter, env, print_stderr: true)
-      args = T.let(commands + Array(shell_parameter), T::Array[T.any(Pathname, String)])
+      args = commands + Array(shell_parameter)
       options = T.let({}, T::Hash[Symbol, Symbol])
       options[:err] = :err if print_stderr || ENV["HOMEBREW_STDERR"]
-      Utils.safe_popen_read(env, *args, **options)
+      Utils.safe_popen_read(env, args:, **options)
     end
   end
 end

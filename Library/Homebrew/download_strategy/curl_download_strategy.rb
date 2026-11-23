@@ -1,6 +1,7 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "timeout"
 require "utils/timer"
 
 # Strategy for downloading files using `curl`.
@@ -15,7 +16,8 @@ class CurlDownloadStrategy < AbstractFileDownloadStrategy
   sig { returns(T::Array[String]) }
   attr_reader :mirrors
 
-  sig { params(url: String, name: String, version: T.nilable(T.any(String, Version)), meta: T.untyped).void }
+  # Formula `url` specs reach download strategies as arbitrary options.
+  sig { params(url: String, name: String, version: T.nilable(T.any(String, Version)), meta: T.untyped).void } # rubocop:disable Homebrew/NoUntypedKeywordRest
   def initialize(url, name, version, **meta)
     @try_partial = T.let(true, T::Boolean)
     @expand_deferred_environment = T.let(false, T::Boolean)
@@ -326,7 +328,11 @@ class CurlDownloadStrategy < AbstractFileDownloadStrategy
         next arg unless arg.include?(EnvSensitive::DEFERRED_PLACEHOLDER_PREFIX)
 
         undeclared = arg.gsub(placeholder_pattern) do |placeholder|
-          (declared.any? { |value| value.include?(placeholder) }) ? "" : placeholder
+          if declared.any? { |value| value.include?(placeholder) }
+            ""
+          else
+            placeholder
+          end
         end
         next ENV.expand_deferred_environment(arg) if undeclared.exclude?(
           EnvSensitive::DEFERRED_PLACEHOLDER_PREFIX,

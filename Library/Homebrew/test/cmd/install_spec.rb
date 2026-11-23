@@ -30,6 +30,7 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
 
     it "warns non-developers for each source-build flag" do
       allow(DevelopmentTools).to receive(:installed?).and_return(true)
+      allow(Homebrew::Diagnostic).to receive(:support_tiers).and_return([])
       flags = %w[-s --HEAD --build-bottle]
 
       expect do
@@ -37,22 +38,23 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
           described_class.new([flag, "testball"]).check_build_flags([test_formula])
         end
       end.to output("Warning: building from source is not supported!\n" * flags.length).to_stderr
-         .and output("You're on your own. Failures are expected so don't create any issues, please!\n" * flags.length)
-         .to_stdout
+         .and change(Homebrew::Diagnostic, :support_tiers).from([]).to([3, 3, 3])
     end
 
-    it "does not warn developers requesting a source build" do
+    it "does not warn developers requesting a source or bottle build" do
       allow(DevelopmentTools).to receive(:installed?).and_return(true)
       allow(Homebrew::EnvConfig).to receive(:developer?).and_return(true)
-      command = described_class.new(["-s", "testball"])
-
-      expect { command.check_build_flags([test_formula]) }.to output("").to_stderr.and output("").to_stdout
+      expect do
+        %w[-s --build-bottle].each do |flag|
+          described_class.new([flag, "testball"]).check_build_flags([test_formula])
+        end
+      end.to output("").to_stderr.and output("").to_stdout
     end
 
-    it "does not warn when no source-build flags are supplied" do
+    it "does not warn for a default installation" do
       allow(DevelopmentTools).to receive(:installed?).and_return(true)
-      command = described_class.new(["testball"])
 
+      command = described_class.new(["testball"])
       expect { command.check_build_flags([test_formula]) }.to output("").to_stderr.and output("").to_stdout
     end
 
@@ -447,7 +449,8 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
     expect(Homebrew::Trust).to receive(:trust_fully_qualified_items!)
       .with(["user/repo/foo"], type: nil)
       .ordered
-    expect(cmd.args.named).to receive(:to_formulae_and_casks).with(method: :bottle, warn: false).ordered
+    expect(cmd.args.named).to receive(:to_formulae_and_casks).with(method: :bottle, warn: false)
+                                                             .ordered
                                                              .and_raise(TapFormulaUnavailableError.new(tap, "foo"))
 
     expect { cmd.run }.to output(/If you trust this tap/).to_stderr
@@ -893,7 +896,8 @@ RSpec.describe Homebrew::Cmd::InstallCmd do
 
     test_each([false, true].product([false, true])) do |on_request, outdated|
       it "preserves a cask's on_request: #{on_request} when outdated: #{outdated}" do
-        cask = Cask::CaskLoader.from_path(cask_path("#{"outdated/" if outdated}local-caffeine"))
+        directory = outdated ? "outdated/" : ""
+        cask = Cask::CaskLoader.from_path(cask_path("#{directory}local-caffeine"))
         InstallHelper.stub_cask_installation(cask)
         tab = cask.tab
         tab.installed_on_request = on_request

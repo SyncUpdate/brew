@@ -109,12 +109,18 @@ module Homebrew
           require "formula"
           require "utils/path"
 
-          args = ["tool", "install", upgrade ? upgrade_requirement(name, source:) : source.presence || name]
+          requirement = if upgrade
+            upgrade_requirement(name, source:)
+          else
+            source.presence || name
+          end
+          args = ["tool", "install", requirement]
           if upgrade
             args.push("--upgrade", "--python", tool_python(name))
           else
             # Find the newest installed Homebrew Python from opt/bin filenames without loading formulae.
-            python = Formula.installed_formula_names.grep(/\Apython(?:@.+)?\z/)
+            python = Formula.installed_formula_names
+                            .grep(/\Apython(?:@.+)?\z/)
                             .flat_map { |formula_name| Utils::Path.formula_opt_bin(formula_name).glob("python[0-9]*") }
                             .select { |path| path.file? && path.basename.to_s.match?(/\Apython\d+\.\d+\z/) }
                             .max_by { |path| Version.new(path.basename.to_s.delete_prefix("python")) }
@@ -156,7 +162,8 @@ module Homebrew
           return "#{name} @ #{source}" if source.present?
 
           packages
-          "#{name}#{@requirements&.[](normalize_name(name))}"
+          requirement = @requirements&.[](normalize_name(name))
+          "#{name}#{requirement}"
         end
         private :upgrade_requirement
 
@@ -324,7 +331,8 @@ module Homebrew
         def package_source(package)
           return package[:source] if package.key?(:source)
 
-          T.cast(package[:options].fetch(:source, nil), T.nilable(String))
+          source = package[:options].fetch(:source, nil)
+          T.cast(source, T.nilable(String))
         end
         private :package_source
 

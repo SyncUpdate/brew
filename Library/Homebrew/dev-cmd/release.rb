@@ -57,8 +57,8 @@ module Homebrew
           odie "Unable to check for release blockers: #{e.message}!"
         end
         if release_blockers.present?
-          odie "Open issues or pull requests are blocking this release:\n" \
-               "#{release_urls(release_blockers).uniq.join("\n")}"
+          blocker_urls = release_urls(release_blockers).uniq.join("\n")
+          odie "Open issues or pull requests are blocking this release:\n#{blocker_urls}"
         end
 
         begin
@@ -84,11 +84,11 @@ module Homebrew
         end
 
         new_version = if args.major?
-          Version.new "#{latest_version.major.to_i + 1}.0.0"
+          Version.new "#{latest_version.major.to_i.succ}.0.0"
         elsif args.minor?
-          Version.new "#{latest_version.major}.#{latest_version.minor.to_i + 1}.0"
+          Version.new "#{latest_version.major}.#{latest_version.minor.to_i.succ}.0"
         else
-          Version.new "#{latest_version.major}.#{latest_version.minor}.#{latest_version.patch.to_i + 1}"
+          Version.new "#{latest_version.major}.#{latest_version.minor}.#{latest_version.patch.to_i.succ}"
         end.to_s
 
         if args.major? || args.minor?
@@ -237,10 +237,10 @@ module Homebrew
       sig { params(name: String).returns(T::Array[T::Hash[String, T.untyped]]) }
       def matching_releases(name)
         releases_url = "#{GitHub::API_URL}/repos/Homebrew/brew/releases?per_page=#{GitHub::MAX_PER_PAGE}"
-        releases = T.cast(GitHub::API.open_rest(releases_url,
-                                                request_method: :GET,
-                                                scopes:         GitHub::CREATE_ISSUE_FORK_OR_PR_SCOPES),
-                          T::Array[T::Hash[String, T.untyped]])
+        response = GitHub::API.open_rest(releases_url,
+                                         request_method: :GET,
+                                         scopes:         GitHub::CREATE_ISSUE_FORK_OR_PR_SCOPES)
+        releases = T.cast(response, T::Array[T::Hash[String, T.untyped]])
         releases.select do |release|
           release_name = release["name"].to_s
           release_name = release.fetch("tag_name", "").to_s if release_name.blank?
@@ -271,7 +271,8 @@ module Homebrew
         else
           ["Published", "Run `brew update` instead"]
         end
-        "#{kind} releases already exist for #{version}. #{action}:\n#{release_urls(releases).join("\n")}"
+        urls = release_urls(releases).join("\n")
+        "#{kind} releases already exist for #{version}. #{action}:\n#{urls}"
       end
 
       sig { params(releases: T::Array[T::Hash[String, T.untyped]]).returns(T::Array[String]) }

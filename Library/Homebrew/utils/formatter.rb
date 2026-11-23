@@ -95,10 +95,11 @@ module Formatter
   def self.format_help_text(string, width: 172)
     desc = OPTION_DESC_WIDTH
     indent = width - desc
+    indentation = " " * indent
     string.gsub(/(?<=\S) *\n(?=\S)/, " ")
           .gsub(/([`>)\]]:) /, "\\1\n    ")
-          .gsub(/^( +-.+  +(?=\S.{#{desc}}))(.{1,#{desc}})(?: +|$)(?!-)\n?/, "\\1\\2\n#{" " * indent}")
-          .gsub(/^( {#{indent}}(?=\S.{#{desc}}))(.{1,#{desc}})(?: +|$)(?!-)\n?/, "\\1\\2\n#{" " * indent}")
+          .gsub(/^( +-.+  +(?=\S.{#{desc}}))(.{1,#{desc}})(?: +|$)(?!-)\n?/, "\\1\\2\n#{indentation}")
+          .gsub(/^( {#{indent}}(?=\S.{#{desc}}))(.{1,#{desc}})(?: +|$)(?!-)\n?/, "\\1\\2\n#{indentation}")
           .gsub(/(.{1,#{width}})(?: +|$)(?!-)\n?/, "\\1\n")
   end
 
@@ -157,7 +158,8 @@ module Formatter
       old_version = change.old_version
       next truncate(change.new_version, max: old_width) unless old_version
 
-      "#{truncate(old_version, max: old_width).ljust(old_width)} -> #{truncate(change.new_version, max: new_width)}"
+      previous_version = truncate(old_version, max: old_width).ljust(old_width)
+      "#{previous_version} -> #{truncate(change.new_version, max: new_width)}"
     end
     versions_width = versions.map(&:length).max || 0
 
@@ -197,7 +199,8 @@ module Formatter
     output = +""
 
     rows.times do |row_index|
-      item_indices_for_row = T.cast(row_index.step(objects.size - 1, rows).to_a, T::Array[Integer])
+      item_indices_for_row = row_index.step(objects.size - 1, rows).to_a
+      item_indices_for_row = T.cast(item_indices_for_row, T::Array[Integer])
 
       first_n = item_indices_for_row.first(item_indices_for_row.size - 1).map do |index|
         objects.fetch(index) + "".rjust(col_width - object_lengths.fetch(index))

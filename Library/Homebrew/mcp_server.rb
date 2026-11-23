@@ -234,7 +234,8 @@ module Homebrew
 
     sig { params(stdin: T.any(IO, StringIO), stdout: T.any(IO, StringIO), stderr: T.any(IO, StringIO)).void }
     def initialize(stdin: $stdin, stdout: $stdout, stderr: $stderr)
-      @debug_logging = T.let(ARGV.include?("--debug") || ARGV.include?("-d"), T::Boolean)
+      debug_logging = ARGV.include?("--debug") || ARGV.include?("-d")
+      @debug_logging = T.let(debug_logging, T::Boolean)
       @ping_switch = T.let(ARGV.include?("--ping"), T::Boolean)
       @stdin = stdin
       @stdout = stdout
@@ -463,7 +464,11 @@ module Homebrew
       when :search, :info, :install, :upgrade, :uninstall, :list
         package_type = arguments["package_type"]
         flags << "--#{package_type}" if package_type
-        name_argument = (tool_name == :search) ? "text_or_regex" : "formula_or_cask"
+        name_argument = if tool_name == :search
+          "text_or_regex"
+        else
+          "formula_or_cask"
+        end
         names = [arguments[name_argument]]
       when :help
         # `brew help` takes command names such as `--prefix` and does not

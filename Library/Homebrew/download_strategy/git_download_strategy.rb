@@ -11,7 +11,8 @@ class GitDownloadStrategy < VCSDownloadStrategy
   NO_RECURSE_SUBMODULES = "--no-recurse-submodules"
   private_constant :NO_RECURSE_SUBMODULES
 
-  sig { params(url: String, name: String, version: T.nilable(T.any(String, Version)), meta: T.untyped).void }
+  # Formula `url` specs reach download strategies as arbitrary options.
+  sig { params(url: String, name: String, version: T.nilable(T.any(String, Version)), meta: T.untyped).void } # rubocop:disable Homebrew/NoUntypedKeywordRest
   def initialize(url, name, version, **meta)
     # Needs to be before the call to `super`, as the VCSDownloadStrategy's
     # constructor calls `cache_tag` and sets the cache path.
@@ -171,7 +172,7 @@ class GitDownloadStrategy < VCSDownloadStrategy
   sig { params(args: T::Array[String], timeout: T.nilable(Time)).returns(SystemCommand::Result) }
   def git_download_command!(args:, timeout: nil)
     download_env = env(credential_lookup: true)
-    system_command!("git", args:, chdir: (args.first == "clone") ? nil : cached_location,
+    system_command!("git", args:, chdir: (cached_location if args.first != "clone"),
                           timeout: Utils::Timer.remaining(timeout), env: download_env,
                           secrets: download_env.values_at("GH_TOKEN").compact, **command_output_options)
   end

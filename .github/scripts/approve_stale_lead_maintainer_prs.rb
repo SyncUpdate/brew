@@ -99,7 +99,8 @@ class StaleLeadMaintainerPrApproval
     @recent_approval_results = T.let({}, T::Hash[String, T::Array[RecentApproval]])
     @reviews = T.let({}, T::Hash[Integer, GitHubPayloads])
     @printed_pull_request_summary = T.let(false, T::Boolean)
-    @weekday_approval_window = T.let((1..5).cover?(Time.now.utc.wday), T::Boolean)
+    weekday_approval_window = (1..5).cover?(Time.now.utc.wday)
+    @weekday_approval_window = T.let(weekday_approval_window, T::Boolean)
   end
 
   sig { void }
@@ -180,7 +181,8 @@ class StaleLeadMaintainerPrApproval
   def evaluate(pull_request, exhaustive:)
     number = T.cast(pull_request.fetch("number"), Integer)
     title = T.cast(pull_request.fetch("title"), String)
-    author = T.cast(T.cast(pull_request.fetch("user"), GitHubPayload).fetch("login"), String)
+    author = T.cast(pull_request.fetch("user"), GitHubPayload).fetch("login")
+    author = T.cast(author, String)
     created_at = Time.parse(T.cast(pull_request.fetch("created_at"), String))
     draft = T.cast(pull_request.fetch("draft"), T::Boolean)
     head = T.cast(pull_request.fetch("head"), GitHubPayload)
@@ -216,10 +218,8 @@ class StaleLeadMaintainerPrApproval
       return finish(data, ["@#{data.author} is not listed as a lead maintainer in README.md."])
     end
 
-    approved_pr = T.let(
-      @recent_approval_results[data.author]&.find { |approval| approval.number != data.number },
-      T.nilable(RecentApproval),
-    )
+    approved_pr = T.let(nil, T.nilable(RecentApproval))
+    approved_pr ||= @recent_approval_results[data.author]&.find { |approval| approval.number != data.number }
     unless approved_pr
       @recent_approval_results[data.author] ||= []
       @recent_approval_issues[data.author] ||= []
@@ -263,15 +263,9 @@ class StaleLeadMaintainerPrApproval
         page = @recent_approval_search_pages.fetch(data.author, 0) + 1
         cutoff_date = (Time.now.utc - (7 * 24 * 60 * 60)).to_date.iso8601
         query = "repo:#{@repository} is:pr reviewed-by:#{data.author} review:approved updated:>=#{cutoff_date}"
-        issues = T.cast(
-          T.cast(
-            rest(
-              "#{API_URL}/search/issues?#{URI.encode_www_form(q: query, per_page: MAX_PER_PAGE, page:)}",
-            ),
-            GitHubPayload,
-          ).fetch("items"),
-          GitHubPayloads,
-        )
+        params = URI.encode_www_form(q: query, per_page: MAX_PER_PAGE, page:)
+        issues = T.cast(rest("#{API_URL}/search/issues?#{params}"), GitHubPayload).fetch("items")
+        issues = T.cast(issues, GitHubPayloads)
         @recent_approval_search_pages[data.author] = page
         @recent_approval_issues.fetch(data.author).concat(issues)
         @recent_approval_search_complete[data.author] = true if issues.length < MAX_PER_PAGE
@@ -301,8 +295,9 @@ class StaleLeadMaintainerPrApproval
       next if submitted_at < data.created_at
       next if T.cast(review_user.fetch("type"), String) == "Bot"
 
-      "@#{T.cast(review_user.fetch("login"), String)} #{T.cast(review.fetch("state"), String).downcase} " \
-        "at #{submitted_at.utc.iso8601}"
+      login = T.cast(review_user.fetch("login"), String)
+      state = T.cast(review.fetch("state"), String).downcase
+      "@#{login} #{state} at #{submitted_at.utc.iso8601}"
     end
     data.no_human_review_since_creation = data.human_reviews_since_creation.empty?
     data.copilot_reviewed = reviews.any? do |review|
@@ -354,17 +349,17 @@ class StaleLeadMaintainerPrApproval
 
       name = T.cast(check_run.fetch("name"), String)
       url = T.cast(check_run.fetch("html_url", nil), T.nilable(String))
-      "#{name}: #{status}#{"/#{conclusion}" unless conclusion.nil?}" \
-        "#{" (#{url})" unless url.nil?}"
+      result = [status, conclusion].compact.join("/")
+      url ? "#{name}: #{result} (#{url})" : "#{name}: #{result}"
     end
     data.failing_ci_jobs << "No check runs found." if check_runs.empty?
     T.cast(commit_status.fetch("statuses"), GitHubPayloads).each do |status|
-      next if T.cast(status.fetch("state"), String) == "success"
+      state = T.cast(status.fetch("state"), String)
+      next if state == "success"
 
       context = T.cast(status.fetch("context"), String)
       url = T.cast(status.fetch("target_url", nil), T.nilable(String))
-      data.failing_ci_jobs << "#{context}: #{T.cast(status.fetch("state"), String)}" \
-                              "#{" (#{url})" unless url.nil?}"
+      data.failing_ci_jobs << (url ? "#{context}: #{state} (#{url})" : "#{context}: #{state}")
     end
     data.ci_passing = data.failing_ci_jobs.empty?
 
@@ -398,7 +393,8 @@ class StaleLeadMaintainerPrApproval
     puts "- Result: #{result}"
     puts "- Author: @#{data.author}"
     puts "- Not from a fork: #{status_label(data.not_from_fork)}"
-    puts "- Not a draft: #{status_label(!data.draft)}"
+    ready_for_review = !data.draft
+    puts "- Not a draft: #{status_label(ready_for_review)}"
     puts "- Weekday approval window: #{status_label(data.weekday_approval_window)}"
     puts "- Created at: #{data.created_at.utc.iso8601}"
     puts "- Created at least #{HUMAN_REVIEW_WINDOW_HOURS} hours ago: #{status_label(data.old_enough_for_approval)}"
@@ -418,14 +414,16 @@ class StaleLeadMaintainerPrApproval
     else
       puts "- Human reviews since creation: not checked"
     end
-    puts "- Copilot reviewed: #{status_label(data.reviews_checked ? data.copilot_reviewed : nil)}"
+    copilot_reviewed = data.copilot_reviewed if data.reviews_checked
+    puts "- Copilot reviewed: #{status_label(copilot_reviewed)}"
     sensitive_files_unchanged = data.sensitive_files_unchanged if data.sensitive_files_checked
     puts "- .github/ and sensitive files unchanged: #{status_label(sensitive_files_unchanged)}"
     if data.sensitive_files_checked && !data.changed_sensitive_files.empty?
       puts "- Changed .github/ or sensitive files:"
       data.changed_sensitive_files.each { |file| puts "  - #{file}" }
     end
-    puts "- CI passing: #{status_label(data.ci_checked ? data.ci_passing : nil)}"
+    ci_passing = data.ci_passing if data.ci_checked
+    puts "- CI passing: #{status_label(ci_passing)}"
     if data.ci_checked
       puts "- Failing CI jobs:"
       if data.failing_ci_jobs.empty?
@@ -493,7 +491,8 @@ class StaleLeadMaintainerPrApproval
         summary.puts "- Pull request: [##{data.number}](#{data.pr_url})"
         summary.puts "- Author: [@#{data.author}](#{data.author_url})"
         summary.puts "- Not from a fork: #{data.not_from_fork}"
-        summary.puts "- Not a draft: #{!data.draft}"
+        ready_for_review = !data.draft
+        summary.puts "- Not a draft: #{ready_for_review}"
         summary.puts "- Weekday approval window: #{data.weekday_approval_window}"
         summary.puts "- Created at: #{data.created_at.utc.iso8601}"
         summary.puts "- Created at least #{HUMAN_REVIEW_WINDOW_HOURS} hours ago: " \
@@ -535,10 +534,8 @@ class StaleLeadMaintainerPrApproval
 
   sig { params(url: T.any(String, URI::Generic), additional_query_params: String).returns(GitHubPayloads) }
   def paginated_rest(url, additional_query_params = "")
-    pages = T.cast(
-      JSON.parse(gh_api("#{url}?per_page=#{MAX_PER_PAGE}&#{additional_query_params}", "--paginate", "--slurp")),
-      T::Array[GitHubPage],
-    )
+    pages = JSON.parse(gh_api("#{url}?per_page=#{MAX_PER_PAGE}&#{additional_query_params}", "--paginate", "--slurp"))
+    pages = T.cast(pages, T::Array[GitHubPage])
     pages.flat_map do |page|
       page.is_a?(Array) ? page : [page]
     end
@@ -552,7 +549,8 @@ class StaleLeadMaintainerPrApproval
     ).returns(GitHubResult)
   }
   def rest(url, data: {}, request_method: :GET)
-    T.cast(JSON.parse(gh_api(url.to_s, "--method", request_method.to_s, data:)), GitHubResult)
+    response = gh_api(url.to_s, "--method", request_method.to_s, data:)
+    T.cast(JSON.parse(response), GitHubResult)
   end
 
   sig { params(args: String, data: RequestData).returns(String) }

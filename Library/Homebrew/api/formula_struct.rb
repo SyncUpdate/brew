@@ -100,6 +100,7 @@ module Homebrew
       const :head_url_args, [String, T::Hash[Symbol, T.anything]], default: ["", {}]
       const :head_uses_from_macos, T::Array[UsesFromMacOSArgs], default: []
       const :homepage, String
+      const :incompatible, T::Boolean, default: false
       const :keg_only_args, T::Array[T.any(String, Symbol)], default: []
       const :license, SPDX::LicenseExpression
       const :link_overwrite_paths, T::Array[String], default: []
@@ -199,6 +200,9 @@ module Homebrew
         PREDICATES.each do |name|
           hash["#{name}_present"] = hash["#{name}_args"].present?
         end
+
+        hash["service_run_present"] ||= hash["service_run_kwargs"].present?
+        hash["service_present"] ||= hash["service_run_present"] || hash["service_name_present"]
 
         if (bottle_checksum = hash["bottle_checksum"])
           tag = hash.fetch("bottle_tag", bottle_tag.to_sym)

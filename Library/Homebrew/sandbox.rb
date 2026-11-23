@@ -16,6 +16,8 @@ class Sandbox
   include Utils::Output::Mixin
   extend Utils::Output::Mixin
 
+  @tty_state = T.let(nil, T.nilable(String))
+
   # Privileged groups that are expected to be able to use a working sandbox.
   PRIVILEGED_GROUPS = %w[admin staff root wheel].freeze
 
@@ -372,7 +374,7 @@ class Sandbox
   # capture it once per process. `nil` when it cannot be captured.
   sig { returns(T.nilable(String)) }
   def self.tty_state
-    @tty_state ||= T.let(Utils.popen_read("stty", "-g", in: :in).chomp, T.nilable(String))
+    @tty_state ||= Utils.popen_read("stty", "-g", in: :in).chomp
     @tty_state.presence
   end
 
@@ -699,8 +701,11 @@ class Sandbox
     require "extend/ENV"
 
     Dir.mktmpdir("homebrew-sandbox", temporary_directory) do |tmpdir|
-      env = ENV.sensitive_environment.transform_values { nil }.merge("HOME" => tmpdir)
-               .merge(env).merge(sandbox_environment(tmpdir))
+      env = ENV.sensitive_environment
+               .transform_values { nil }
+               .merge("HOME" => tmpdir)
+               .merge(env)
+               .merge(sandbox_environment(tmpdir))
       sandbox_executable, *sandbox_args = sandbox_command([executable, *args.map(&:to_s)], tmpdir)
       raise "Missing sandbox command" unless sandbox_executable
 
@@ -927,7 +932,11 @@ class Sandbox
   def expand_realpath(path)
     raise unless path.absolute?
 
-    path.exist? ? path.realpath : expand_realpath(path.parent)/path.basename
+    if path.exist?
+      path.realpath
+    else
+      expand_realpath(path.parent)/path.basename
+    end
   end
 end
 

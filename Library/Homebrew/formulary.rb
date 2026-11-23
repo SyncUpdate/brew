@@ -181,8 +181,8 @@ module Formulary
         Formula #{name} attempted to print the following while being loaded:
         #{printed_to_stdout}
       WARNING
-      if (tap = Tap.from_path(path)) && (issues_url = tap.issues_url)
-        warning += Utils::Output.issue_reporting_message(issues_url, homebrew: tap.official?)
+      if (message = Utils::Output.issue_reporting_message(Tap.from_path(path)))
+        warning += message
       end
       opoo warning
     end
@@ -394,7 +394,8 @@ module Formulary
 
     sig { params(bottle_name: String).void }
     def initialize(bottle_name)
-      @bottle_path = T.let(Pathname(bottle_name).realpath, Pathname)
+      bottle_path = Pathname(bottle_name).realpath
+      @bottle_path = T.let(bottle_path, Pathname)
       name, full_name = Utils::Bottles.resolve_formula_names(@bottle_path)
       tap, = Tap.with_formula_name(full_name)
 
@@ -406,7 +407,8 @@ module Formulary
 
       # Mimic a Cellar path to simulate relaxed deprecation behaviour shared with postinstalls.
       version = Utils::Bottles.resolve_version(@bottle_path)
-      @cellar_formula_path = T.let(HOMEBREW_CELLAR/name/version/".brew"/"#{name}.rb", Pathname)
+      cellar_formula_path = HOMEBREW_CELLAR/name/version/".brew"/"#{name}.rb"
+      @cellar_formula_path = T.let(cellar_formula_path, Pathname)
 
       super name, fallback_path, tap:
     end
@@ -564,7 +566,7 @@ module Formulary
     def load_file(flags:, ignore_errors:)
       super
     rescue MethodDeprecatedError => e
-      e.issues_url = tap.issues_url || tap.to_s
+      e.source_tap = tap
       raise
     end
   end
@@ -591,8 +593,8 @@ module Formulary
 
         if warn && [:rename, :migration].include?(type) &&
            !(type == :migration && migrated_tap.core_cask_tap?)
-          opoo "Formula #{name} was renamed to " \
-               "#{migrated_tap.core_tap? ? migrated_name : "#{migrated_tap}/#{migrated_name}"}."
+          new_full_name = migrated_tap.core_tap? ? migrated_name : "#{migrated_tap}/#{migrated_name}"
+          opoo "Formula #{name} was renamed to #{new_full_name}."
         end
 
         if (core_loader = loader_from_name_tap_type(name_tap_type))&.path&.exist?

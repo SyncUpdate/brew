@@ -132,6 +132,24 @@ RSpec.describe Formulary do
       expect(formula_class.stable.url).to eq("https://brew.sh/ignorable-error-1.0.tar.gz")
     end
 
+    it "continues evaluation after shared DSL validation errors with ignore_errors" do
+      formula_class = described_class.load_formula(
+        "invalid-autobump-reason",
+        mktmpdir/"invalid-autobump-reason.rb",
+        <<~RUBY,
+          class InvalidAutobumpReason < Formula
+            no_autobump! because: :removed_reason
+            url "https://brew.sh/invalid-autobump-reason-1.0.tar.gz"
+          end
+        RUBY
+        "InvalidAutobumpReasonNamespace",
+        flags:         [],
+        ignore_errors: true,
+      )
+
+      expect(formula_class.stable.url).to eq("https://brew.sh/invalid-autobump-reason-1.0.tar.gz")
+    end
+
     it "raises FormulaUnreadableError for errors it cannot resume despite ignore_errors" do
       expect do
         described_class.load_formula(
@@ -191,7 +209,12 @@ RSpec.describe Formulary do
       end
     end
 
-    it "points to the tap's issues when a formula prints while being loaded" do
+    it "points to the tap's issues when a formula prints on a Tier 1 installation" do
+      require "diagnostic"
+      allow(Homebrew::Diagnostic).to receive(:support_tier).and_return(1)
+      allow(OS).to receive(:third_party_homebrew).and_return(nil)
+      stub_const("OS::ISSUES_URL", "https://docs.brew.sh/Troubleshooting")
+
       expect do
         described_class.load_formula(
           "printing-formula",
@@ -284,7 +307,11 @@ RSpec.describe Formulary do
                                                       [:public, :internal])) do |(tag_symbol, spec, format)|
       it "preserves #{spec} declarations through the #{format} API on #{tag_symbol}", :aggregate_failures do
         payload = json
-        tag = (tag_symbol == :arm64_sequoia) ? mac_tag : linux_tag
+        tag = if tag_symbol == :arm64_sequoia
+          mac_tag
+        else
+          linux_tag
+        end
         Homebrew::SimulateSystem.with_tag(tag) do
           source = described_class.from_path(formula_path, spec)
           restored = if format == :public
@@ -305,6 +332,23 @@ RSpec.describe Formulary do
           expect(restored.to_hash.slice(*source.dependencies_hash.keys)).to eq(source.dependencies_hash)
         end
       end
+    end
+
+    it "reads incompatible from the API instead of the requirements" do
+      struct = Homebrew::API::FormulaStruct.from_hash({
+        "desc"                 => "API formula",
+        "homepage"             => "https://example.com",
+        "license"              => "MIT",
+        "ruby_source_checksum" => "checksum",
+        "stable_present"       => true,
+        "stable_url_args"      => ["https://example.com/foo-1.0.tar.gz", {}],
+        "stable_version"       => "1.0",
+        "incompatible"         => true,
+      })
+      klass = described_class.load_formula_from_struct!(formula_name, struct, api_source: struct.serialize,
+                                                        tap_git_head: "", flags: [], internal_api: true)
+
+      expect(klass.new(formula_name, formula_path, :stable).incompatible?).to be(true)
     end
 
     it "writes an empty overlay when a variation removes the last no_linkage tag" do

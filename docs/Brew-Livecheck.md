@@ -22,7 +22,9 @@ When livecheck isn't given instructions for how to check for upstream versions, 
 
 It's sometimes necessary to override this default behaviour to create a working check. If a source doesn't provide the newest version, we need to check a different one. If livecheck doesn't correctly match version text, we need to provide an appropriate regex or `strategy` block.
 
-This can be accomplished by adding a `livecheck` block to the formula/cask/resource. For more information on the available methods, please refer to the [`Livecheck` class](/rubydoc/Livecheck.html) documentation.
+This can be accomplished by adding a `livecheck` block to the formula/cask/resource.
+Calling `livecheck` with or without a block returns the configured `Livecheck` object.
+For more information on the available methods, please refer to the [`Livecheck` class](/rubydoc/Livecheck.html) documentation.
 
 ## Creating a check
 
@@ -362,7 +364,8 @@ The default pattern for the `Sparkle` strategy is to generate `"#{item.short_ver
 livecheck do
   url "https://www.example.com/example.xml"
   strategy :sparkle do |item|
-    "#{item.short_version},#{item.version}:#{item.url[%r{/(\d+)/[^/]+\.zip}i, 1]}"
+    download_id = item.url[%r{/(\d+)/[^/]+\.zip}i, 1]
+    "#{item.short_version},#{item.version}:#{download_id}"
   end
 end
 ```

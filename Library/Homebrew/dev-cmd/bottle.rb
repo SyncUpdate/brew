@@ -340,7 +340,7 @@ module Homebrew
               end
               skip_relocation = relocatable && !keg.require_relocation?
             end
-            tab.padded_prefix = (padded && !relocatable) ? true : nil
+            tab.padded_prefix = (true if padded && !relocatable)
             tab.binary_relocation_files = args.skip_relocation? ? nil : binary_relocation_files.sort
 
             if args.only_json_tab?
@@ -364,8 +364,8 @@ module Homebrew
               tar_mtime = tab_source_modified_time.strftime("%Y-%m-%d %H:%M:%S")
               tar, tar_args = setup_tar_and_args!(tar_mtime, default_tar: formula.name == "gnu-tar")
               SystemCommand.safe_system tar, "--create", "--numeric-owner",
-                                        *tar_args,
-                                        "--file", tar_path, "#{formula.name}/#{formula.pkg_version}"
+                                        args: [*tar_args, "--file", tar_path,
+                                               "#{formula.name}/#{formula.pkg_version}"]
               sudo_purge
               # Set filename as it affects the tarball checksum.
               relocatable_tar_path = "#{formula}-bottle.tar"
@@ -672,7 +672,7 @@ module Homebrew
 
         prefix = HOMEBREW_PREFIX.to_s
         cellar = HOMEBREW_CELLAR.to_s
-        padded = T.let(prefix == bottle_tag.padded_prefix, T::Boolean)
+        padded = prefix == bottle_tag.padded_prefix
 
         if local_bottle_json && local_bottle_path
           bottle_path = local_bottle_path
@@ -953,9 +953,9 @@ module Homebrew
           pkg_version = bottle_hash["formula"]["pkg_version"]
 
           path.parent.cd do
+            action = checksums ? "update" : "add"
             SystemCommand.safe_system "git", "commit", "--no-edit", "--verbose",
-                                      "--message=#{short_name}: #{checksums ? "update" : "add"} " \
-                                      "#{pkg_version} bottle.",
+                                      "--message=#{short_name}: #{action} #{pkg_version} bottle.",
                                       "--", path
           end
         end

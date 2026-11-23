@@ -94,14 +94,12 @@ class Requirement
     satisfy = self.class.satisfy
     return true unless satisfy
 
-    @satisfied_result = T.let(
-      satisfy.yielder(env:, cc:, build_bottle:, bottle_arch:) do |p|
-        raise ArgumentError, "#{self.class} `satisfy` requires a block when given options" if p.nil?
+    satisfied_result = satisfy.yielder(env:, cc:, build_bottle:, bottle_arch:) do |p|
+      raise ArgumentError, "#{self.class} `satisfy` requires a block when given options" if p.nil?
 
-        instance_eval(&p)
-      end,
-      Object,
-    )
+      instance_eval(&p)
+    end
+    @satisfied_result = T.let(satisfied_result, Object)
     return false unless @satisfied_result
 
     true
@@ -113,6 +111,12 @@ class Requirement
   def fatal?
     self.class.fatal || false
   end
+
+  # Whether the platform of a bottle tag can meet this requirement, like {Cask::Cask#platform_supported?}.
+  # {#satisfied?} only answers for the machine running `brew`, but the API is generated for every platform.
+  # True for requirements that depend on more than the platform, e.g. the installed Xcode.
+  sig { overridable.params(_bottle_tag: Utils::Bottles::Tag).returns(T::Boolean) }
+  def platform_supported?(_bottle_tag) = true
 
   sig { returns(T.nilable(Pathname)) }
   def satisfied_result_parent
@@ -236,17 +240,23 @@ class Requirement
 
     sig { params(val: T.nilable(String)).returns(T.nilable(String)) }
     def cask(val = nil)
-      val.nil? ? @cask : @cask = val
+      return @cask if val.nil?
+
+      @cask = val
     end
 
     sig { params(val: T.nilable(String)).returns(T.nilable(String)) }
     def download(val = nil)
-      val.nil? ? @download : @download = val
+      return @download if val.nil?
+
+      @download = val
     end
 
     sig { params(val: T.nilable(T::Boolean)).returns(T.nilable(T::Boolean)) }
     def fatal(val = nil)
-      val.nil? ? @fatal : @fatal = val
+      return @fatal if val.nil?
+
+      @fatal = val
     end
 
     sig {
@@ -322,18 +332,20 @@ class Requirement
     # the list.
     # The default filter, which is applied when a block is not given, omits
     # optionals and recommends based on what the dependent has asked for.
+    # Only the full expansion of `dependent` is cached. `root_cache_key`
+    # selects its cache, defaults to `cache_key` and disables caching when blank.
     sig {
       params(
-        dependent: T.any(Formula, CaskDependent, SoftwareSpec),
-        cache_key: T.nilable(String),
-        block:     T.nilable(T.proc.params(arg0: T.any(Formula, CaskDependent, SoftwareSpec),
-                                           arg1: Requirement).returns(T.nilable(Symbol))),
+        dependent:      T.any(Formula, CaskDependent, SoftwareSpec),
+        cache_key:      T.nilable(String),
+        root_cache_key: T.nilable(String),
+        block:          T.nilable(T.proc.params(arg0: T.any(Formula, CaskDependent, SoftwareSpec),
+                                                arg1: Requirement).returns(T.nilable(Symbol))),
       ).returns(Requirements)
     }
-    def expand(dependent, cache_key: nil, &block)
-      if cache_key.present?
-        cache[cache_key] ||= {}
-        return cache[cache_key][cache_id dependent].dup if cache[cache_key][cache_id dependent]
+    def expand(dependent, cache_key: nil, root_cache_key: cache_key, &block)
+      if root_cache_key.present? && (entry = cache.dig(root_cache_key, cache_id(dependent)))
+        return entry.dup
       end
 
       reqs = Requirements.new
@@ -350,12 +362,9 @@ class Requirement
         end
       end
 
-      if cache_key.present?
-        # Even though we setup the cache above
-        # 'dependent.recursive_dependencies.map(&:to_formula)'
-        # is invalidating the singleton cache
-        cache[cache_key] ||= {}
-        cache[cache_key][cache_id dependent] = reqs.dup
+      if root_cache_key.present?
+        cache[root_cache_key] ||= {}
+        cache[root_cache_key][cache_id dependent] = reqs.dup
       end
       reqs
     end

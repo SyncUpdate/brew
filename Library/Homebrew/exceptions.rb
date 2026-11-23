@@ -112,8 +112,8 @@ class FormulaSpecificationError < StandardError; end
 
 # Raised when a deprecated method is used.
 class MethodDeprecatedError < StandardError
-  sig { returns(T.nilable(String)) }
-  attr_accessor :issues_url
+  sig { returns(T.nilable(Tap)) }
+  attr_accessor :source_tap
 end
 
 # Raised when neither a formula nor a cask with the given name is available.
@@ -560,8 +560,9 @@ class FormulaConflictError < RuntimeError
     message = []
     message << "Cannot install #{formula.full_name} because conflicting formulae are installed."
     message.concat conflicts.map { |c| conflict_message(c) } << ""
+    conflict_names = conflicts.map(&:name) * " "
     message << <<~EOS
-      Please `brew unlink #{conflicts.map(&:name) * " "}` before continuing.
+      Please `brew unlink #{conflict_names}` before continuing.
 
       Unlinking removes a formula's symlinks from #{HOMEBREW_PREFIX}. You can
       link the formula again after the install finishes. You can `--force` this
@@ -619,6 +620,10 @@ class BuildError < RuntimeError
   sig { returns(T.nilable(T::Array[String])) }
   attr_accessor :options
 
+  # Flags for this particular build, including the compiler and source selection.
+  sig { returns(T::Array[String]) }
+  attr_accessor :build_flags
+
   sig {
     params(
       formula: T.nilable(Formula),
@@ -634,6 +639,7 @@ class BuildError < RuntimeError
     @args = args
     @env = env
     @options = T.let(nil, T.nilable(T::Array[String]))
+    @build_flags = T.let([], T::Array[String])
     pretty_args = Array(args).map { |arg| arg.to_s.gsub(/[\\ ]/, "\\\\\\0") }.join(" ")
     super "Failed executing: #{cmd} #{pretty_args}".strip
   end
@@ -681,45 +687,28 @@ class BuildError < RuntimeError
       end
     end
 
-    formula_tap = formula.tap
-    if formula_tap
-      if OS.not_tier_one_configuration?
-        <<~EOS
-          This is not a Tier 1 configuration:
-            #{Formatter.url("https://docs.brew.sh/Support-Tiers")}
-          #{Formatter.bold("Do not report any issues to Homebrew/* repositories!")}
-          Read the above document instead before opening any issues or PRs.
-        EOS
-      elsif formula_tap.official?
-        if OS.nix_managed_homebrew?
-          puts issue_reporting_message(OS::ISSUES_URL)
-        else
-          puts issue_reporting_message(OS::ISSUES_URL, read_this: true)
-        end
-      elsif (issues_url = formula_tap.issues_url)
-        puts issue_reporting_message(issues_url)
-      else
-        puts <<~EOS
-          If reporting this issue please do so to (not Homebrew/* repositories):
-            #{formula_tap}
-        EOS
-      end
-    else
-      <<~EOS
-        We cannot detect the correct tap to report this issue to.
-        Do not report this issue to Homebrew/* repositories!
-      EOS
-    end
-
-    puts
-
-    if issues.present?
-      puts "These open issues may also help:"
-      puts issues.map { |i| "#{i["title"]} #{i["html_url"]}" }.join("\n")
-    end
-
     require "diagnostic"
-    Homebrew::Diagnostic.checks(:build_error_checks, fatal: false)
+    tiers = Homebrew::Diagnostic.checks(:build_error_checks, fatal: false)
+    if (finding = Homebrew::Diagnostic.formula_build_finding(formula, build_options: build_flags))
+      $stderr.puts finding.text, "This build failure is expected behaviour."
+      tiers << finding.tier
+      Homebrew::Diagnostic.support_tiers << finding.tier
+    end
+
+    tier = Homebrew::Diagnostic::Finding.support_tier(tiers)
+    if (guidance = issue_reporting_message(tier:))
+      puts guidance
+      return
+    end
+
+    if (tap = formula.tap)
+      puts issue_reporting_message(tap.official? ? :homebrew : tap, tier:), ""
+    end
+
+    return unless issues.present?
+
+    puts "These open issues may also help:"
+    puts issues.map { |i| "#{i["title"]} #{i["html_url"]}" }.join("\n")
   end
 end
 
@@ -868,29 +857,25 @@ class ErrorDuringExecution < RuntimeError
     output = output&.map { |type, line| [type, Formatter.redact_secrets(line, secrets)] }
     @output = output
 
-    @exitstatus = T.let(
-      case status
-      when Integer
-        status
-      when Hash
-        status["exitstatus"]
-      else
-        status.exitstatus
-      end,
-      T.nilable(Integer),
-    )
+    resolved_exitstatus = case status
+    when Integer
+      status
+    when Hash
+      status["exitstatus"]
+    else
+      status.exitstatus
+    end
+    @exitstatus = T.let(resolved_exitstatus, T.nilable(Integer))
 
-    @termsig = T.let(
-      case status
-      when Integer
-        nil
-      when Hash
-        status["termsig"]
-      else
-        status.termsig
-      end,
-      T.nilable(Integer),
-    )
+    resolved_termsig = case status
+    when Integer
+      nil
+    when Hash
+      status["termsig"]
+    else
+      status.termsig
+    end
+    @termsig = T.let(resolved_termsig, T.nilable(Integer))
 
     reason = if exitstatus
       "exited with #{exitstatus}"
@@ -1034,10 +1019,12 @@ end
 class CyclicDependencyError < RuntimeError
   sig { params(strongly_connected_components: T::Array[T.untyped]).void }
   def initialize(strongly_connected_components)
+    cycle_list = strongly_connected_components.select { |packages| packages.count > 1 }
+                                              .map { |packages| Utils::Text.to_sentence(packages) }
+                                              .join("\n  ")
     super <<~EOS
       The following packages contain cyclic dependencies:
-        #{strongly_connected_components.select { |packages| packages.count > 1 }
-                                                .map { |packages| Utils::Text.to_sentence(packages) }.join("\n  ")}
+        #{cycle_list}
     EOS
   end
 end

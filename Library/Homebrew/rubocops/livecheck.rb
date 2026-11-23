@@ -16,22 +16,21 @@ module RuboCop
           livecheck_node = find_block(formula_nodes.body_node, :livecheck)
           return if livecheck_node.blank?
 
-          skip = T.let(find_every_method_call_by_name(livecheck_node, :skip).first,
-                       T.nilable(T.any(RuboCop::AST::Node, String)))
-          return if skip.blank?
+          skip_node = find_every_method_call_by_name(livecheck_node, :skip).first
+          return if skip_node.blank?
 
           return if find_every_method_call_by_name(livecheck_node).length < 3
 
           offending_node(livecheck_node)
           problem "Skipped formulae must not contain other livecheck information." do |corrector|
-            skip = find_every_method_call_by_name(livecheck_node, :skip).fetch(0)
-            skip = find_strings(skip).fetch(0)
+            skip = find_strings(skip_node).fetch(0)
             skip = string_content(skip) if skip.present?
+            reason = skip.present? ? " \"#{skip}\"" : ""
             corrector.replace(
               livecheck_node.source_range,
               <<~EOS.strip,
                 livecheck do
-                    skip#{" \"#{skip}\"" if skip.present?}
+                    skip#{reason}
                   end
               EOS
             )

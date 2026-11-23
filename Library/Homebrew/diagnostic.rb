@@ -29,6 +29,39 @@ module Homebrew
       @support_tiers ||= T.let([], T.nilable(T::Array[T.any(Integer, Symbol)]))
     end
 
+    sig { params(formula: Formula, build_options: T::Array[String]).returns(T.nilable(Finding)) }
+    def self.formula_build_finding(formula, build_options: [])
+      reason = if formula.head? || build_options.include?("--HEAD")
+        "was built from an unstable upstream --HEAD"
+      elsif formula.disabled?
+        "is disabled"
+      elsif formula.deprecated?
+        "is deprecated"
+      elsif (build_options.intersect?(%w[--build-bottle --build-from-source]) &&
+             build_options.exclude?("HOMEBREW_DEVELOPER=1")) ||
+            build_options.any? { |flag| flag.start_with?("--cc=") }
+        "was built from source with non-default build options"
+      end
+      Finding.new("#{formula.name}'s formula #{reason}.", tier: 3) if reason
+    end
+
+    # Include host checks for commands that have not run preinstall diagnostics.
+    sig { params(formula: T.nilable(Formula), build_options: T::Array[String]).returns(T.any(Integer, Symbol)) }
+    def self.support_tier(formula: nil, build_options: [])
+      checks = Checks.new
+      configuration_checks = formula ? checks.build_error_checks : checks.supported_configuration_checks
+      tiers = configuration_checks.flat_map do |check|
+        Array(checks.public_send(check)).map(&:tier)
+      end
+      if formula
+        finding = formula_build_finding(formula, build_options:)
+        tiers << finding.tier if finding
+      else
+        tiers.concat(support_tiers)
+      end
+      Finding.support_tier(tiers)
+    end
+
     sig { void }
     def self.report_support_tier
       message = Finding.support_tier_message(tier: Finding.support_tier(support_tiers))
@@ -38,15 +71,14 @@ module Homebrew
 
     at_exit { Homebrew::Diagnostic.report_support_tier }
 
-    sig { params(type: Symbol, fatal: T::Boolean).void }
+    sig { params(type: Symbol, fatal: T::Boolean).returns(T::Array[T.any(Integer, Symbol)]) }
     def self.checks(type, fatal: true)
       checks = Checks.new
-      failed = T.let(false, T::Boolean)
+      tiers = []
       checks.public_send(type).each do |check|
         Array(checks.public_send(check)).each do |finding|
-          support_tiers << finding.tier
+          tiers << finding.tier
           if fatal
-            failed = true
             ofail finding.to_s
           else
             opoo finding.to_s
@@ -55,7 +87,10 @@ module Homebrew
           end
         end
       end
-      exit 1 if failed && fatal
+      support_tiers.concat(tiers)
+      exit 1 if fatal && tiers.any?
+
+      tiers
     end
 
     # Diagnostic checks.
@@ -106,9 +141,9 @@ module Homebrew
         "<NONE>"
       end
 
-      sig { params(args: T.anything).void }
-      def add_info(*args)
-        ohai(*args) if @verbose
+      sig { params(title: String, info: T.anything).void }
+      def add_info(title, info)
+        ohai(title, info) if @verbose
       end
 
       sig { params(version: MacOSVersion, intel: T::Boolean).returns(T.nilable(String)) }
@@ -200,7 +235,7 @@ module Homebrew
       def supported_configuration_checks
         %w[
           check_homebrew_prefix
-          check_for_nix_homebrew
+          check_for_third_party_homebrew
         ].freeze
       end
 
@@ -351,7 +386,8 @@ module Homebrew
               f.sub!(%r{/.*}, "/*") unless @verbose
               File.join(dir, f)
             end
-            .sort.uniq
+            .sort
+            .uniq
         end
         return if files.empty?
 
@@ -564,7 +600,8 @@ module Homebrew
       sig { returns(T.nilable(Finding)) }
       def check_access_directories
         not_writable_dirs =
-          Keg.must_be_writable_directories.select(&:exist?)
+          Keg.must_be_writable_directories
+             .select(&:exist?)
              .reject(&:writable?)
         return if not_writable_dirs.empty?
 
@@ -943,16 +980,10 @@ module Homebrew
       end
 
       sig { returns(T.nilable(Finding)) }
-      def check_for_nix_homebrew
-        return unless OS.nix_managed_homebrew?
+      def check_for_third_party_homebrew
+        return unless (provider = OS.third_party_homebrew)
 
-        Finding.new(
-          <<~EOS,
-            Your Homebrew installation is managed by Nix.
-            Homebrew does not support Nix-managed installations.
-          EOS
-          tier: 3,
-        )
+        Finding.new(provider.diagnostic, tier: provider.tier)
       end
 
       sig { returns(T.nilable(Finding)) }
@@ -1266,14 +1297,13 @@ module Homebrew
       sig { returns(T.nilable(Finding)) }
       def check_cask_deprecated_disabled
         casks = Cask::Caskroom.casks
-        deprecated_or_disabled = casks.select(&:deprecated?)
-        deprecated_or_disabled += casks.select(&:disabled?)
+        deprecated_or_disabled = casks.select { |cask| cask.deprecated? || cask.disabled? }
         return if deprecated_or_disabled.empty?
 
         Finding.new(
           "Some installed casks are deprecated or disabled.",
           affects:     deprecated_or_disabled.map(&:token),
-          remediation: append_indented_list(deprecated_or_disabled.sort_by(&:token).uniq, <<~EOS),
+          remediation: append_indented_list(deprecated_or_disabled.sort_by(&:token), <<~EOS),
             You should find replacements for the following casks:
 
           EOS
@@ -1704,7 +1734,8 @@ module Homebrew
           end
           next if cask_count.zero?
 
-          "#{tap.path} (#{Utils.pluralize("cask", cask_count, include_count: true)})"
+          cask_count_label = Utils.pluralize("cask", cask_count, include_count: true)
+          "#{tap.path} (#{cask_count_label})"
         end
         add_info "Cask Taps:", taps_info
 
@@ -1794,7 +1825,8 @@ module Homebrew
         elsif result.stderr.include? "pkg_resources.DistributionNotFound"
           Finding.new("Your Python installation is unable to find `xattr`.")
         else
-          Finding.new("unknown xattr error: #{result.stderr.split("\n").last}")
+          error_message = result.stderr.split("\n").last
+          Finding.new("unknown xattr error: #{error_message}")
         end
       end
 
@@ -1933,8 +1965,12 @@ module Homebrew
         guidance = []
         if upgradeable_dependents.present? || pinned_dependents.present?
           commands = []
-          commands << "brew unpin #{pinned_dependents.uniq.sort.join(" ")}" if pinned_dependents.present?
-          commands << "brew upgrade #{(upgradeable_dependents + pinned_dependents).uniq.sort.join(" ")}"
+          if pinned_dependents.present?
+            pinned_names = pinned_dependents.uniq.sort.join(" ")
+            commands << "brew unpin #{pinned_names}"
+          end
+          upgrade_names = (upgradeable_dependents + pinned_dependents).uniq.sort.join(" ")
+          commands << "brew upgrade #{upgrade_names}"
           guidance << [
             "To stop the listed dependents from requiring the formulae above, run:",
             commands.map { |command| "  #{command}" }.join("\n"),

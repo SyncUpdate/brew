@@ -78,10 +78,13 @@ RSpec.describe FormulaInstaller do
     end
   end
 
-  specify "offline installation" do
-    skip "Sandbox not in use." unless Sandbox.use_for?("testing offline installation", warn_without_sandbox: false)
+  test_each(%w[macos linux]) do |platform|
+    specify "offline installation on #{platform}", needs_linux: platform == "linux",
+                                                   needs_macos: platform == "macos" do
+      skip "Sandbox not in use." unless Sandbox.use_for?("testing offline installation", warn_without_sandbox: false)
 
-    expect { temporary_install(FailballOfflineInstall.new) }.to raise_error(BuildError)
+      expect { temporary_install(FailballOfflineInstall.new) }.to raise_error(BuildError)
+    end
   end
 
   it "releases its formula locks when installation raises" do
@@ -297,7 +300,7 @@ RSpec.describe FormulaInstaller do
       expect(Sandbox).to receive(:with_preserved_brew_file).and_yield
       libexec_allowed = false
       allow(sandbox).to receive(:allow_write_path) do |path|
-        next if path != "#{HOMEBREW_PREFIX}/libexec"
+        next if Pathname(path) != HOMEBREW_PREFIX/"libexec"
 
         libexec_allowed = true
         expect(HOMEBREW_PREFIX/"libexec").to be_a_directory
@@ -308,6 +311,19 @@ RSpec.describe FormulaInstaller do
 
       expect(libexec_allowed).to be true
       expect(HOMEBREW_PREFIX/"libexec").to be_writable
+    end
+
+    it "runs post-install when a read-only prefix lacks libexec" do
+      stub_const("HOMEBREW_PREFIX", mktmpdir)
+      HOMEBREW_PREFIX.chmod 0555
+      skip "The current user can still write to the prefix." if HOMEBREW_PREFIX.writable?
+
+      sandbox = instance_double(Sandbox).as_null_object
+      allow(Sandbox).to receive_messages(new: sandbox, use_for?: true, full_write_isolation?: true)
+      expect(sandbox).not_to receive(:allow_write_path).with(satisfy { |path| path.to_s.end_with?("/libexec") })
+      expect(sandbox).to receive(:run)
+
+      described_class.new(Testball.new).post_install
     end
 
     it "restores bin/brew after a Landlock-sandboxed post-install replaces it" do
@@ -725,10 +741,12 @@ RSpec.describe FormulaInstaller do
       installer.ran_prelude = true
 
       expect(download_queue).to receive(:enqueue)
-        .with(bottle, check_attestation: false, stage: false).ordered
+        .with(bottle, check_attestation: false, stage: false)
+        .ordered
       expect(installer).to receive(:fetch_dependencies).ordered
       expect(download_queue).to receive(:enqueue)
-        .with(bottle, check_attestation: false).ordered
+        .with(bottle, check_attestation: false)
+        .ordered
 
       installer.enqueue_fetch
     end
@@ -737,7 +755,8 @@ RSpec.describe FormulaInstaller do
       expect(installer).to receive(:fetch_dependencies).ordered
       expect(installer).to receive(:fetch_bottle_tab).with(enqueue: true).ordered
       expect(download_queue).to receive(:enqueue)
-        .with(bottle, check_attestation: false).ordered
+        .with(bottle, check_attestation: false)
+        .ordered
 
       installer.enqueue_fetch
     end
@@ -745,7 +764,8 @@ RSpec.describe FormulaInstaller do
     it "does not requeue a bottle already enqueued by the prelude fetch" do
       allow(installer).to receive(:pour_bottle?).and_return(true)
       expect(download_queue).to receive(:enqueue)
-        .with(bottle, check_attestation: false, stage: true).once
+        .with(bottle, check_attestation: false, stage: true)
+        .once
       installer.prelude_fetch
 
       expect(installer).to receive(:fetch_dependencies)
@@ -770,7 +790,8 @@ RSpec.describe FormulaInstaller do
         expect(installer).to receive(:fetch_dependencies).ordered
         expect(installer).to receive(:fetch_bottle_tab).with(enqueue: true).ordered
         expect(download_queue).to receive(:enqueue)
-          .with(bottle, check_attestation: true).ordered
+          .with(bottle, check_attestation: true)
+          .ordered
 
         installer.enqueue_fetch
       end
@@ -934,6 +955,17 @@ RSpec.describe FormulaInstaller do
     end
 
     before { allow(Formulary).to receive(:factory).with("other").and_return(conflicting_formula) }
+
+    it "routes a missing conflict for the current source build to Discussions" do
+      allow(Formulary).to receive(:factory).with("other").and_raise(FormulaUnavailableError, "other")
+      allow(Homebrew::EnvConfig).to receive(:developer?).and_return(false)
+      allow(Homebrew::Diagnostic::Checks).to receive(:new)
+        .and_return(instance_double(Homebrew::Diagnostic::Checks, build_error_checks: []))
+      allow(OS).to receive(:third_party_homebrew).and_return(nil)
+      installer = described_class.new(test_formula, build_from_source_formulae: [test_formula.full_name])
+
+      expect { installer.check_conflicts }.to output(/problems specific to Tier 3/).to_stderr
+    end
 
     context "when conflicting formula is installed but not linked" do
       before do
@@ -2549,7 +2581,29 @@ RSpec.describe FormulaInstaller do
     end
   end
 
+  describe "#build_options_for_reporting" do
+    it "records whether a bottle build used developer mode" do
+      formula = Testball.new
+      installer = described_class.new(formula, build_bottle: true, build_from_source_formulae: [formula.full_name])
+      ENV.delete("HOMEBREW_DEVELOPER")
+
+      expect { ENV["HOMEBREW_DEVELOPER"] = "1" }
+        .to change { installer.build_options_for_reporting.include?("HOMEBREW_DEVELOPER=1") }.from(false).to(true)
+    end
+  end
+
   describe "#build" do
+    it "records source build options even if the build subprocess fails before install" do
+      formula = Testball.new
+      installer = described_class.new(formula, build_from_source_formulae: [formula.full_name], cc: "clang")
+      error = BuildError.new(formula, "make", [], {})
+      allow(Sandbox).to receive(:run_or_fork).and_raise(error)
+
+      expect { installer.build }.to raise_error(BuildError)
+      expect(formula.logged_build_options).to include("--build-from-source", "--cc=clang")
+      expect(error.build_flags).to eq(formula.logged_build_options)
+    end
+
     it "denies build writes to the temporary Cellar after granting the formula's var", :needs_macos do
       skip "Sandbox not available." unless Sandbox.available?
       skip "Nested sandboxing is not supported." if Sandbox.nested_sandbox?

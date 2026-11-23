@@ -4,30 +4,6 @@
 require "utils/info_display"
 
 RSpec.describe Utils::InfoDisplay do
-  describe ".requirement_for_other_os?" do
-    test_each([
-      [:macos, MacOSRequirement, false],
-      [:macos, LinuxRequirement, true],
-      [:linux, MacOSRequirement, true],
-      [:linux, LinuxRequirement, false],
-    ]) do |(os, requirement_class, expected)|
-      it "identifies #{requirement_class} on #{os}" do
-        Homebrew::SimulateSystem.with(os:) do
-          expect(described_class.requirement_for_other_os?(requirement_class.new)).to eq(expected)
-        end
-      end
-    end
-
-    it "treats macOS and Linux requirements as other OS requirements on generic OS" do
-      allow(Homebrew::SimulateSystem).to receive_messages(simulating_or_running_on_macos?: false,
-                                                          simulating_or_running_on_linux?: false)
-
-      expect([MacOSRequirement.new, LinuxRequirement.new].map do |requirement|
-        described_class.requirement_for_other_os?(requirement)
-      end).to eq([true, true])
-    end
-  end
-
   describe ".package_summary" do
     let(:cask) { Cask::Cask.new("example") { version "2.0" } }
 
@@ -40,7 +16,17 @@ RSpec.describe Utils::InfoDisplay do
                ),
                installation_status: ["Installed"], source_url: nil,
                installed_versions: [], verbose: false
-             )).to eq("==> example (Example): 1.0 → 2.0 (auto_updates)\nInstalled")
+             )).to eq("==> example (Example): 1.0 → 2.0 (auto updates)\nInstalled")
+    end
+
+    it "marks an incompatible package with ⊘ and `(incompatible)`" do
+      allow($stdout).to receive(:tty?).and_return(true)
+      allow(cask).to receive(:incompatible?).and_return(true)
+
+      expect(described_class.package_summary(
+               formula_or_cask: cask, title: Utils::InfoDisplay::Title.new(name: "example", version: "2.0"),
+               installation_status: [], source_url: nil, installed_versions: [], verbose: false
+             )).to match(/\A.*example.*⊘.*\(incompatible\).*: 2\.0/)
     end
 
     it "places cask metadata after the source" do
@@ -70,7 +56,7 @@ RSpec.describe Utils::InfoDisplay do
         installed_version: "1.0", installed: true, outdated: true, auto_updates: true
       )
 
-      expect(described_class.package_title(title)).to eq("==> example (Example, Another): 1.0 → 2.0 (auto_updates)")
+      expect(described_class.package_title(title)).to eq("==> example (Example, Another): 1.0 → 2.0 (auto updates)")
     end
 
     it "formats a HEAD-only outdated formula" do

@@ -3,7 +3,6 @@
 
 require "utils/output"
 require "deprecate_disable"
-require "simulate_system"
 
 module Utils
   # Shared presentation helpers for formula and cask information.
@@ -36,12 +35,13 @@ module Utils
     end
 
     sig {
-      params(title: Title, deprecated: T::Boolean, disabled: T::Boolean, can_install: T::Boolean).returns(String)
+      params(title: Title, deprecated: T::Boolean, disabled: T::Boolean, incompatible: T::Boolean,
+             can_install: T::Boolean).returns(String)
     }
-    def self.package_title(title, deprecated: false, disabled: false, can_install: true)
+    def self.package_title(title, deprecated: false, disabled: false, incompatible: false, can_install: true)
       name = pretty_install_status(
         title.name, installed: title.installed, outdated: title.outdated, warning: title.warning,
-                    removed: title.removed, deprecated:, disabled:, can_install:, bold: true
+                    removed: title.removed, deprecated:, disabled:, incompatible:, can_install:, bold: true
       )
       heading = oh1_title(name).to_s
       heading += " (#{title.display_names.join(", ")})" if title.display_names.any?
@@ -57,7 +57,7 @@ module Utils
       end
       heading += ": #{versions.join(", ")}"
       heading += " [keg-only]" if title.keg_only
-      heading += " (auto_updates)" if title.auto_updates
+      heading += " (auto updates)" if title.auto_updates
       heading
     end
 
@@ -99,7 +99,8 @@ module Utils
     def self.installation_summary(version, tab)
       reason = installation_reason(tab)
 
-      "Installed: #{version}#{" (#{reason})" if reason != "-"}"
+      reason_note = " (#{reason})" if reason != "-"
+      "Installed: #{version}#{reason_note}"
     end
 
     sig {
@@ -139,9 +140,12 @@ module Utils
       else
         "Installed Versions"
       end
+      incompatible = formula_or_cask.incompatible?
       [
         package_title(title, deprecated: formula_or_cask.deprecated?, disabled: formula_or_cask.disabled?,
-                             can_install: formula_or_cask.valid_platform? && !formula_or_cask.disabled?),
+                             incompatible:,
+                             can_install: formula_or_cask.valid_platform? && !formula_or_cask.disabled? &&
+                                          !incompatible),
         (if shadowed_by && formula_or_cask.is_a?(Formula)
            Formatter.warning("`#{formula_or_cask.name}` shadows `#{shadowed_by}/#{formula_or_cask.name}`.",
                              label: "Warning")
@@ -232,14 +236,6 @@ module Utils
       section("Binaries", formatted.empty? ? [] : [formatted])
     end
 
-    sig { params(requirement: Requirement).returns(T::Boolean) }
-    def self.requirement_for_other_os?(requirement)
-      return !Homebrew::SimulateSystem.simulating_or_running_on_macos? if requirement.instance_of?(MacOSRequirement)
-      return !Homebrew::SimulateSystem.simulating_or_running_on_linux? if requirement.instance_of?(LinuxRequirement)
-
-      false
-    end
-
     sig { params(installed_count: Integer, total_count: Integer, mark_uninstalled: T::Boolean).returns(String) }
     def self.dependency_status_counts(installed_count, total_count, mark_uninstalled: true)
       missing_count = total_count - installed_count
@@ -252,8 +248,8 @@ module Utils
 
     sig { params(installed_count: Integer, total_count: Integer, mark_uninstalled: T::Boolean).returns(String) }
     def self.recursive_runtime_line(installed_count, total_count, mark_uninstalled: true)
-      "Recursive Runtime (#{total_count}): " \
-        "#{dependency_status_counts(installed_count, total_count, mark_uninstalled:)}"
+      status_counts = dependency_status_counts(installed_count, total_count, mark_uninstalled:)
+      "Recursive Runtime (#{total_count}): #{status_counts}"
     end
 
     sig { params(formula: Formula).returns(T::Array[String]) }
@@ -289,7 +285,7 @@ module Utils
 
     sig { params(formula: Formula).returns(T::Boolean) }
     def self.formula_installs_from_source?(formula)
-      return false if formula.requirements.any? { |requirement| requirement_for_other_os?(requirement) }
+      return false if formula.disabled? || formula.incompatible? || !formula.valid_platform?
 
       stable = formula.stable
       return true if stable.blank? && formula.head.present?

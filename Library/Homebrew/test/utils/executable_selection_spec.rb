@@ -25,9 +25,10 @@ RSpec.describe "Executable selection", type: :system do
   end
 
   def check_tool(tool, install: "return 1", script: "")
+    tool_script = (HOMEBREW_LIBRARY_PATH/"utils/#{tool}.sh").read.gsub("/usr/bin/#{tool}", system_tool.to_s)
     SystemCommand.run("/bin/bash", args: ["-c", <<~SH])
       source "#{HOMEBREW_LIBRARY_PATH}/utils.sh"
-      #{(HOMEBREW_LIBRARY_PATH/"utils/#{tool}.sh").read.gsub("/usr/bin/#{tool}", system_tool.to_s)}
+      #{tool_script}
       brew() {
         echo "$*" >> "#{test_root}/installs"
         #{install}
@@ -39,22 +40,23 @@ RSpec.describe "Executable selection", type: :system do
     SH
   end
 
+  let(:tool) { RSpec.current_example.metadata.fetch(:tool) }
+  let(:test_root) { mktmpdir }
+  let(:system_tool) { test_root/"usr/bin"/tool }
+  let(:brewed_tool) { test_root/"opt"/tool/"bin"/tool }
+  let(:custom_tool) { test_root/"custom tools"/tool }
+  let(:minimum) { { "git" => "2.30.0", "curl" => "7.41.0", "svn" => "1.1.0" }.fetch(tool) }
+
+  before(:each, :tool) do
+    write_tool(system_tool, tool, "8.0.0")
+    write_tool(brewed_tool, tool, "9.0.0")
+    write_tool(custom_tool, tool, "10.0.0")
+    ENV["HOMEBREW_CACHE"] = (test_root/"cache").to_s
+    ENV.delete("HOMEBREW_FORCE_BREWED_#{tool.upcase}")
+  end
+
   test_each(%w[git curl svn]) do |tool|
-    context "with #{tool}" do
-      let(:test_root) { mktmpdir }
-      let(:system_tool) { test_root/"usr/bin"/tool }
-      let(:brewed_tool) { test_root/"opt"/tool/"bin"/tool }
-      let(:custom_tool) { test_root/"custom tools"/tool }
-      let(:minimum) { { "git" => "2.30.0", "curl" => "7.41.0", "svn" => "1.1.0" }.fetch(tool) }
-
-      before do
-        write_tool(system_tool, tool, "8.0.0")
-        write_tool(brewed_tool, tool, "9.0.0")
-        write_tool(custom_tool, tool, "10.0.0")
-        ENV["HOMEBREW_CACHE"] = (test_root/"cache").to_s
-        ENV.delete("HOMEBREW_FORCE_BREWED_#{tool.upcase}")
-      end
-
+    context "with #{tool}", tool: do
       it "prefers the newer installed Homebrew tool over the suggestion" do
         expect(select_tool(tool).stdout).to eq(brewed_tool.to_s)
       end
@@ -181,22 +183,31 @@ RSpec.describe "Executable selection", type: :system do
 
         expect(select_tool(tool).stderr).to be_empty
       end
+    end
+  end
 
-      context "when checking the required version", unless: tool == "svn" do
-        before do
-          ENV["HOMEBREW_PREFIX"] = test_root.to_s
-          ENV["HOMEBREW_#{tool.upcase}_PATH"] = custom_tool.to_s
-          ENV.delete("HOMEBREW_MACOS")
-          ENV.delete("HOMEBREW_NO_INSTALL_FROM_API")
-          ENV.delete("HOMEBREW_INSTALLING_TOOL")
-          (test_root/"installs").write ""
-          [brewed_tool, system_tool, custom_tool].each { |path| write_tool(path, tool, "1.0.0") }
-        end
+  context "when checking the required version" do
+    before do
+      ENV["HOMEBREW_PREFIX"] = test_root.to_s
+      ENV["HOMEBREW_#{tool.upcase}_PATH"] = custom_tool.to_s
+      ENV.delete("HOMEBREW_MACOS")
+      ENV.delete("HOMEBREW_NO_INSTALL_FROM_API")
+      ENV.delete("HOMEBREW_INSTALLING_TOOL")
+      (test_root/"installs").write ""
+      [brewed_tool, system_tool, custom_tool].each { |path| write_tool(path, tool, "1.0.0") }
+    end
 
+    test_each(%w[git curl]) do |tool|
+      context "with #{tool}", tool: do
         it "installs a suitable tool before reporting an error" do
+          version_prefix = if tool == "git"
+            "git version"
+          else
+            "curl"
+          end
           result = check_tool(tool, install: <<~SH)
             [[ "${HOMEBREW_INSTALLING_TOOL}" == 1 && "${HOMEBREW_NO_AUTO_UPDATE}" == 1 ]] || return 1
-            printf '#!/bin/bash\necho "#{(tool == "git") ? "git version" : "curl"} 10.0.0"\n' > "#{brewed_tool}"
+            printf '#!/bin/bash\necho "#{version_prefix} 10.0.0"\n' > "#{brewed_tool}"
           SH
 
           expect([result.stdout, result.stderr, (test_root/"installs").read])
@@ -205,7 +216,11 @@ RSpec.describe "Executable selection", type: :system do
 
         it "reports the minimum, versions and paths only after installation fails" do
           result = check_tool(tool)
-          label = (tool == "git") ? "Git" : "curl"
+          label = if tool == "git"
+            "Git"
+          else
+            "curl"
+          end
 
           expect([result.status.exitstatus, result.stderr, (test_root/"installs").read]).to eq([
             1,
@@ -231,10 +246,15 @@ RSpec.describe "Executable selection", type: :system do
         end
 
         it "discards the cached probe after attempting installation" do
+          version_prefix = if tool == "git"
+            "git version"
+          else
+            "curl"
+          end
           brewed_tool.write <<~SH
             #!/bin/bash
             [[ -f "#{test_root}/broken" ]] && exit 1
-            echo '#{(tool == "git") ? "git version" : "curl"} 10.0.0'
+            echo '#{version_prefix} 10.0.0'
           SH
           system_tool.unlink
           custom_tool.unlink
@@ -262,33 +282,33 @@ RSpec.describe "Executable selection", type: :system do
 
           expect([result.stdout, result.stderr, (test_root/"installs").read]).to eq([system_tool.to_s, "", ""])
         end
+      end
+    end
 
-        context "with system curl", if: tool == "curl" do
-          it "records system curl suitability across cache hits with and without FORCE" do
-            write_tool(brewed_tool, tool, "9.0.0")
-            results = ["7.40.0", "7.41.0"].product([nil, "1"]).map do |version, force|
-              write_tool(system_tool, tool, version)
-              ENV["HOMEBREW_FORCE_BREWED_CURL"] = force
-              ENV.delete("HOMEBREW_SYSTEM_CURL_TOO_OLD")
-              Array.new(2) do
-                check_tool(tool, script: 'printf "%s " "${HOMEBREW_SYSTEM_CURL_TOO_OLD-unset}"').stdout
-              end
-            end
-
-            expect([results, (test_root/"probes").read.lines.length, (test_root/"installs").read])
-              .to eq([%w[1 1 unset unset].map { |flag| ["#{flag} #{brewed_tool}"] * 2 }, 8, ""])
-          end
-
-          it "clears the old-system flag after upgrading system curl" do
-            write_tool(brewed_tool, tool, "9.0.0")
-            check_tool(tool)
-            ENV["HOMEBREW_SYSTEM_CURL_TOO_OLD"] = "1"
-            write_tool(system_tool, tool, minimum)
-
-            expect(check_tool(tool, script: 'printf "%s " "${HOMEBREW_SYSTEM_CURL_TOO_OLD-unset}"').stdout)
-              .to eq("unset #{brewed_tool}")
+    context "with system curl", tool: "curl" do
+      it "records system curl suitability across cache hits with and without FORCE" do
+        write_tool(brewed_tool, tool, "9.0.0")
+        results = ["7.40.0", "7.41.0"].product([nil, "1"]).map do |version, force|
+          write_tool(system_tool, tool, version)
+          ENV["HOMEBREW_FORCE_BREWED_CURL"] = force
+          ENV.delete("HOMEBREW_SYSTEM_CURL_TOO_OLD")
+          Array.new(2) do
+            check_tool(tool, script: 'printf "%s " "${HOMEBREW_SYSTEM_CURL_TOO_OLD-unset}"').stdout
           end
         end
+
+        expect([results, (test_root/"probes").read.lines.length, (test_root/"installs").read])
+          .to eq([%w[1 1 unset unset].map { |flag| ["#{flag} #{brewed_tool}"] * 2 }, 8, ""])
+      end
+
+      it "clears the old-system flag after upgrading system curl" do
+        write_tool(brewed_tool, tool, "9.0.0")
+        check_tool(tool)
+        ENV["HOMEBREW_SYSTEM_CURL_TOO_OLD"] = "1"
+        write_tool(system_tool, tool, minimum)
+
+        expect(check_tool(tool, script: 'printf "%s " "${HOMEBREW_SYSTEM_CURL_TOO_OLD-unset}"').stdout)
+          .to eq("unset #{brewed_tool}")
       end
     end
   end

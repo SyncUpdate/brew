@@ -128,7 +128,8 @@ RSpec.describe GitHubRunnerMatrix, :no_api do
 
       it "includes changed dependencies needed by an already-bottled formula" do
         allow_any_instance_of(BottleTransition).to receive(:required?)
-          .with(testball_depender.formula).and_return(true)
+          .with(testball_depender.formula)
+          .and_return(true)
         runners = described_class.new([testball, testball_depender], [],
                                       all_supported: false, dependent_matrix: false)
                                  .active_runner_specs_hash
@@ -165,7 +166,8 @@ RSpec.describe GitHubRunnerMatrix, :no_api do
       it "keeps standard runners when transition prerequisites are missing" do
         testball
         allow_any_instance_of(BottleTransition).to receive(:required?)
-          .with(testball_depender.formula).and_return(true)
+          .with(testball_depender.formula)
+          .and_return(true)
 
         runners = described_class.new([testball_depender], [], all_supported: false, dependent_matrix: false)
                                  .active_runner_specs_hash
@@ -201,7 +203,7 @@ RSpec.describe GitHubRunnerMatrix, :no_api do
       end
 
       test_each([nil, :tahoe, :arm64_linux]) do |bottle_tag|
-        it "skips a test-only dependency with #{bottle_tag || "no"} bottles" do
+        it "skips a test-only dependency with bottle tag #{bottle_tag.inspect}" do
           dependency = setup_test_runner_formula("test-only-dependency")
           dependency.formula.bottle_specification.sha256(bottle_tag => "a" * 64) if bottle_tag
           covered = setup_test_runner_formula("covered", [{ dependency.name => :test }])

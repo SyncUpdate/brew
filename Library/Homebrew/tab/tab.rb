@@ -73,7 +73,8 @@ class Tab < AbstractTab
            compiler:                T.nilable(T.any(String, Symbol)),
            source_modified_time:    T.nilable(Integer),
            tapped_from:             T.nilable(String),
-           rest:                    T.untyped).void
+           # Listing `AbstractTab#initialize`'s keywords here would silently drop any it gains later.
+           rest:                    T.untyped).void # rubocop:disable Homebrew/NoUntypedKeywordRest
   }
   def initialize(poured_from_bottle: nil, built_as_bottle: nil, built_prefix: nil, padded_prefix: nil,
                  changed_files: nil,
@@ -84,14 +85,11 @@ class Tab < AbstractTab
     @built_as_bottle = built_as_bottle
     @built_prefix = built_prefix
     @padded_prefix = padded_prefix
-    @changed_files = T.let(changed_files&.map { |f| Pathname(f) }, T.nilable(T::Array[Pathname]))
-    @linkage_files = T.let(linkage_files&.map { |f| Pathname(f) }, T.nilable(T::Array[Pathname]))
-    @binary_relocation_files = T.let(
-      binary_relocation_files&.map { |f| Pathname(f) },
-      T.nilable(T::Array[Pathname]),
-    )
+    @changed_files = T.let(file_paths(changed_files), T.nilable(T::Array[Pathname]))
+    @linkage_files = T.let(file_paths(linkage_files), T.nilable(T::Array[Pathname]))
+    @binary_relocation_files = T.let(file_paths(binary_relocation_files), T.nilable(T::Array[Pathname]))
     @relocated_build_prefix = relocated_build_prefix
-    @relocated_files = T.let(relocated_files&.map { |f| Pathname(f) }, T.nilable(T::Array[Pathname]))
+    @relocated_files = T.let(file_paths(relocated_files), T.nilable(T::Array[Pathname]))
     @stdlib = stdlib
     @aliases = aliases
     @used_options = used_options
@@ -501,5 +499,12 @@ class Tab < AbstractTab
       s << used_options.to_a.join(" ")
     end
     s.join(" ")
+  end
+
+  private
+
+  sig { params(files: T.nilable(T::Array[T.any(Pathname, String)])).returns(T.nilable(T::Array[Pathname])) }
+  def file_paths(files)
+    files&.map { |file| Pathname(file) }
   end
 end

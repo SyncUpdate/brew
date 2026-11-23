@@ -39,7 +39,8 @@ module Homebrew
         raise Error, "Repology index missing 'formulae' key" unless (formulae = as_hash(top["formulae"]))
 
         @formulae = T.let(formulae, T::Hash[String, T.untyped])
-        @meta = T.let(as_hash(top["meta"]) || {}, T::Hash[String, T.untyped])
+        resolved_meta = as_hash(top["meta"]) || {}
+        @meta = T.let(resolved_meta, T::Hash[String, T.untyped])
       end
 
       sig { returns(T::Hash[String, T.untyped]) }
@@ -138,7 +139,11 @@ module Homebrew
           .returns(T.nilable(DistroMap))
       }
       def self.resolve_contributions(contributions)
-        chosen = contributions.one? ? contributions : contributions.select { |c| c.fetch(:preferred) }
+        chosen = if contributions.one?
+          contributions
+        else
+          contributions.select { |c| c.fetch(:preferred) }
+        end
         chosen.fetch(0).fetch(:distros) if chosen.one?
       end
 

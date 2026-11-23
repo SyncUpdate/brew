@@ -11,13 +11,15 @@ module Homebrew
     # Formats missing dependencies, optionally prefixed with the package name.
     sig { params(package_name: String, missing_dependencies: T::Array[String], show_name: T::Boolean).returns(String) }
     def self.format_deps(package_name, missing_dependencies, show_name: true)
-      "#{"#{package_name}: " if show_name}#{missing_dependencies.join(" ")}"
+      name_prefix = show_name ? "#{package_name}: " : ""
+      "#{name_prefix}#{missing_dependencies.join(" ")}"
     end
 
     # Commands to install missing dependencies without marking them as requested.
     sig { params(missing: T::Hash[String, T::Array[String]]).returns(T::Array[String]) }
     def self.install_commands(missing)
-      ["brew install --as-dependency #{missing.values.flatten.uniq.sort.join(" ")}"]
+      packages = missing.values.flatten.uniq.sort.join(" ")
+      ["brew install --as-dependency #{packages}"]
     end
 
     sig {
@@ -47,7 +49,7 @@ module Homebrew
 
     sig { params(cask: Cask::Cask, hide: T::Array[String]).returns(T::Array[String]) }
     def self.cask_deps(cask, hide)
-      tab_deps = T.let(Cask::Tab.for_cask(cask).runtime_dependencies, T.untyped)
+      tab_deps = Cask::Tab.for_cask(cask).runtime_dependencies
       return [] unless tab_deps.is_a?(Hash)
 
       tab_deps.keys.flat_map do |type|

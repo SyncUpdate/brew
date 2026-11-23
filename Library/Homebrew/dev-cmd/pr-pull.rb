@@ -290,7 +290,8 @@ module Homebrew
         elsif is_cask && old_package.sha256 != new_package.sha256
           "#{subject_name}: checksum update #{reason}".strip
         else
-          "#{subject_name}: #{reason || "rebuild"}".strip
+          rebuild_reason = reason || "rebuild"
+          "#{subject_name}: #{rebuild_reason}".strip
         end
       end
 
@@ -353,8 +354,8 @@ module Homebrew
         end
 
         # Get the set of authors in this series.
-        authors = Utils.safe_popen_read("git", "-C", git_repo.pathname, "show",
-                                        "--no-patch", "--pretty=%an <%ae>", *commits).lines.map(&:strip).uniq.compact
+        authors = Utils.safe_popen_read("git", "-C", git_repo.pathname, "show", "--no-patch", "--pretty=%an <%ae>",
+                                        args: commits).lines.map(&:strip).uniq.compact
 
         # Get the author and date of the first commit of this series, which we use for the squashed commit.
         original_author = authors.shift
@@ -492,7 +493,8 @@ module Homebrew
         end
 
         SystemCommand.safe_system "git", "-C", path, "fetch", "--quiet", "--force", "origin", commits.last
-        ohai "Using #{commits.count} commit#{"s" if commits.count != 1} from ##{pull_request}"
+        commit_count = Utils.pluralize("commit", commits.count, include_count: true)
+        ohai "Using #{commit_count} from ##{pull_request}"
         Utils::Git.cherry_pick!(path, "--ff", "--allow-empty", *commits, verbose: args.verbose?,
                                                                          resolve: args.resolve?)
       end

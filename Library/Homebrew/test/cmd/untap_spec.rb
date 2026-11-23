@@ -61,13 +61,13 @@ RSpec.describe Homebrew::Cmd::Untap do
     end
 
     test_each([nil, "--force"]) do |flag|
-      it "untaps with colliding formula names (#{flag || "without --force"})" do
+      it "untaps with colliding formula names (flag: #{flag.inspect})" do
         expect(tap).to receive(:uninstall).with(manual: true)
 
         described_class.new([flag, tap.name].compact).run
       end
 
-      it "uninstalls kegs from the untrusted tap (#{flag || "without --force"})" do
+      it "uninstalls kegs from the untrusted tap (flag: #{flag.inspect})" do
         (keg_path/AbstractTab::FILENAME).write <<~JSON
           {"source":{"tap":"#{tap.name}"}}
         JSON
@@ -161,7 +161,8 @@ RSpec.describe Homebrew::Cmd::Untap do
     named_args = [formula_name, cask.full_name]
     expect(Cask::Uninstall).to receive(:check_dependent_casks).with(cask, named_args:).ordered
     expect(Homebrew::Uninstall).to receive(:uninstall_kegs)
-      .with({ rack => [keg] }, casks: [cask], force: false, named_args:).ordered
+      .with({ rack => [keg] }, casks: [cask], force: false, named_args:)
+      .ordered
     expect(Cask::Uninstall).to receive(:uninstall_casks).with(cask, force: false)
     expect(tap).to receive(:uninstall).with(manual: true)
 
@@ -188,7 +189,8 @@ RSpec.describe Homebrew::Cmd::Untap do
     named_args = [formula_name, cask.full_name]
     expect(Cask::Uninstall).to receive(:check_dependent_casks).with(cask, named_args:).ordered
     expect(Homebrew::Uninstall).to receive(:uninstall_kegs)
-      .with({ rack => [keg] }, casks: [cask], force: true, named_args:).ordered
+      .with({ rack => [keg] }, casks: [cask], force: true, named_args:)
+      .ordered
     expect(Cask::Uninstall).to receive(:uninstall_casks).with(cask, force: true)
     expect(tap).to receive(:uninstall).with(manual: true)
 
@@ -317,6 +319,7 @@ RSpec.describe Homebrew::Cmd::Untap do
   describe "#installed_casks_for", :cask do
     shared_examples "finds installed casks in tap", :no_api do
       def load_cask(token:, with_cask_file: false, mock_install: false, deprecated: false, tap: subject)
+        deprecation = deprecated ? "raise MethodDeprecatedError" : ""
         cask_source = <<~RUBY
           cask '#{token}' do
             version "1.2.3"
@@ -324,7 +327,7 @@ RSpec.describe Homebrew::Cmd::Untap do
 
             url 'https://brew.sh/'
 
-            #{"raise MethodDeprecatedError" if deprecated}
+            #{deprecation}
           end
         RUBY
 

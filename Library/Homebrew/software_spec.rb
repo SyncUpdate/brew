@@ -8,6 +8,7 @@ require "version"
 require "options"
 require "build_options"
 require "dependency_collector"
+require "depends_on/dsl"
 require "utils/bottles"
 require "patch"
 require "compilers"
@@ -15,6 +16,7 @@ require "macos_version"
 require "on_system"
 
 class SoftwareSpec
+  include DependsOn::DSL
   include Downloadable
 
   extend Forwardable
@@ -56,9 +58,6 @@ class SoftwareSpec
   sig { returns(T::Array[CompilerFailure]) }
   attr_reader :compiler_failures
 
-  sig { returns(T::Boolean) }
-  attr_reader :depends_on_macos_set_in_block
-
   def_delegators :@resource, :stage, :fetch, :verify_download_integrity, :source_modified_time,
                  :cached_download, :clear_cache, :checksum, :mirrors, :specs, :using, :version, :mirror,
                  :downloader, :download_queue_name, :download_queue_type
@@ -83,13 +82,20 @@ class SoftwareSpec
     @flags = flags
     @deprecated_flags = T.let([], T::Array[DeprecatedOption])
     @deprecated_options = T.let([], T::Array[DeprecatedOption])
-    @build = T.let(BuildOptions.new(Options.create(@flags), options), BuildOptions)
+    build = BuildOptions.new(Options.create(@flags), options)
+    @build = T.let(build, BuildOptions)
     @compiler_failures = T.let([], T::Array[CompilerFailure])
-    @depends_on_macos_bare_set_top_level = T.let(false, T::Boolean)
-    @depends_on_macos_version_set_top_level = T.let(false, T::Boolean)
-    @depends_on_maximum_macos_set_top_level = T.let(false, T::Boolean)
-    @depends_on_macos_set_in_block = T.let(false, T::Boolean)
-    @depends_on_linux_set_top_level = T.let(false, T::Boolean)
+  end
+
+  # Evaluate a stable or head block within the enclosing formula's platform scope.
+  sig {
+    type_parameters(:U).params(
+      scope: T.nilable(Symbol),
+      block: T.proc.bind(SoftwareSpec).returns(T.type_parameter(:U)),
+    ).returns(T.type_parameter(:U))
+  }
+  def evaluate(scope, &block)
+    with_on_system_block(scope) { instance_eval(&block) }
   end
 
   sig { override.params(other: T.any(SoftwareSpec, Downloadable)).void }
@@ -256,86 +262,15 @@ class SoftwareSpec
                                     T::Hash[T.any(String, Symbol, T::Class[Requirement]), T.untyped],
                                     T::Class[Requirement], Dependable)),
       set_in_block: T::Boolean,
-      spec_kwargs:  T.untyped,
+      os_scoped:    T::Boolean,
+      spec_kwargs:  T.anything,
     ).void
   }
-  def depends_on(spec = nil, set_in_block: false, **spec_kwargs)
+  def depends_on(spec = nil, set_in_block: in_on_system_block?, os_scoped: in_on_os_block?, **spec_kwargs)
     spec = spec_kwargs if spec.nil? && spec_kwargs.present?
     dep = dependency_collector.add(spec)
-    record_os_requirement(dep, set_in_block:)
+    record_os_requirement(dep, set_in_block:, os_scoped:) if dep.is_a?(Requirement)
     add_dep_option(dep) if dep
-  end
-
-  sig { returns(T::Boolean) }
-  def depends_on_macos_set_top_level?
-    @depends_on_macos_bare_set_top_level ||
-      @depends_on_macos_version_set_top_level ||
-      @depends_on_maximum_macos_set_top_level
-  end
-
-  sig { returns(T::Boolean) }
-  def depends_on_linux_set_top_level?
-    @depends_on_linux_set_top_level
-  end
-
-  sig { params(dep: T.untyped, set_in_block: T::Boolean).void }
-  def record_os_requirement(dep, set_in_block:)
-    case dep
-    when MacOSRequirement
-      if set_in_block
-        @depends_on_macos_set_in_block = true
-        return
-      end
-
-      if @depends_on_linux_set_top_level
-        raise ArgumentError,
-              "`depends_on :linux` cannot be combined with `depends_on macos:`"
-      end
-
-      if !dep.version_specified?
-        if @depends_on_macos_bare_set_top_level
-          raise ArgumentError, "`depends_on :macos` cannot be combined with another macOS `depends_on`"
-        end
-
-        if @depends_on_macos_version_set_top_level || @depends_on_maximum_macos_set_top_level
-          odisabled "`depends_on :macos` with `depends_on macos:`",
-                    "`depends_on :macos` with `depends_on macos:` inside an `on_macos` block"
-        end
-
-        @depends_on_macos_bare_set_top_level = true
-      elsif dep.comparator == "<="
-        if @depends_on_macos_bare_set_top_level
-          odisabled "`depends_on :macos` with `depends_on maximum_macos:`",
-                    "`depends_on :macos` with `depends_on maximum_macos:` inside an `on_macos` block"
-        end
-
-        if @depends_on_maximum_macos_set_top_level
-          raise ArgumentError, "`depends_on maximum_macos:` cannot be combined with another macOS `depends_on`"
-        end
-
-        @depends_on_maximum_macos_set_top_level = true
-      else
-        if @depends_on_macos_bare_set_top_level
-          odisabled "`depends_on :macos` with `depends_on macos:`",
-                    "`depends_on :macos` with `depends_on macos:` inside an `on_macos` block"
-        end
-
-        if @depends_on_macos_version_set_top_level
-          raise ArgumentError, "`depends_on macos:` cannot be combined with another macOS `depends_on`"
-        end
-
-        @depends_on_macos_version_set_top_level = true
-      end
-    when LinuxRequirement
-      return if set_in_block
-
-      if depends_on_macos_set_top_level?
-        raise ArgumentError,
-              "`depends_on :linux` cannot be combined with `depends_on macos:`"
-      end
-
-      @depends_on_linux_set_top_level = true
-    end
   end
 
   sig {
@@ -358,9 +293,15 @@ class SoftwareSpec
     depends_on UsesFromMacOSDependency.new(dep, tags, bounds:)
   end
 
-  sig { returns(Dependencies) }
-  def deps
-    dependency_collector.deps.dup_without_system_deps
+  sig { params(name: T.nilable(T.any(String, Regexp))).returns(Dependencies) }
+  def deps(name = nil)
+    spec_deps = dependency_collector.deps.dup_without_system_deps
+    return spec_deps if name.nil?
+
+    pattern = name.is_a?(Regexp) ? name : Version.formula_optionally_versioned_regex(name)
+    Dependencies.new(*spec_deps.select do |dependency|
+      dependency.name.match?(pattern) || Utils.name_from_full_name(dependency.name).match?(pattern)
+    end)
   end
 
   sig { returns(Dependencies) }

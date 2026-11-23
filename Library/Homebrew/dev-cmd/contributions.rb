@@ -234,7 +234,10 @@ module Homebrew
             results, grand_totals, user_names, lead_maintainers, maintainer_since_dates, from, to
           )
           filename = "brew-contributions-#{from}-to-#{to}"
-          filename += "-#{user_names.keys.map(&:downcase).sort.join("-")}" if requested_users.present?
+          if requested_users.present?
+            selected_users = user_names.keys.map(&:downcase).sort.join("-")
+            filename += "-#{selected_users}"
+          end
           File.write("#{filename}.csv", csv)
           File.write("#{filename}.md", generate_maintainer_report_summary(csv, from, to))
           puts csv
@@ -243,21 +246,22 @@ module Homebrew
 
         user_names.each_key do |username|
           grand_total = grand_totals.fetch(username)
-          greater_than_total = T.let(grand_total.fetch(:merged_pr_author_hit_cap, 0).positive?, T::Boolean)
+          hit_cap = grand_total.fetch(:merged_pr_author_hit_cap, 0)
+          greater_than_total = T.let(hit_cap.positive?, T::Boolean)
           contributions = CONTRIBUTION_TYPES.keys.filter_map do |type|
             type_count = grand_total[type]
             next if type_count.nil? || type_count.zero?
 
             count_prefix = ""
-            if ([:merged_pr_author, :merged_pr].include?(type) && grand_total.fetch(:merged_pr_author_hit_cap,
-                                                                                    0).positive?) ||
+            if ([:merged_pr_author, :merged_pr].include?(type) && hit_cap.positive?) ||
                (type == :approved_pr_review && type_count >= MAX_PR_SEARCH) || type_count >= MAX_CONTRIBUTIONS
               greater_than_total ||= true
               count_prefix = ">="
             end
 
             pretty_type = CONTRIBUTION_TYPES.fetch(type)
-            "#{count_prefix}#{Utils.pluralize("time", type_count, include_count: true)} (#{pretty_type})"
+            times = Utils.pluralize("time", type_count, include_count: true)
+            "#{count_prefix}#{times} (#{pretty_type})"
           end
           qualifying_total = contribution_count(
             grand_total.slice(*QUALIFYING_CONTRIBUTION_TYPES),
@@ -299,7 +303,9 @@ module Homebrew
         user_names = T.let({}, T::Hash[String, String])
         lead_maintainers = T.let({}, T::Hash[String, T::Boolean])
         Utils.safe_popen_read(Utils::Git.git, "-C", brew_path, "show", "#{period_end_ref}:README.md")
-             .dup.force_encoding(Encoding::UTF_8).each_line do |line|
+             .dup
+             .force_encoding(Encoding::UTF_8)
+             .each_line do |line|
           lead = line.start_with?("Homebrew's [Lead Maintainers]")
           next if !lead &&
                   !line.start_with?("Homebrew's other Maintainers") &&
@@ -445,7 +451,8 @@ module Homebrew
                                                from:, to:, skip_reviews_if_lead_met:, progress:)
         end
 
-        merged_range = "#{from}..#{Date.iso8601(to).prev_day.iso8601}"
+        range_end = Date.iso8601(to).prev_day.iso8601
+        merged_range = "#{from}..#{range_end}"
         users.each_key do |user|
           github_user = github_users.fetch(user)
           next if github_user.nil?
@@ -507,9 +514,9 @@ module Homebrew
         review_users = github_users.filter_map { |user, github_user| [user, github_user] if github_user }
         review_users.reject! { |user, _| lead_activity_met?(results.fetch(user)) } if skip_reviews_if_lead_met
         approved_to = Date.iso8601(to).prev_day.iso8601
-        review_users.each_with_index do |(user, github_user), index|
+        review_users.each.with_index(1) do |(user, github_user), index|
           if progress
-            $stderr.puts "Querying approved-review search for #{user} (#{index + 1}/#{review_users.length})..."
+            $stderr.puts "Querying approved-review search for #{user} (#{index}/#{review_users.length})..."
           end
           approved_reviews = cached_github_request(Array, "approved", organisation, github_user, from, approved_to,
                                                    to:) do
@@ -575,10 +582,13 @@ module Homebrew
             numbers.each_slice(MAX_PR_AUTHOR_BATCH) do |batch|
               authors = cached_github_request(Hash, "pull-request-authors", repository, *batch, to:) do
                 owner, name = repository.split("/", 2)
+                pull_request_fields = batch.map do |number|
+                  "pr#{number}: pullRequest(number: #{number}) { author { login } }"
+                end.join(" ")
                 query = <<~GRAPHQL
                   query($owner: String!, $name: String!) {
                     repository(owner: $owner, name: $name) {
-                      #{batch.map { |number| "pr#{number}: pullRequest(number: #{number}) { author { login } }" }.join(" ")}
+                      #{pull_request_fields}
                     }
                   }
                 GRAPHQL
@@ -639,10 +649,11 @@ module Homebrew
               matches = cached_github_request(Hash, "merged-review-candidates", repository, github_user, from, to,
                                               page.to_s, to:) do
                 uri = GitHub.url_to("search", "issues")
-                uri.query = "#{GitHub.search_query_string("-author:#{github_user}", is: "merged", repo: repository,
+                range_end = Date.iso8601(to).prev_day.iso8601
+                search_query = GitHub.search_query_string("-author:#{github_user}", is: "merged", repo: repository,
                                                          reviewed_by: github_user,
-                                                         merged: "#{from}..#{Date.iso8601(to).prev_day.iso8601}")}" \
-                            "&page=#{page}"
+                                                         merged: "#{from}..#{range_end}")
+                uri.query = "#{search_query}&page=#{page}"
                 GitHub::API.open_rest(uri)
               end
               matches.fetch("items").each do |pull_request|
@@ -825,7 +836,11 @@ module Homebrew
                 counts[user] = counts.fetch(user, 0) + 1
               end
             end
-            (relevant_issues.length == nodes.length) ? issues.fetch("pageInfo") : { "hasNextPage" => false }
+            if relevant_issues.length == nodes.length
+              issues.fetch("pageInfo")
+            else
+              { "hasNextPage" => false }
+            end
           end
           counts
         end
@@ -976,16 +991,17 @@ module Homebrew
         end
 
         # Map commit SHAs to their respective authors based on identity resolution
-        commit_authors = T.let(records.to_h do |fields|
+        commit_authors = records.to_h do |fields|
           [fields.fetch(:commit_hash), user_for_git_identity(
             fields.fetch(:author_name), fields.fetch(:author_email), identity_users
           )]
-        end, T::Hash[String, T.nilable(String)])
+        end
 
         # Coauthor contributions with "Co-authored-by" in body
         records.each do |fields|
           coauthors = fields.fetch(:commit_message)
-                            .scan(/^Co-authored-by:\s*(.*?)\s*<([^>]+)>/i).filter_map do |match|
+                            .scan(/^Co-authored-by:\s*(.*?)\s*<([^>]+)>/i)
+                            .filter_map do |match|
             next unless match.is_a?(Array)
 
             user_for_git_identity(match.fetch(0), match.fetch(1), identity_users)
@@ -1262,19 +1278,6 @@ module Homebrew
         return [nil, nil] if tap.user == "Homebrew" && DEPRECATED_OFFICIAL_TAPS.include?(tap.repository)
 
         [tap.path, tap]
-      end
-
-      sig { params(from: T.nilable(String), to: T.nilable(String)).returns(String) }
-      def time_period(from:, to:)
-        if from && to
-          "between #{from} and #{to}"
-        elsif from
-          "after #{from}"
-        elsif to
-          "before #{to}"
-        else
-          "in all time"
-        end
       end
 
       sig { params(results: T::Hash[String, T::Hash[Symbol, Integer]]).returns(T::Hash[Symbol, Integer]) }

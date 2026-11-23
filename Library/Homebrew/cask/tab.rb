@@ -17,7 +17,8 @@ module Cask
     sig {
       params(uninstall_flight_blocks: T.nilable(T::Boolean),
              uninstall_artifacts:     T.nilable(T::Array[T.untyped]),
-             rest:                    T.untyped).void
+             # Listing `AbstractTab#initialize`'s keywords here would silently drop any it gains later.
+             rest:                    T.untyped).void # rubocop:disable Homebrew/NoUntypedKeywordRest
     }
     def initialize(uninstall_flight_blocks: nil, uninstall_artifacts: nil, **rest)
       @uninstall_flight_blocks = uninstall_flight_blocks
@@ -75,9 +76,10 @@ module Cask
     sig { params(cask: Cask).returns(T::Hash[Symbol, T::Array[T::Hash[String, T.untyped]]]) }
     def self.runtime_deps_hash(cask)
       cask_and_formula_dep_graph = ::Utils::TopologicalHash.graph_package_dependencies(cask)
-      cask_deps, formula_deps = T.cast(cask_and_formula_dep_graph.values.flatten.uniq.partition do |dep|
+      dependencies_by_type = cask_and_formula_dep_graph.values.flatten.uniq.partition do |dep|
         dep.is_a?(Cask)
-      end, [T::Array[Cask], T::Array[Formula]])
+      end
+      cask_deps, formula_deps = T.cast(dependencies_by_type, [T::Array[Cask], T::Array[Formula]])
 
       runtime_deps = {}
 

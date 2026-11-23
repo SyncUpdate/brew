@@ -159,7 +159,8 @@ module Homebrew
         def package_outdated?(name, with: nil, source: nil)
           command_output(package_manager_executable!,
                          args: ["remote-ls", "--app", "--updates", "--columns=application"])
-            .lines(chomp: true).include?(name)
+            .lines(chomp: true)
+            .include?(name)
         end
 
         sig { override.params(package: Object).returns(String) }
@@ -286,7 +287,7 @@ module Homebrew
           return false unless Bundle.system(flatpak, "install", "-y", "--system", actual_remote, name, verbose:)
 
           package = { name:, remote: actual_remote, remote_url: url }
-          packages_with_remotes = T.let(@packages_with_remotes || [], T::Array[Package])
+          packages_with_remotes = @packages_with_remotes || []
           packages_with_remotes << package
           @packages_with_remotes = packages_with_remotes
           @installed_packages = packages_with_remotes.dup
@@ -305,7 +306,7 @@ module Homebrew
           _application, actual_remote = installed_line&.split("\t")
           actual_remote ||= "#{name}-origin"
           package = { name:, remote: actual_remote, remote_url: nil }
-          packages_with_remotes = T.let(@packages_with_remotes || [], T::Array[Package])
+          packages_with_remotes = @packages_with_remotes || []
           packages_with_remotes << package
           @packages_with_remotes = packages_with_remotes
           @installed_packages = packages_with_remotes.dup
@@ -436,8 +437,12 @@ module Homebrew
         else
           package
         end
-        "#{self.class.check_label} #{name} needs to be " \
-          "#{(!no_upgrade && installed_and_up_to_date?(package, no_upgrade: true)) ? "upgraded" : "installed"}."
+        action = if !no_upgrade && installed_and_up_to_date?(package, no_upgrade: true)
+          "upgraded"
+        else
+          "installed"
+        end
+        "#{self.class.check_label} #{name} needs to be #{action}."
       end
 
       sig { override.params(package: Object, no_upgrade: T::Boolean).returns(T::Boolean) }

@@ -9,6 +9,8 @@ module Homebrew
   class ResourceAuditor
     include Utils::Curl
 
+    @curl_deps = T.let(nil, T.nilable(T::Array[String]))
+
     sig { returns(T.nilable(String)) }
     attr_reader :name
 
@@ -98,7 +100,7 @@ module Homebrew
               GitHubPackages::URL_REGEX.match?(formula_owner.bottle_specification.root_url)))
         problem "`version #{version}` does not match #{GitHubPackages::VALID_OCI_TAG_REGEX.source}"
       elsif !version_text.detected_from_url?
-        version_url = Version.detect(url!, **specs)
+        version_url = Version.detect(url!, tag: specs[:tag])
         if version_url.to_s == version_text.to_s && version.instance_of?(Version)
           problem "`version #{version_text}` is redundant with version scanned from URL"
         end
@@ -160,11 +162,11 @@ module Homebrew
 
     sig { returns(T::Array[String]) }
     def self.curl_deps
-      @curl_deps ||= T.let(begin
+      @curl_deps ||= begin
         ["curl"] + ::Formula["curl"].recursive_dependencies.map(&:name).uniq
       rescue FormulaUnavailableError
         []
-      end, T.nilable(T::Array[String]))
+      end
     end
 
     sig { void }
@@ -293,7 +295,9 @@ module Homebrew
       return unless Utils::Git.remote_exists?(url.to_s)
 
       detected_branch = Utils.popen_read("git", "ls-remote", "--symref", "--end-of-options", url.to_s, "HEAD")
-                             .match(%r{ref: refs/heads/(.*?)\s+HEAD})&.to_a&.second
+                             .match(%r{ref: refs/heads/(.*?)\s+HEAD})
+                             &.to_a
+                             &.second
 
       if specs[:branch].blank?
         problem "Git `head` URL must specify a branch name"

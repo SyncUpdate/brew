@@ -20,6 +20,8 @@ module Homebrew
       class ExtractPlist
         extend Strategic
 
+        @cask_url_kw_params = T.let(nil, T.nilable(T::Array[Symbol]))
+
         # A priority of zero causes livecheck to skip the strategy. We do this
         # for {ExtractPlist} so we can selectively apply it when appropriate.
         PRIORITY = 0
@@ -76,7 +78,7 @@ module Homebrew
         }
         def self.versions_from_content(items, regex = nil, &block)
           if block
-            block_return_value = regex.present? ? yield(items, regex) : yield(items)
+            block_return_value = yield(items, *Array(regex))
             return Strategy.handle_block_return(block_return_value)
           end
 
@@ -103,11 +105,11 @@ module Homebrew
         }
         def self.cask_with_url(cask, url, url_options)
           # Collect the `Cask::URL` initializer keyword parameter symbols
-          @cask_url_kw_params ||= T.let(
-            (T::Utils.signature_for_method(Cask::URL.instance_method(:initialize))&.parameters ||
-             Cask::URL.instance_method(:initialize).parameters).filter_map { |type, sym| sym if type == :key },
-            T.nilable(T::Array[Symbol]),
-          )
+          @cask_url_kw_params ||= begin
+            initializer = Cask::URL.instance_method(:initialize)
+            parameters = T::Utils.signature_for_method(initializer)&.parameters || initializer.parameters
+            parameters.filter_map { |type, sym| sym if type == :key }
+          end
 
           # Collect `livecheck` block URL options supported by `Cask::URL`
           unused_opts = []

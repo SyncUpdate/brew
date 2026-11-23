@@ -69,6 +69,8 @@ module Cask
       new_cask: nil, fix: nil, only: [], except: []
     )
       # `new_cask` implies `online`, `strict` and `signing`
+      @tmpdir = T.let(nil, T.nilable(Pathname))
+
       online = new_cask if online.nil?
       strict = new_cask if strict.nil?
       signing = new_cask if signing.nil?
@@ -207,7 +209,7 @@ module Cask
 
       return if artifacts.empty?
 
-      @tmpdir ||= T.let(Pathname(Dir.mktmpdir("cask-audit", HOMEBREW_TEMP)), T.nilable(Pathname))
+      @tmpdir ||= Pathname(Dir.mktmpdir("cask-audit", HOMEBREW_TEMP))
 
       # Clean up tmp dir when @tmpdir object is destroyed
       ObjectSpace.define_finalizer(
@@ -743,9 +745,10 @@ module Cask
           next true if gatekeeper_failure_expected
           next true if is_in_skiplist
 
+          signing_output = result.merged_output.gsub(%r{\r?Progress: \d+/\d+\n?}, "")
           signing_failure_message = <<~EOS
             Signature verification failed for #{path.relative_path_from(tmpdir)}:
-            #{result.merged_output.gsub(%r{\r?Progress: \d+/\d+\n?}, "")}
+            #{signing_output}
           EOS
 
           if cask.tap&.official?
@@ -941,7 +944,11 @@ module Cask
           throttle_days ||= referenced_cask.livecheck.throttle_days
         end
 
-        latest_version = (throttle || throttle_days) ? result[:latest_throttled] : result[:latest]
+        latest_version = if throttle || throttle_days
+          result[:latest_throttled]
+        else
+          result[:latest]
+        end
       end
 
       if latest_version && (cask.version.to_s == latest_version.to_s)
@@ -979,7 +986,8 @@ module Cask
       if depends_on_min_os && depends_on_min_os > HOMEBREW_MACOS_OLDEST_ALLOWED
         debug_messages << "from depends_on stanza: #{depends_on_min_os.to_sym}"
       end
-      odebug "Declared minimum macOS: #{cask_min_os&.to_sym} (#{debug_messages.join(" | ").presence || "default"})"
+      minimum_os_source = debug_messages.join(" | ").presence || "default"
+      odebug "Declared minimum macOS: #{cask_min_os&.to_sym} (#{minimum_os_source})"
       return if cask_min_os&.to_sym == app_min_os.to_sym
       # ignore declared minimum OS < 11.x when auditing as ARM a cask with arch-specific artifacts
       return if OnSystem.arch_condition_met?(:arm) &&
@@ -998,7 +1006,11 @@ module Cask
       else
         "no minimum macOS version"
       end
-      source = (bundle_min_os.to_s > sparkle_min_os.to_s) ? "Artifact" : "Upstream"
+      source = if bundle_min_os.to_s > sparkle_min_os.to_s
+        "Artifact"
+      else
+        "Upstream"
+      end
       message = "#{source} defined #{app_min_os.to_sym.inspect} as the minimum macOS version " \
                 "but the cask declared #{min_os_definition}"
 

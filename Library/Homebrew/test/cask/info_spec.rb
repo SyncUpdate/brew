@@ -15,6 +15,14 @@ RSpec.describe Cask::Info, :cask do
     "#{Tty.bold}#{string}#{Tty.reset}"
   end
 
+  def uninstalled_title(name)
+    oh1_title uninstalled(name)
+  end
+
+  def installed_macos_requirement
+    requirements_section(installed("macOS >= 11"))
+  end
+
   def cannot_install(string)
     "#{Tty.bold}#{string} #{Formatter.error("⊘")}#{Tty.reset}"
   end
@@ -40,7 +48,11 @@ RSpec.describe Cask::Info, :cask do
     allow(Cask::CaskLoader).to receive(:load).and_call_original
     allow(Cask::CaskLoader).to receive(:load).with(cask_name).and_return(cask)
     allow(Cask::Info).to receive(:installation_info).and_wrap_original do |method, arg, **kwargs|
-      (arg.token == cask_name) ? "Installed" : method.call(arg, **kwargs)
+      if arg.token == cask_name
+        "Installed"
+      else
+        method.call(arg, **kwargs)
+      end
     end
     (Cask::Caskroom.path/cask_name).mkpath
   end
@@ -58,12 +70,12 @@ RSpec.describe Cask::Info, :cask do
     expect do
       described_class.info(Cask::CaskLoader.load("local-transmission"), args:)
     end.to output(<<~EOS).to_stdout
-      #{oh1_title uninstalled("local-transmission")} (Transmission): 2.61
+      #{uninstalled_title("local-transmission")} (Transmission): 2.61
       BitTorrent client
       https://transmissionbt.com/
       Not installed
       From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/l/local-transmission.rb
-      #{requirements_section(installed("macOS >= 11"))}
+      #{installed_macos_requirement}
       ==> Apps
       Transmission.app
     EOS
@@ -75,14 +87,14 @@ RSpec.describe Cask::Info, :cask do
     expect do
       described_class.info(Cask::CaskLoader.load("with-depends-on-cask-multiple"), args:)
     end.to output(<<~EOS).to_stdout
-      #{oh1_title uninstalled("with-depends-on-cask-multiple")}: 1.2.3
+      #{uninstalled_title("with-depends-on-cask-multiple")}: 1.2.3
       #{Formatter.url("https://brew.sh/with-depends-on-cask-multiple")}
       Not installed
       From: #{Formatter.url("https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/with-depends-on-cask-multiple.rb")}
       #{ohai_title "Dependencies"}
       Required (2): local-caffeine (cask), local-transmission-zip (cask)
       Recursive Runtime (2): 0 installed #{Formatter.success("✔")}, 2 missing #{Formatter.error("✘")}
-      #{requirements_section(installed("macOS >= 11"))}
+      #{installed_macos_requirement}
       #{ohai_title "Apps"}
       Caffeine.app
     EOS
@@ -91,20 +103,24 @@ RSpec.describe Cask::Info, :cask do
   it "marks a disabled Cask in the title" do
     allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
 
+    disabled_name = Regexp.escape(cannot_install("livecheck-disabled"))
+    disabled_label = Regexp.escape(Formatter.error("(disabled)"))
     expect do
       described_class.info(Cask::CaskLoader.from_path(cask_path("livecheck/livecheck-disabled")), args:)
     end.to output(
-      /#{Regexp.escape(cannot_install("livecheck-disabled"))} #{Regexp.escape(Formatter.error("(disabled)"))}/,
+      /#{disabled_name} #{disabled_label}/,
     ).to_stdout
   end
 
   it "marks a deprecated Cask in the title" do
     allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
 
+    deprecated_name = Regexp.escape(uninstalled("livecheck-deprecated"))
+    deprecated_label = Regexp.escape(Formatter.warning("(deprecated)"))
     expect do
       described_class.info(Cask::CaskLoader.from_path(cask_path("livecheck/livecheck-deprecated")), args:)
     end.to output(
-      /#{Regexp.escape(uninstalled("livecheck-deprecated"))} #{Regexp.escape(Formatter.warning("(deprecated)"))}/,
+      /#{deprecated_name} #{deprecated_label}/,
     ).to_stdout
   end
 
@@ -160,7 +176,7 @@ RSpec.describe Cask::Info, :cask do
       From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/l/local-transmission.rb
       ==> Installed Versions
       local-transmission #{Formatter.success("↑")} 2.60 → 2.61 (0B)
-      #{requirements_section(installed("macOS >= 11"))}
+      #{installed_macos_requirement}
       ==> Apps
       Transmission.app
     EOS
@@ -175,6 +191,7 @@ RSpec.describe Cask::Info, :cask do
     before do
       installed_path.mkpath
       allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
+      allow(cask).to receive(:incompatible?).and_return(false)
       allow(installed_cask).to receive_messages(installed?: true, installed_version: "3.2.0-RC3", outdated?: false)
       allow(Cask::Caskroom).to receive(:casks).and_return([installed_cask])
       allow(Cask::Tab).to receive(:for_cask).with(installed_cask).and_return(
@@ -190,7 +207,7 @@ RSpec.describe Cask::Info, :cask do
 
     it "shows a concise sibling section without --verbose" do
       expected_output = <<~EOS
-        #{oh1_title uninstalled("example")}: 3.0
+        #{uninstalled_title("example")}: 3.0
         Not installed
         ==> Installed Versions
         #{installed("example@dev")} 3.2.0-RC3 (844MB)
@@ -202,13 +219,14 @@ RSpec.describe Cask::Info, :cask do
 
     it "shows the sibling path and receipt with --verbose" do
       verbose_args = Homebrew::Cmd::Info.new(["--verbose"]).args
+      installed_at = Time.at(time).strftime("%Y-%m-%d at %H:%M:%S")
       expected_output = <<~EOS
-        #{oh1_title uninstalled("example")}: 3.0
+        #{uninstalled_title("example")}: 3.0
         Not installed
         ==> Installed Versions
         #{installed("example@dev")} 3.2.0-RC3 (844MB)
           Caskroom: #{installed_path}
-          Installed using the internal formulae.brew.sh API on #{Time.at(time).strftime("%Y-%m-%d at %H:%M:%S")}
+          Installed using the internal formulae.brew.sh API on #{installed_at}
       EOS
       expect { described_class.info(cask, args: verbose_args) }
         .to output(expected_output).to_stdout
@@ -219,7 +237,7 @@ RSpec.describe Cask::Info, :cask do
       allow(installed_cask).to receive_messages(outdated?: true, version: Cask::DSL::Version.new("4.0"))
 
       expect { described_class.info(cask, args:) }.to output(<<~EOS).to_stdout
-        #{oh1_title uninstalled("example")}: 3.0
+        #{uninstalled_title("example")}: 3.0
         Not installed
         ==> Installed Versions
         example@dev #{Formatter.success("↑")} 3.2.0-RC3 → 4.0 (844MB)
@@ -231,7 +249,7 @@ RSpec.describe Cask::Info, :cask do
       allow(installed_cask).to receive(:caskroom_path).and_return(missing_path.parent)
 
       expect { described_class.info(cask, args:) }.to output(<<~EOS).to_stdout
-        #{oh1_title uninstalled("example")}: 3.0
+        #{uninstalled_title("example")}: 3.0
         Not installed
         ==> Installed Versions
         #{installed("example@dev")} 3.2.0-RC3
@@ -308,13 +326,14 @@ RSpec.describe Cask::Info, :cask do
 
     it "shows the missing path once and the receipt with --verbose" do
       verbose_args = Homebrew::Cmd::Info.new(["--verbose"]).args
+      installed_at = Time.at(time).strftime("%Y-%m-%d at %H:%M:%S")
       expect { described_class.info(cask, args: verbose_args) }.to output(<<~EOS).to_stdout
         ==> example: 1.0
         Installed (as dependency)
         ==> Installed Versions
         example 1.0
           #{installed_path} (does not exist)
-          Installed using the formulae.brew.sh API on #{Time.at(time).strftime("%Y-%m-%d at %H:%M:%S")}
+          Installed using the formulae.brew.sh API on #{installed_at}
       EOS
     end
   end
@@ -439,14 +458,14 @@ RSpec.describe Cask::Info, :cask do
     expect do
       described_class.info(Cask::CaskLoader.load("with-depends-on-cask-multiple"), args:)
     end.to output(<<~EOS).to_stdout
-      #{oh1_title uninstalled("with-depends-on-cask-multiple")}: 1.2.3
+      #{uninstalled_title("with-depends-on-cask-multiple")}: 1.2.3
       #{Formatter.url("https://brew.sh/with-depends-on-cask-multiple")}
       Not installed
       From: #{Formatter.url("https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/with-depends-on-cask-multiple.rb")}
       #{ohai_title "Dependencies"}
       Required (2): local-caffeine (cask), #{installed("local-transmission-zip (cask)")}
       Recursive Runtime (2): 1 installed #{Formatter.success("✔")}, 1 missing #{Formatter.error("✘")}
-      #{requirements_section(installed("macOS >= 11"))}
+      #{installed_macos_requirement}
       #{ohai_title "Apps"}
       Caffeine.app
     EOS
@@ -472,7 +491,7 @@ RSpec.describe Cask::Info, :cask do
     expect do
       described_class.info(Cask::CaskLoader.load("with-depends-on-everything"), args:)
     end.to output(<<~EOS).to_stdout
-      #{oh1_title uninstalled("with-depends-on-everything")}: 1.2.3
+      #{uninstalled_title("with-depends-on-everything")}: 1.2.3
       #{Formatter.url("https://brew.sh/with-depends-on-everything")}
       Not installed
       From: #{Formatter.url("https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/with-depends-on-everything.rb")}
@@ -493,17 +512,17 @@ RSpec.describe Cask::Info, :cask do
       .to output(/Required: .*#{unsatisfied_arch} architecture.*✘/).to_stdout
   end
 
-  it "prints auto_updates if the Cask has `auto_updates true`" do
+  it "prints auto updates if the Cask has `auto_updates true`" do
     allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
 
     expect do
       described_class.info(Cask::CaskLoader.load("with-auto-updates"), args:)
     end.to output(<<~EOS).to_stdout
-      #{oh1_title uninstalled("with-auto-updates")} (AutoUpdates): 1.0 (auto_updates)
+      #{uninstalled_title("with-auto-updates")} (AutoUpdates): 1.0 (auto updates)
       https://brew.sh/autoupdates
       Not installed
       From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/with-auto-updates.rb
-      #{requirements_section(installed("macOS >= 11"))}
+      #{installed_macos_requirement}
       ==> Apps
       AutoUpdates.app
     EOS
@@ -531,11 +550,11 @@ RSpec.describe Cask::Info, :cask do
     expect do
       described_class.info(Cask::CaskLoader.load("with-caveats"), args:)
     end.to output(<<~EOS).to_stdout
-      #{oh1_title uninstalled("with-caveats")}: 1.2.3
+      #{uninstalled_title("with-caveats")}: 1.2.3
       https://brew.sh/
       Not installed
       From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/with-caveats.rb
-      #{requirements_section(installed("macOS >= 11"))}
+      #{installed_macos_requirement}
       ==> Apps
       Caffeine.app
       ==> Caveats
@@ -557,11 +576,11 @@ RSpec.describe Cask::Info, :cask do
     expect do
       described_class.info(Cask::CaskLoader.load("with-conditional-caveats"), args:)
     end.to output(<<~EOS).to_stdout
-      #{oh1_title uninstalled("with-conditional-caveats")}: 1.2.3
+      #{uninstalled_title("with-conditional-caveats")}: 1.2.3
       https://brew.sh/
       Not installed
       From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/with-conditional-caveats.rb
-      #{requirements_section(installed("macOS >= 11"))}
+      #{installed_macos_requirement}
       ==> Apps
       Caffeine.app
     EOS
@@ -573,11 +592,11 @@ RSpec.describe Cask::Info, :cask do
     expect do
       described_class.info(Cask::CaskLoader.load("with-languages"), args:)
     end.to output(<<~EOS).to_stdout
-      #{oh1_title uninstalled("with-languages")} (Caffeine): 1.2.3
+      #{uninstalled_title("with-languages")} (Caffeine): 1.2.3
       https://brew.sh/
       Not installed
       From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/with-languages.rb
-      #{requirements_section(installed("macOS >= 11"))}
+      #{installed_macos_requirement}
       ==> Languages
       zh, en-US
       ==> Apps
@@ -591,11 +610,11 @@ RSpec.describe Cask::Info, :cask do
     expect do
       described_class.info(Cask::CaskLoader.load("without-languages"), args:)
     end.to output(<<~EOS).to_stdout
-      #{oh1_title uninstalled("without-languages")}: 1.2.3
+      #{uninstalled_title("without-languages")}: 1.2.3
       https://brew.sh/
       Not installed
       From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/without-languages.rb
-      #{requirements_section(installed("macOS >= 11"))}
+      #{installed_macos_requirement}
       ==> Apps
       Caffeine.app
     EOS
@@ -619,6 +638,7 @@ RSpec.describe Cask::Info, :cask do
       allow(Cask::Tab).to receive(:for_cask).with(cask).and_return(tab)
       allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
 
+      installed_at = Time.at(time).strftime("%Y-%m-%d at %H:%M:%S")
       expect do
         described_class.info(cask, args: verbose_args)
       end.to output(<<~EOS).to_stdout
@@ -630,8 +650,8 @@ RSpec.describe Cask::Info, :cask do
         ==> Installed Versions
         #{installed("local-transmission")} 2.61 (0B)
           Caskroom: #{caskroom}/2.61
-          Installed using the formulae.brew.sh API on #{Time.at(time).strftime("%Y-%m-%d at %H:%M:%S")}
-        #{requirements_section(installed("macOS >= 11"))}
+          Installed using the formulae.brew.sh API on #{installed_at}
+        #{installed_macos_requirement}
         ==> Apps
         Transmission.app
       EOS
@@ -656,6 +676,7 @@ RSpec.describe Cask::Info, :cask do
       allow(Cask::Tab).to receive(:for_cask).with(cask).and_return(tab)
       allow_any_instance_of(StringIO).to receive(:tty?).and_return(true)
 
+      installed_at = Time.at(time).strftime("%Y-%m-%d at %H:%M:%S")
       expect do
         described_class.info(cask, args: verbose_args)
       end.to output(<<~EOS).to_stdout
@@ -667,8 +688,8 @@ RSpec.describe Cask::Info, :cask do
         ==> Installed Versions
         #{installed("local-transmission")} 2.61 (0B)
           Caskroom: #{caskroom}/2.61
-          Installed using the internal formulae.brew.sh API on #{Time.at(time).strftime("%Y-%m-%d at %H:%M:%S")}
-        #{requirements_section(installed("macOS >= 11"))}
+          Installed using the internal formulae.brew.sh API on #{installed_at}
+        #{installed_macos_requirement}
         ==> Apps
         Transmission.app
       EOS
@@ -681,7 +702,7 @@ RSpec.describe Cask::Info, :cask do
     expect do
       described_class.info(Cask::CaskLoader.load("with-non-executable-binary"), args:)
     end.to output(<<~EOS).to_stdout
-      #{oh1_title uninstalled("with-non-executable-binary")}: 1.2.3
+      #{uninstalled_title("with-non-executable-binary")}: 1.2.3
       https://brew.sh/with-binary
       Not installed
       From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/with-non-executable-binary.rb
@@ -695,7 +716,7 @@ RSpec.describe Cask::Info, :cask do
     expect do
       described_class.info(Cask::CaskLoader.load("with-non-executable-binary"), args: verbose_args)
     end.to output(<<~EOS).to_stdout
-      #{oh1_title uninstalled("with-non-executable-binary")}: 1.2.3
+      #{uninstalled_title("with-non-executable-binary")}: 1.2.3
       https://brew.sh/with-binary
       Not installed
       From: https://github.com/Homebrew/homebrew-cask/blob/HEAD/Casks/w/with-non-executable-binary.rb

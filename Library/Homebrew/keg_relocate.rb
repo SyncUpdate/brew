@@ -306,10 +306,8 @@ class Keg
   ELF64_LITTLE_ENDIAN_MAGIC = "\x7fELF\x02\x01"
   MOVABS_REX_PREFIXES = [0x48, 0x49].freeze
   MOVABS_REGISTER_OPCODES = T.let(0xb8..0xbf, T::Range[Integer])
-  MOVABS_INSTRUCTION_PREFIXES = T.let(
-    MOVABS_REX_PREFIXES.product(MOVABS_REGISTER_OPCODES.to_a).map { it.pack("C*") }.freeze,
-    T::Array[String],
-  )
+  movabs_instruction_prefixes = MOVABS_REX_PREFIXES.product(MOVABS_REGISTER_OPCODES.to_a).map { it.pack("C*") }
+  MOVABS_INSTRUCTION_PREFIXES = T.let(movabs_instruction_prefixes.freeze, T::Array[String])
   MOVABS_INSTRUCTION_REGEX = /#{Regexp.union(MOVABS_INSTRUCTION_PREFIXES)}/n
   MOVABS_OPERAND_BYTESIZE = 8
   MOVABS_MAX_GAP_BYTESIZE = 32
@@ -342,7 +340,8 @@ class Keg
 
     # Older bottle metadata misses paths split across movabs operands.
     prefix_patterns = MOVABS_INSTRUCTION_PREFIXES.map do |instruction_prefix|
-      "#{instruction_prefix}#{old_prefix.b.byteslice(0, MOVABS_OPERAND_BYTESIZE)}"
+      prefix_bytes = old_prefix.b.byteslice(0, MOVABS_OPERAND_BYTESIZE)
+      "#{instruction_prefix}#{prefix_bytes}"
     end
     prefix_patterns << old_prefix.b if files.nil?
 
@@ -436,11 +435,13 @@ class Keg
     # Allow intervening stores and loads, but never skip another movabs.
     pattern = "#{old_prefix}/".b.bytes.each_slice(MOVABS_OPERAND_BYTESIZE).map do |bytes|
       chunk = bytes.pack("C*")
-      "#{MOVABS_INSTRUCTION_REGEX}(#{Regexp.escape(chunk)}).{#{MOVABS_OPERAND_BYTESIZE - chunk.bytesize}}"
+      remaining_bytes = MOVABS_OPERAND_BYTESIZE - chunk.bytesize
+      "#{MOVABS_INSTRUCTION_REGEX}(#{Regexp.escape(chunk)}).{#{remaining_bytes}}"
     end
     pattern = Regexp.new(pattern.join("(?:(?!#{MOVABS_INSTRUCTION_REGEX}).){0,#{MOVABS_MAX_GAP_BYTESIZE}}?"),
                          Regexp::MULTILINE | Regexp::NOENCODING)
-    replacement = "#{new_prefix.b.ljust(old_prefix.bytesize, "/")}/"
+    padded_prefix = new_prefix.b.ljust(old_prefix.bytesize, "/")
+    replacement = "#{padded_prefix}/"
     elf.sections.each do |section|
       next if section.header.sh_flags.to_i.nobits?(ELFTools::Constants::SHF::SHF_EXECINSTR)
 
@@ -468,7 +469,8 @@ class Keg
   sig { params(string: String, old_prefix: String, new_prefix: String).returns(String) }
   def self.replace_prefix_preserving_length(string, old_prefix, new_prefix)
     padded = string.gsub(%r{#{Regexp.escape(old_prefix)}(?=[:/]|\z)}) do
-      "#{new_prefix}#{"/" * (old_prefix.bytesize - new_prefix.bytesize)}"
+      padding = "/" * (old_prefix.bytesize - new_prefix.bytesize)
+      "#{new_prefix}#{padding}"
     end
     return padded unless padded.include?(old_prefix)
 
@@ -665,7 +667,7 @@ class Keg
       return
     end
 
-    Utils.popen_read("strings", *strings_encoding_args, "-t", "x", "-", file.to_s) do |io|
+    Utils.popen_read("strings", args: [*strings_encoding_args, "-t", "x", "-", file.to_s]) do |io|
       until io.eof?
         line = io.readline.chomp
         offset, match = line.split(" ", 2)
@@ -701,7 +703,8 @@ class Keg
   sig { params(file: Pathname, string: String).returns(T.nilable(T::Array[[String, String]])) }
   def self.elf_relocation_strings(file, string)
     require "os/linux/elf"
-    return unless T.cast(Pathname.new(file.to_s).extend(ELFShim), ELFShim).elf?
+    elf_path = Pathname.new(file.to_s)
+    return unless T.cast(elf_path.extend(ELFShim), ELFShim).elf?
 
     require "elftools"
     require "strscan"

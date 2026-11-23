@@ -97,7 +97,7 @@ class Pathname
   # Only appends to a file that is already created.
   #
   # @api public
-  sig { params(content: String, open_args: T.untyped).void }
+  sig { params(content: String, open_args: T.anything).void }
   def append_lines(content, **open_args)
     raise "Cannot append file that doesn't exist: #{self}" unless exist?
 
@@ -358,9 +358,10 @@ class Pathname
   }
   def write_jar_script(target_jar, script_name, java_opts = "", java_version: nil)
     mkpath
+    java_home = Language::Java.overridable_java_home_env(java_version)[:JAVA_HOME]
     (self/script_name).write <<~EOS
       #!/bin/bash
-      export JAVA_HOME="#{Language::Java.overridable_java_home_env(java_version)[:JAVA_HOME]}"
+      export JAVA_HOME="#{java_home}"
       exec "${JAVA_HOME}/bin/java" #{java_opts} -jar "#{target_jar}" "$@"
     EOS
   end

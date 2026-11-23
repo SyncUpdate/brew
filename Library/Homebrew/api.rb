@@ -24,7 +24,7 @@ module Homebrew
 
     HOMEBREW_CACHE_API = T.let((HOMEBREW_CACHE/"api").freeze, Pathname)
     HOMEBREW_CACHE_API_SOURCE = T.let((HOMEBREW_CACHE/"api-source").freeze, Pathname)
-    DEFAULT_API_STALE_SECONDS = T.let(7 * 24 * 60 * 60, Integer) # 7 days
+    DEFAULT_API_STALE_SECONDS = 604_800 # 7 days
     # Revalidate unsigned per-resource responses hourly to limit how long a
     # poisoned cache can persist without requiring a request for every command.
     UNSIGNED_API_STALE_SECONDS = T.let(60 * 60, Integer)
@@ -58,9 +58,17 @@ module Homebrew
       default_url = "#{HOMEBREW_API_DEFAULT_DOMAIN}/#{endpoint}"
       primary_url = url
 
-      if Homebrew.running_as_root_but_not_owned_by_root? &&
-         (!target.exist? || target.empty?)
-        odie "Need to download #{url} but cannot as root! Run `brew update` without `sudo` first then try again."
+      read_only_cache = Homebrew.running_as_root_but_not_owned_by_root?
+      if read_only_cache && (!target.exist? || target.empty?)
+        require "shellwords"
+
+        brew = HOMEBREW_BREW_FILE.to_s.shellescape
+        odie <<~EOS
+          Root cannot download the missing API cache file #{target.to_s.dump}.
+          For system services, populate the Homebrew owner's private cache and retry.
+            #{brew} as-brew-user info
+            sudo HOMEBREW_CACHE="$(#{brew} as-brew-user --cache)" #{brew} services ...
+        EOS
       end
 
       curl_args = [
@@ -164,7 +172,11 @@ module Homebrew
         # Touching after a failed download would mark a stale cache as fresh and
         # cause `skip_download?` to short-circuit subsequent retries until cleanup.
         if download_succeeded
-          mtime = insecure_download ? Time.new(1970, 1, 1) : Time.now
+          mtime = if insecure_download
+            Time.new(1970, 1, 1)
+          else
+            Time.now
+          end
           FileUtils.touch(target, mtime:)
         end
 
@@ -179,6 +191,8 @@ module Homebrew
           [JSON.parse(File.read(target, encoding: Encoding::UTF_8), freeze: true), false]
         end
       rescue JSON::ParserError
+        odie "Cannot refresh invalid API cache file #{target.to_s.dump} as root." if read_only_cache
+
         target.unlink
         retry_count += 1
         skip_download = false
@@ -190,7 +204,7 @@ module Homebrew
       if endpoint.end_with?(".jws.json") && !from_payload_cache
         success, data = verify_and_parse_jws(json_data)
         unless success
-          target.unlink
+          target.unlink unless read_only_cache
           odie <<~EOS
             Failed to verify integrity (#{data}) of:
               #{url}
