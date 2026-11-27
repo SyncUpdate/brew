@@ -317,11 +317,12 @@ Blindly replacing the app based on that record could downgrade it.
 
 Casks for self-updating apps declare `auto_updates true`.
 For a versioned cask that installs a single readable app bundle, Homebrew compares the bundle’s version metadata with the cask's current version.
-The default `brew upgrade` includes the cask when the installed app appears older and skips it when the installed app appears to be the same version or newer.
+The default `brew upgrade` includes the cask when the installed app appears older and skips reinstalling it when the installed app appears to be the same version or newer.
+For an eligible, unpinned cask, Homebrew refreshes the Caskroom version, installed caskfile and receipt when the bundle version exactly matches the newer cask version and both caskfiles specify the same installation artifacts.
+This lets `brew uninstall` and `brew uninstall --zap` use the current cask’s removal instructions. If the installation artifacts have changed, use `brew reinstall --cask <cask>` to apply them.
 
 This comparison is not available for every artifact or versioning scheme.
 When Homebrew cannot make a reliable comparison, it normally skips the self-updating cask instead of guessing.
-An exception is a cask whose version has no comma-separated parts and whose app version still matches Homebrew's installation record: as for apps that don't update themselves, Homebrew then includes the cask if its version differs, even if that version is older.
 To persistently opt out of automatic upgrades for all `auto_updates true` casks, add `export HOMEBREW_NO_UPGRADE_AUTO_UPDATES_CASKS=1` to your shell configuration.
 This does not affect upgrades requested with `--greedy` or `--greedy-auto-updates`.
 
@@ -330,6 +331,7 @@ When such a cask is named explicitly or included with `--greedy-latest`, Homebre
 It skips reinstalling the cask when the artifact has not changed.
 
 Naming a cask explicitly, using `--greedy-auto-updates` or using the broader `--greedy` option can include casks that the default checks skip.
+For versioned self-updating casks, these options use the bundle version when the cask installs a single app and the recorded cask version when it installs multiple apps.
 Set `HOMEBREW_UPGRADE_GREEDY=1` to apply `--greedy` persistently to all cask upgrades, or list selected casks in the space-separated `HOMEBREW_UPGRADE_GREEDY_CASKS` variable.
 Refer to the `upgrade` section of the [`brew` manual page](Manpage.md) for the full option details.
 
@@ -351,4 +353,7 @@ The performance work that does help is happening in Ruby: starting useful networ
 
 Homebrew has two possible strategies to update cask apps: uninstalling the old version and reinstalling the new one, or replacing the contents of the app with the new contents. With the uninstall/reinstall strategy, [macOS thinks the app is being deleted without any intent to reinstall it](https://github.com/Homebrew/brew/pull/15138), and so it removes some internal metadata for the old app, including where it appears in the Dock and Launchpad and which permissions it's been granted. The content replacement strategy works around this by treating the upgrade as an in-place upgrade. However, starting in macOS Ventura, these in-place upgrades are only allowed when the updater application (in this case, the terminal running Homebrew) has [certain permissions granted](https://github.com/Homebrew/brew/pull/15483). Either the "App Management" or "Full Disk Access" permission will suffice.
 
-Homebrew defaults to in-place upgrades when it has the necessary permissions. Otherwise, it will use the uninstall/reinstall strategy.
+Homebrew defaults to in-place upgrades when it has the necessary permissions.
+Otherwise, it uses the uninstall/reinstall strategy for apps you own.
+If another user owns the app (for example, an updater ran as `root`), Homebrew checks for App Management access before uninstalling anything.
+If prompted, grant your terminal access in System Settings → Privacy & Security → App Management and retry the upgrade.

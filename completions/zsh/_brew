@@ -634,13 +634,14 @@ _brew_bump() {
     '(--tap)--installed[Check formulae and casks that are currently installed]' \
     '(--tap)--no-autobump[Ignore formulae/casks in autobump list (official repositories only)]' \
     '--no-fork[Don'\''t try to fork the repository]' \
-    '(--open-pr)--no-pull-requests[Do not retrieve pull requests from GitHub]' \
-    '(--no-pull-requests)--open-pr[Open a pull request for the new version if none have been opened yet]' \
+    '(--open-pr --write-pr-to)--no-pull-requests[Do not retrieve pull requests from GitHub]' \
+    '(--no-pull-requests --write-pr-to)--open-pr[Open a pull request for the new version if none have been opened yet]' \
     '--quiet[Make some output more quiet]' \
     '--repology[Use Repology to check for outdated packages]' \
     '--start-with[Letter or word that the list of package results should alphabetically follow]' \
     '(--installed --no-autobump)--tap[Check formulae and casks within the given tap, specified as user`/`repo]' \
     '--verbose[Make some output more verbose]' \
+    '(--no-pull-requests --open-pr)--write-pr-to[With `--formula` or `--cask`, write one JSON file per proposed pull request in directory for later publication]' \
     - formula \
     '(--cask)--formula[Check only formulae]' \
     '*:formula:__brew_formulae' \
@@ -654,7 +655,7 @@ _brew_bump_cask_pr() {
   _arguments \
     '--commit[When passed with `--write-only`, generate a new commit after writing changes to the cask file]' \
     '--debug[Display any debugging information]' \
-    '(--write)--dry-run[Print what would be done rather than doing it]' \
+    '(--write-pr-to --write)--dry-run[Print what would be done rather than doing it]' \
     '--fork-org[Use the specified GitHub organisation for forking]' \
     '--help[Show this message]' \
     '--message[Prepend message to the default pull request message]' \
@@ -671,7 +672,8 @@ _brew_bump_cask_pr() {
     '(--version)--version-intel[Specify the new cask version for macOS on Intel]' \
     '(--version)--version-linux-arm[Specify the new cask version for Linux on ARM]' \
     '(--version)--version-linux-intel[Specify the new cask version for Linux on Intel]' \
-    '--write-only[Make the expected file modifications without taking any Git actions]' \
+    '(--write-pr-to)--write-only[Make the expected file modifications without taking any Git actions]' \
+    '(--dry-run --write-only)--write-pr-to[Write the proposed cask changes and pull request details as JSON in directory for publication in a separate step]' \
     - cask \
     '*:cask:__brew_casks'
 }
@@ -695,7 +697,7 @@ _brew_bump_formula_pr() {
   _arguments \
     '--commit[When passed with `--write-only`, generate a new commit after writing changes to the formula file]' \
     '--debug[Display any debugging information]' \
-    '(--write-only)--dry-run[Print what would be done rather than doing it]' \
+    '(--write-pr-to --write-only)--dry-run[Print what would be done rather than doing it]' \
     '--force[Remove all mirrors if `--mirror` was not specified]' \
     '--fork-org[Use the specified GitHub organisation for forking]' \
     '--help[Show this message]' \
@@ -717,7 +719,8 @@ _brew_bump_formula_pr() {
     '(--tag)--url[Specify the URL for the new download. If a URL is specified, the SHA-256 checksum of the new download should also be specified]' \
     '--verbose[Make some output more verbose]' \
     '--version[Use the specified version to override the value parsed from the URL or tag. Note that `--version=0` can be used to delete an existing version override from a formula if it has become redundant]' \
-    '(--dry-run)--write-only[Make the expected file modifications without taking any Git actions]' \
+    '(--write-pr-to --dry-run)--write-only[Make the expected file modifications without taking any Git actions]' \
+    '(--dry-run --write-only)--write-pr-to[Write the proposed formula changes and pull request details as JSON in directory for publication in a separate step]' \
     - formula \
     '*:formula:__brew_formulae'
 }
@@ -1464,8 +1467,8 @@ _brew_fetch() {
   _arguments \
     '(--cask)--HEAD[Fetch HEAD version instead of stable version]' \
     '(--os --arch --bottle-tag)--all-platforms[Download for every supported operating system and architecture, plus each language for casks, fetching each distinct URL once]' \
-    '(--bottle-tag --all-platforms)--arch[Download for the given CPU architecture. (Pass `all` to download for all architectures.)]' \
-    '(--build-from-source --build-bottle --force-bottle --cask --os --arch --all-platforms)--bottle-tag[Download a bottle for given tag]' \
+    '(--bottle-tag --all-platforms)--arch[Download for the given CPU architecture. Use `arm` for ARM64, `intel` for x86-64 or `all` for both]' \
+    '(--build-from-source --build-bottle --force-bottle --cask --os --arch --all-platforms)--bottle-tag[Download a bottle for the given tag (e.g. `arm64_tahoe`)]' \
     '(--build-from-source --force-bottle --bottle-tag --cask)--build-bottle[Download source packages (for eventual bottling) rather than a bottle]' \
     '(--build-bottle --force-bottle --bottle-tag)--build-from-source[Download source packages rather than a bottle]' \
     '--debug[Display any debugging information]' \
@@ -1473,11 +1476,11 @@ _brew_fetch() {
     '--force[Remove a previously cached version and re-fetch]' \
     '(--build-from-source --build-bottle --bottle-tag --cask)--force-bottle[Download a bottle if it exists for the current or newest version of macOS, even if it would not be used during installation]' \
     '--help[Show this message]' \
-    '(--bottle-tag --all-platforms)--os[Download for the given operating system. (Pass `all` to download for all operating systems.)]' \
+    '(--bottle-tag --all-platforms)--os[Download for `macos`, `linux`, a macOS release name (e.g. `tahoe`) or `all` operating systems]' \
     '--quiet[Make some output more quiet]' \
     '--retry[Retry if downloading fails or re-download if the checksum of a previously cached version no longer matches. Tries at most 5 times with exponential backoff]' \
     '(--cask)--test[Also download test resources and their patches for each formula]' \
-    '--verbose[Do a verbose VCS checkout, if the URL represents a VCS. This is useful for seeing if an existing VCS cache has been updated]' \
+    '--verbose[Print download locations and show VCS checkout details]' \
     - formula \
     '(--cask)--formula[Treat all named arguments as formulae]' \
     '*:formula:__brew_formulae' \

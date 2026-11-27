@@ -343,6 +343,16 @@ setup_curl
 HOMEBREW_API_DEFAULT_DOMAIN="https://formulae.brew.sh/api"
 HOMEBREW_BOTTLE_DEFAULT_DOMAIN="https://ghcr.io/v2/homebrew/core"
 
+for VAR in HOMEBREW_API_DOMAIN HOMEBREW_ARTIFACT_DOMAIN HOMEBREW_BOTTLE_DOMAIN HOMEBREW_PIP_INDEX_URL
+do
+  # curl would parse a value starting with `-` as an option.
+  if [[ "${!VAR:-}" == -* ]]
+  then
+    odie "${VAR} must not start with '-': '${!VAR}'."
+  fi
+done
+unset VAR
+
 # TODO: bump version when new macOS is released or announced and update references in:
 # - docs/Installation.md
 # - https://github.com/Homebrew/install/blob/HEAD/install.sh
@@ -665,7 +675,7 @@ then
     export HOMEBREW_GITHUB_PACKAGES_AUTH="Basic ${HOMEBREW_DOCKER_REGISTRY_BASIC_AUTH_TOKEN}"
   fi
 else
-  export HOMEBREW_GITHUB_PACKAGES_AUTH="Bearer QQ=="
+  export HOMEBREW_GITHUB_PACKAGES_AUTH="${HOMEBREW_GITHUB_PACKAGES_ANONYMOUS_BEARER}"
 fi
 
 if [[ -n "${HOMEBREW_BASH_COMMAND}" ]]

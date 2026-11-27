@@ -452,8 +452,8 @@ module Homebrew
 
         if formulae_to_install.present? && show_upgrade_summary
           verb = dry_run ? "Would upgrade" : "Upgrading"
-          oh1 "#{verb} #{formulae_to_install.count} outdated #{Utils.pluralize("package",
-                                                                               formulae_to_install.count)}:"
+          count = formulae_to_install.count
+          oh1 "#{verb} #{count} outdated #{Utils.pluralize("package", count)}:"
           puts Formatter.version_changes(formula_version_changes(formulae_to_install)).join("\n") if
             args.no_ask?
         end
@@ -810,6 +810,7 @@ module Homebrew
           greedy_latest:       args.greedy_latest?,
           greedy_auto_updates: args.greedy_auto_updates?,
           summary_pinned:      final_upgrade_summary.pinned_casks,
+          refresh_metadata:    true,
         )
         return true if outdated_casks.empty?
 

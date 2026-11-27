@@ -281,7 +281,9 @@ module Cask
 
         ref = "#{CoreCaskTap.instance}/#{token}"
 
-        token, tap, = CaskLoader.tap_cask_token_type(ref, warn:)
+        return unless (token_tap_type = CaskLoader.tap_cask_token_type(ref, warn:))
+
+        token, tap, = token_tap_type
         new("#{tap}/#{token}")
       end
 
@@ -337,11 +339,20 @@ module Cask
             api_source = api_source.dup
             api_source["version"] = api_source["version"].presence
             api_source["version"] ||= @sourcefile_path.dirname.dirname.dirname.basename.to_s.presence
-            if api_source["version"].nil? || api_source["artifacts"].nil?
-              installed_tab = CaskLoader.load_installed_tab(token)
-              api_source["version"] ||= installed_tab.version.presence
-              api_source["artifacts"] ||= CaskLoader.resolve_installed_artifacts(
-                token, installed_tab.uninstall_artifacts, tap: installed_tab.tap, api_fallback: @api_fallback
+            installed_tab = CaskLoader.load_installed_tab(token)
+            api_source["version"] ||= installed_tab.version.presence
+            api_source["artifacts"] ||= CaskLoader.resolve_installed_artifacts(
+              token, installed_tab.uninstall_artifacts, tap: installed_tab.tap, api_fallback: @api_fallback
+            )
+
+            if api_source.dig("depends_on", "formula").blank? &&
+               (formula_deps = Hash.try_convert(installed_tab.runtime_dependencies)
+                                   &.transform_keys(&:to_s)
+                                   &.fetch("formula", nil)).is_a?(Array)
+              api_source["depends_on"] = (api_source["depends_on"] || {}).merge(
+                "formula" => formula_deps.filter_map do |dep|
+                  dep["full_name"] if dep.is_a?(Hash) && dep["declared_directly"]
+                end,
               )
             end
           end
@@ -632,8 +643,11 @@ module Cask
       load(name, warn:)
     end
 
-    sig { params(tapped_token: String, warn: T::Boolean).returns(T.nilable([String, Tap, T.nilable(Symbol)])) }
-    def self.tap_cask_token_type(tapped_token, warn:)
+    sig {
+      params(tapped_token: String, warn: T::Boolean, migrated_from: T::Array[String])
+        .returns(T.nilable([String, Tap, T.nilable(Symbol)]))
+    }
+    def self.tap_cask_token_type(tapped_token, warn:, migrated_from: [])
       return unless (tap_with_token = Tap.with_cask_token(tapped_token))
 
       tap, token = tap_with_token
@@ -659,8 +673,13 @@ module Cask
         new_tapped_token = "#{new_tap}/#{new_token}"
 
         if tapped_token != new_tapped_token
+          return if migrated_from.include?(new_tapped_token)
+
           old_token = tap.core_cask_tap? ? token : tapped_token
-          return unless (token_tap_type = tap_cask_token_type(new_tapped_token, warn: false))
+          token_tap_type = tap_cask_token_type(
+            new_tapped_token, warn: false, migrated_from: [*migrated_from, tapped_token]
+          )
+          return unless token_tap_type
 
           token, tap, = token_tap_type
           new_token = new_tap.core_cask_tap? ? token : "#{tap}/#{token}"

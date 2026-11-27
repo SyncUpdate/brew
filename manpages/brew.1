@@ -788,16 +788,16 @@ Deny network access from inside the sandbox\.
 Download a bottle (if available) or source packages for \fIformula\fPe and binaries for \fIcask\fPs\. For files, also print SHA\-256 checksums\.
 .TP
 \fB\-\-os\fP
-Download for the given operating system\. (Pass \fBall\fP to download for all operating systems\.)
+Download for \fBmacos\fP, \fBlinux\fP, a macOS release name (e\.g\. \fBtahoe\fP) or \fBall\fP operating systems\.
 .TP
 \fB\-\-arch\fP
-Download for the given CPU architecture\. (Pass \fBall\fP to download for all architectures\.)
+Download for the given CPU architecture\. Use \fBarm\fP for ARM64, \fBintel\fP for x86\-64 or \fBall\fP for both\.
 .TP
 \fB\-\-all\-platforms\fP
 Download for every supported operating system and architecture, plus each language for \fIcask\fPs, fetching each distinct URL once\.
 .TP
 \fB\-\-bottle\-tag\fP
-Download a bottle for given tag\.
+Download a bottle for the given tag (e\.g\. \fBarm64_tahoe\fP)\.
 .TP
 \fB\-\-HEAD\fP
 Fetch HEAD version instead of stable version\.
@@ -806,7 +806,7 @@ Fetch HEAD version instead of stable version\.
 Remove a previously cached version and re\-fetch\.
 .TP
 \fB\-v\fP, \fB\-\-verbose\fP
-Do a verbose VCS checkout, if the URL represents a VCS\. This is useful for seeing if an existing VCS cache has been updated\.
+Print download locations and show VCS checkout details\.
 .TP
 \fB\-\-retry\fP
 Retry if downloading fails or re\-download if the checksum of a previously cached version no longer matches\. Tries at most 5 times with exponential backoff\.
@@ -1912,6 +1912,9 @@ Don\[u2019]t try to fork the repository\.
 \fB\-\-open\-pr\fP
 Open a pull request for the new version if none have been opened yet\.
 .TP
+\fB\-\-write\-pr\-to\fP
+With \fB\-\-formula\fP or \fB\-\-cask\fP, write one JSON file per proposed pull request in \fIdirectory\fP for later publication\.
+.TP
 \fB\-\-start\-with\fP
 Letter or word that the list of package results should alphabetically follow\.
 .TP
@@ -1924,6 +1927,9 @@ A best effort to determine the \fISHA\-256\fP will be made if the value is not s
 .TP
 \fB\-n\fP, \fB\-\-dry\-run\fP
 Print what would be done rather than doing it\.
+.TP
+\fB\-\-write\-pr\-to\fP
+Write the proposed cask changes and pull request details as JSON in \fIdirectory\fP for publication in a separate step\.
 .TP
 \fB\-\-write\-only\fP
 Make the expected file modifications without taking any Git actions\.
@@ -1993,6 +1999,9 @@ If a \fIversion\fP is specified, a best effort to determine the \fIURL\fP and \f
 .TP
 \fB\-n\fP, \fB\-\-dry\-run\fP
 Print what would be done rather than doing it\.
+.TP
+\fB\-\-write\-pr\-to\fP
+Write the proposed formula changes and pull request details as JSON in \fIdirectory\fP for publication in a separate step\.
 .TP
 \fB\-\-write\-only\fP
 Make the expected file modifications without taking any Git actions\.

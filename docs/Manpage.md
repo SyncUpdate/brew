@@ -1224,13 +1224,13 @@ binaries for *`cask`*s. For files, also print SHA-256 checksums.
 
 `--os`
 
-: Download for the given operating system. (Pass `all` to download for all
-  operating systems.)
+: Download for `macos`, `linux`, a macOS release name (e.g. `tahoe`) or `all`
+  operating systems.
 
 `--arch`
 
-: Download for the given CPU architecture. (Pass `all` to download for all
-  architectures.)
+: Download for the given CPU architecture. Use `arm` for ARM64, `intel` for
+  x86-64 or `all` for both.
 
 `--all-platforms`
 
@@ -1239,7 +1239,7 @@ binaries for *`cask`*s. For files, also print SHA-256 checksums.
 
 `--bottle-tag`
 
-: Download a bottle for given tag.
+: Download a bottle for the given tag (e.g. `arm64_tahoe`).
 
 `--HEAD`
 
@@ -1251,8 +1251,7 @@ binaries for *`cask`*s. For files, also print SHA-256 checksums.
 
 `-v`, `--verbose`
 
-: Do a verbose VCS checkout, if the URL represents a VCS. This is useful for
-  seeing if an existing VCS cache has been updated.
+: Print download locations and show VCS checkout details.
 
 `--retry`
 
@@ -3048,6 +3047,11 @@ displays whether a pull request has been opened with the URL.
 
 : Open a pull request for the new version if none have been opened yet.
 
+`--write-pr-to`
+
+: With `--formula` or `--cask`, write one JSON file per proposed pull request in
+  *`directory`* for later publication.
+
 `--start-with`
 
 : Letter or word that the list of package results should alphabetically follow.
@@ -3066,6 +3070,11 @@ supplied by the user.
 `-n`, `--dry-run`
 
 : Print what would be done rather than doing it.
+
+`--write-pr-to`
+
+: Write the proposed cask changes and pull request details as JSON in
+  *`directory`* for publication in a separate step.
 
 `--write-only`
 
@@ -3169,6 +3178,11 @@ uses.
 `-n`, `--dry-run`
 
 : Print what would be done rather than doing it.
+
+`--write-pr-to`
+
+: Write the proposed formula changes and pull request details as JSON in
+  *`directory`* for publication in a separate step.
 
 `--write-only`
 

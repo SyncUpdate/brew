@@ -146,10 +146,12 @@ RSpec.describe Homebrew::DevCmd::Bump do
 
   def stub_npm_registry(release_dates)
     content = { "time" => release_dates.merge("created" => "2026-02-01T00:00:00.000Z") }.to_json
+    allow(Utils::Curl).to receive(:curl_supports_fail_with_body?).and_return(true)
     allow(Utils::Curl).to receive(:curl_output)
       .with(
-        "--compressed",
+        "--no-fail",
         "--fail-with-body",
+        "--compressed",
         "--location",
         "--max-redirs",
         "5",
@@ -161,6 +163,243 @@ RSpec.describe Homebrew::DevCmd::Bump do
         timeout:         60,
       )
       .and_return([content, "", instance_double(Process::Status, success?: true)])
+  end
+
+  it "accepts only one publication phase at a time" do
+    expect { described_class.new(["--prepare-prs=bumps.json", "--sign-pr"]) }
+      .to raise_error(Homebrew::CLI::OptionConflictError)
+  end
+
+  it "requires a package type when writing pull request proposals" do
+    expect { described_class.new(["--write-pr-to=#{mktmpdir}"]).run }
+      .to raise_error(UsageError, /`--write-pr-to` requires `--formula` or `--cask`/)
+  end
+
+  it "collects completed scheduled bumps when another formula fails" do
+    dir = mktmpdir
+    (dir/"event").write("{}")
+    ENV["GITHUB_EVENT_PATH"] = (dir/"event").to_s
+    ENV["GITHUB_OUTPUT"] = (dir/"output").to_s
+    allow(Homebrew::Bump).to receive(:system)
+      .with(HOMEBREW_BREW_FILE, "bump", "--formulae", "--bump-synced", start_with("--write-pr-to="),
+            "--auto", "--tap=homebrew/core") do |_, _, _, _, flag|
+      (Pathname(flag.delete_prefix("--write-pr-to="))/"testball.json").write('{"version":"2.0"}')
+      false
+    end
+    described_class.new(["--prepare-prs=#{dir}/bumps.json"]).run
+    expect([(dir/"output").read.chomp, JSON.parse((dir/"bumps.json").read), Homebrew.failed?])
+      .to eq(['formulae=["testball"]', { "testball" => { "version" => "2.0" } }, true])
+  ensure
+    Homebrew.failed = false
+  end
+
+  it "commits a prepared formula and its versioned alias on the local bump branch" do
+    ENV["HOMEBREW_NO_INSTALL_FROM_API"] = "1"
+    tap = CoreTap.instance
+    path = tap.new_formula_path("testball")
+    path.dirname.mkpath
+    path.write("class Testball < Formula\n  url \"https://example.org/testball-1.0.tar.gz\"\nend\n")
+    peer = tap.new_formula_path("peer")
+    peer.dirname.mkpath
+    peer.write(path.read.sub("Testball", "Peer"))
+    tap.alias_dir.mkpath
+    (tap.alias_dir/"testball@0").make_symlink(peer.relative_path_from(tap.alias_dir))
+    (tap.alias_dir/"testball@1").make_symlink(path.relative_path_from(tap.alias_dir))
+    tap.path.cd do
+      system("git", "init", "--initial-branch=main", exception: true)
+      system("git", "config", "user.name", "Homebrew Tests", exception: true)
+      system("git", "config", "user.email", "tests@brew.sh", exception: true)
+      system("git", "add", ".", exception: true)
+      system("git", "commit", "-m", "Initial", exception: true)
+    end
+    versioned = path.read.sub("1.0", "2.0")
+    proposal = mktmpdir/"proposal.json"
+    event = mktmpdir/"event.json"
+    event.write(JSON.generate(inputs: { formulae: "homebrew/core/testball@1" }))
+    ENV["GITHUB_EVENT_PATH"] = event.to_s
+    ENV["GITHUB_SHA"] = tap.git_head
+    output = mktmpdir/"output"
+    ENV["GITHUB_OUTPUT"] = output.to_s
+    allow(GitHub::API).to receive(:open_rest).and_return([])
+    pr = { "title" => "testball 2.0", "body" => "One\nTwo" }
+    proposal.write(JSON.generate(testball: pr.merge(base: tap.git_head, version: "3.0",
+                                                    formulae: { testball: versioned })))
+    expect { described_class.new(["--commit-pr-from=#{proposal}", "--", "testball"]).run }
+      .to raise_error(SystemExit).and output(/Unexpected .*prepared bump for testball/).to_stderr
+    expect([tap.git_repository.branch_name, (tap.alias_dir/"testball@1").realpath, output.exist?])
+      .to eq(["main", path, false])
+
+    allow(tap).to receive(:synced_versions_formulae).and_return([%w[testball peer]])
+    formulae = { testball: versioned, peer: peer.read.sub("1.0", "2.0") }
+    proposal.write(JSON.generate(testball: pr.merge(base: tap.git_head, version: "2.0", formulae:)))
+    expect { described_class.new(["--commit-pr-from=#{proposal}", "--", "testball"]).run }
+      .to raise_error(SystemExit).and output(/Alias testball@2/).to_stderr
+    expect([tap.git_repository.branch_name, (tap.alias_dir/"testball@0").realpath,
+            (tap.alias_dir/"testball@1").realpath]).to eq(["main", peer, path])
+
+    proposal.write(JSON.generate(testball: pr.merge(base: tap.git_head, version: "2.0",
+                                                    formulae: { testball: versioned })))
+    described_class.new(["--commit-pr-from=#{proposal}", "--", "testball"]).run
+    expect([tap.git_repository.commit_message, path.read, (tap.alias_dir/"testball@2").realpath,
+            output.read.lines.map(&:chomp)])
+      .to eq(["testball 2.0", versioned, path, ["branch=bump-testball-2.0", "pr=#{pr.to_json}"]])
+  end
+
+  it "collects scheduled cask bumps from the cask tap" do
+    dir = mktmpdir
+    (dir/"event").write("{}")
+    ENV["GITHUB_EVENT_PATH"] = (dir/"event").to_s
+    ENV["GITHUB_OUTPUT"] = (dir/"output").to_s
+    allow(Homebrew::Bump).to receive(:system)
+      .with(HOMEBREW_BREW_FILE, "bump", "--casks", start_with("--write-pr-to="),
+            "--auto", "--tap=homebrew/cask") do |_, _, _, flag|
+      (Pathname(flag.delete_prefix("--write-pr-to="))/"test-cask.json").write('{"version":"2.0"}')
+      true
+    end
+    described_class.new(["--casks", "--prepare-prs=#{dir}/bumps.json"]).run
+    expect([(dir/"output").read.chomp, JSON.parse((dir/"bumps.json").read)])
+      .to eq(['casks=["test-cask"]', { "test-cask" => { "version" => "2.0" } }])
+  end
+
+  it "collects requested cask bumps from the given tap" do
+    dir = mktmpdir
+    (dir/"event").write(JSON.generate(inputs: { casks: "user/repo/foo bar" }))
+    ENV["GITHUB_EVENT_PATH"] = (dir/"event").to_s
+    expect(Homebrew::Bump).to receive(:system)
+      .with(HOMEBREW_BREW_FILE, "bump", "--casks", start_with("--write-pr-to="),
+            "--", "user/repo/foo", "user/repo/bar")
+      .and_return(true)
+    described_class.new(["--casks", "--tap=user/repo", "--prepare-prs=#{dir}/bumps.json"]).run
+  end
+
+  it "commits a prepared cask on the local bump branch" do
+    ENV["HOMEBREW_NO_INSTALL_FROM_API"] = "1"
+    tap = CoreCaskTap.instance
+    path = tap.new_cask_path("test-cask")
+    path.dirname.mkpath
+    path.write <<~RUBY
+      cask "test-cask" do
+        on_arm do
+          version "1.0,10"
+          sha256 "#{"a" * 64}"
+        end
+        on_intel do
+          version "1.0,10"
+          sha256 "#{"b" * 64}"
+        end
+
+        url "https://brew.sh/test-cask-\#{version.csv.first}.dmg"
+      end
+    RUBY
+    tap.path.cd do
+      system("git", "init", "--initial-branch=main", exception: true)
+      system("git", "config", "user.name", "Homebrew Tests", exception: true)
+      system("git", "config", "user.email", "tests@brew.sh", exception: true)
+      system("git", "add", ".", exception: true)
+      system("git", "commit", "-m", "Initial", exception: true)
+    end
+    updated = path.read.sub("1.0,10", "1.1,20").sub("a" * 64, "c" * 64)
+    proposal = mktmpdir/"proposal.json"
+    event = mktmpdir/"event.json"
+    event.write(JSON.generate(inputs: { casks: "homebrew/cask/test-cask" }))
+    ENV["GITHUB_EVENT_PATH"] = event.to_s
+    ENV["GITHUB_SHA"] = tap.git_head
+    output = mktmpdir/"output"
+    ENV["GITHUB_OUTPUT"] = output.to_s
+    allow(GitHub::API).to receive(:open_rest).and_return([])
+    pr = { "title" => "test-cask 1.1 (arm only)", "body" => "One\nTwo" }
+    command = described_class.new(["--casks", "--commit-pr-from=#{proposal}", "--", "test-cask"])
+    proposal.write(JSON.generate("test-cask" => pr.merge(base: tap.git_head, version: "1.1,20",
+                                                         casks: { "test-cask" => updated.sub("brew.sh", "x.org") })))
+    expect { command.run }
+      .to raise_error(SystemExit).and output(/Unexpected changes in the prepared bump for test-cask/).to_stderr
+    expect([tap.git_repository.branch_name, output.exist?]).to eq(["main", false])
+
+    proposal.write(JSON.generate("test-cask" => pr.merge("title" => "Merge me", base: tap.git_head, version: "1.1,20",
+                                                         casks: { "test-cask" => updated })))
+    expect { command.run }
+      .to raise_error(SystemExit).and output(/Unexpected title in the prepared bump/).to_stderr
+
+    proposal.write(JSON.generate("test-cask" => pr.merge(base: tap.git_head, version: "1.1,20",
+                                                         casks: { "test-cask" => updated })))
+    command.run
+    expect([tap.git_repository.commit_message, path.read, output.read.lines.map(&:chomp)])
+      .to eq(["test-cask 1.1 (arm only)", updated, ["branch=bump-test-cask-1.1-20-arm-only", "pr=#{pr.to_json}"]])
+  end
+
+  describe "--sign-pr" do
+    let(:tap) { CoreTap.instance }
+    let(:formula_path) { tap.new_formula_path("testball") }
+    let(:github_output) { mktmpdir/"output" }
+    let(:branch) { "bump-testball-2.0" }
+
+    def git(*args)
+      tap.path.cd { system("git", *args, exception: true) }
+    end
+
+    def prepare_branch(base)
+      ENV["GITHUB_SHA"] = base
+      git "switch", "--force-create", branch, base
+      formula_path.write(formula_path.read.sub("1.0", "2.0"))
+      git "commit", "--all", "--message=testball 2.0"
+    end
+
+    def sign
+      described_class.new(["--sign-pr"]).run
+      github_output.exist? ? github_output.read.lines(chomp: true) : []
+    end
+
+    before do
+      formula_path.dirname.mkpath
+      formula_path.write("class Testball < Formula\n  url \"https://example.org/testball-1.0.tar.gz\"\nend\n")
+      remote = mktmpdir/"remote.git"
+      git "init", "--initial-branch=main"
+      git "config", "user.name", "Homebrew Tests"
+      git "config", "user.email", "tests@brew.sh"
+      git "add", "."
+      git "commit", "--message=Initial"
+      git "init", "--bare", remote.to_s
+      git "remote", "add", "origin", remote.to_s
+      ENV["GITHUB_OUTPUT"] = github_output.to_s
+      allow(GitHub::API).to receive(:open_rest).and_return([])
+      allow(SystemCommand).to receive(:safe_system).and_call_original
+      allow(SystemCommand).to receive(:safe_system)
+        .with("git", "rebase", "--force-rebase", "--gpg-sign", anything) do |*args|
+          tap.path.cd { system("git", "rebase", "--force-rebase", args.last, exception: true) }
+        end
+      allow(SystemCommand).to receive(:quiet_system).and_call_original
+      allow(SystemCommand).to receive(:quiet_system).with("git", "verify-commit", any_args).and_return(true)
+    end
+
+    it "signs a new branch for pushing" do
+      prepare_branch(tap.git_repository.head_ref)
+      expect(sign).to eq(["push=true"])
+    end
+
+    it "reuses a matching push from an earlier attempt of the same run" do
+      prepare_branch(tap.git_repository.head_ref)
+      git "push", "origin", branch
+      expect(sign).to eq([])
+    end
+
+    context "when an earlier run pushed the branch from an older base" do
+      before do
+        prepare_branch(tap.git_repository.head_ref)
+        git "push", "origin", branch
+        git "switch", "main"
+        git "commit", "--allow-empty", "--message=Advance main"
+        prepare_branch(tap.git_repository.head_ref)
+      end
+
+      it "replaces the branch" do
+        expect(sign).to eq(["push=true", "force=true"])
+      end
+
+      it "keeps the branch when a pull request uses it" do
+        allow(GitHub::API).to receive(:open_rest).and_return([{ "number" => 1 }])
+        expect { sign }.to raise_error(SystemExit).and output(/A pull request already uses #{branch}/).to_stderr
+      end
+    end
   end
 
   describe "formula and cask", :cask, :integration_test do
@@ -383,7 +622,7 @@ RSpec.describe Homebrew::DevCmd::Bump do
       expect(bump).to receive(:system).with(
         HOMEBREW_BREW_FILE,
         "bump-cask-pr",
-        "basic-cask",
+        "basic_cask",
         "--version-arm=1.2.5",
         "--version-intel=1.2.4",
         "--no-browse",
@@ -414,7 +653,7 @@ RSpec.describe Homebrew::DevCmd::Bump do
       expect(bump).to receive(:system).with(
         HOMEBREW_BREW_FILE,
         "bump-cask-pr",
-        "basic-cask",
+        "basic_cask",
         "--version-arm=1.2.4",
         "--version-intel=1.2.4",
         "--no-browse",
@@ -450,7 +689,7 @@ RSpec.describe Homebrew::DevCmd::Bump do
       expect(bump).to receive(:system).with(
         HOMEBREW_BREW_FILE,
         "bump-cask-pr",
-        "basic-cask",
+        "basic_cask",
         "--version-arm=2.0",
         "--version-intel=2.0",
         "--version-linux-intel=1.6",
@@ -459,6 +698,33 @@ RSpec.describe Homebrew::DevCmd::Bump do
       ).and_return(true)
 
       bump.retrieve_and_display_info_and_open_pr(c_basic, "basic-cask", [], ambiguous_cask: false)
+    end
+
+    it "passes the full name of a formula in a third-party tap to bump-formula-pr" do
+      tapped_formula = formula("basic_formula", tap: Tap.fetch("user", "repo")) do
+        T.bind(self, T.class_of(Formula))
+        url "https://brew.sh/test-1.2.3.tgz"
+      end
+      version_info = Homebrew::DevCmd::Bump::VersionBumpInfo.new(
+        type:                    :formula,
+        deprecated:              { general: false },
+        multiple_versions:       { current: false, new: false },
+        version_name:            "formula version:",
+        current_version:         Homebrew::BumpVersionParser.new(general: Version.new("1.2.3")),
+        new_version:             Homebrew::BumpVersionParser.new(general: Version.new("1.2.4")),
+        repology_latest:         "not found",
+        newer_than_upstream:     { general: false },
+        duplicate_pull_requests: nil,
+        open_bump_pull_requests: nil,
+      )
+      allow(bump).to receive(:retrieve_versions_by_arch).and_return(version_info)
+
+      expect(bump).to receive(:system)
+        .with(HOMEBREW_BREW_FILE, "bump-formula-pr", "user/repo/basic_formula", "--version=1.2.4",
+              "--no-browse", "--message=Created by `brew bump`")
+        .and_return(true)
+
+      bump.retrieve_and_display_info_and_open_pr(tapped_formula, "basic_formula", [], ambiguous_cask: false)
     end
 
     it "notes when a newer upstream version was skipped due to release cooldown" do
@@ -934,10 +1200,12 @@ RSpec.describe Homebrew::DevCmd::Bump do
       JSON
 
       allow(DateTime).to receive(:now).and_return(DateTime.parse("2026-04-04T12:00:00Z"))
+      allow(Utils::Curl).to receive(:curl_supports_fail_with_body?).and_return(true)
       allow(Utils::Curl).to receive(:curl_output)
         .with(
-          "--compressed",
+          "--no-fail",
           "--fail-with-body",
+          "--compressed",
           "--location",
           "--max-redirs",
           "5",
@@ -994,10 +1262,12 @@ RSpec.describe Homebrew::DevCmd::Bump do
       JSON
 
       allow(DateTime).to receive(:now).and_return(DateTime.parse("2026-04-04T12:00:00Z"))
+      allow(Utils::Curl).to receive(:curl_supports_fail_with_body?).and_return(true)
       allow(Utils::Curl).to receive(:curl_output)
         .with(
-          "--compressed",
+          "--no-fail",
           "--fail-with-body",
+          "--compressed",
           "--location",
           "--max-redirs",
           "5",

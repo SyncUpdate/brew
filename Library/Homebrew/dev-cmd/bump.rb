@@ -3,6 +3,7 @@
 
 require "api/env"
 require "abstract_command"
+require "bump"
 require "bump_version_parser"
 require "livecheck/livecheck"
 require "release_cooldown"
@@ -15,7 +16,6 @@ module Homebrew
     class Bump < AbstractCommand
       DEFAULT_CURL_ARGS = [
         "--compressed",
-        "--fail-with-body",
         "--location",
         "--max-redirs",
         "5",
@@ -96,9 +96,17 @@ module Homebrew
         switch "--installed",
                description: "Check formulae and casks that are currently installed."
         switch "--no-fork",
+               # odeprecated: true,
                description: "Don't try to fork the repository."
         switch "--open-pr",
+               # odeprecated: true,
                description: "Open a pull request for the new version if none have been opened yet."
+        flag   "--write-pr-to=",
+               description: "With `--formula` or `--cask`, write one JSON file per proposed pull request in " \
+                            "<directory> for later publication."
+        flag   "--prepare-prs=", hidden: true
+        flag   "--commit-pr-from=", hidden: true
+        switch "--sign-pr", hidden: true
         flag   "--start-with=",
                description: "Letter or word that the list of package results should alphabetically follow."
         switch "--bump-synced",
@@ -110,12 +118,35 @@ module Homebrew
         conflicts "--installed", "--eval-all"
         conflicts "--installed", "--auto"
         conflicts "--no-pull-requests", "--open-pr"
+        conflicts "--no-pull-requests", "--write-pr-to="
+        conflicts "--open-pr", "--write-pr-to=", "--prepare-prs=", "--commit-pr-from=", "--sign-pr"
 
         named_args [:formula, :cask], without_api: true
       end
 
       sig { override.void }
       def run
+        # Formulae and casks may share a name and therefore a proposal file.
+        if args.write_pr_to && !args.formula? && !args.cask?
+          raise UsageError, "`--write-pr-to` requires `--formula` or `--cask`."
+        end
+
+        if args.prepare_prs || args.commit_pr_from || args.sign_pr?
+          autobump_tap = Tap.fetch(args.tap || (args.cask? ? "Homebrew/cask" : "Homebrew/core"))
+          if (file = args.prepare_prs)
+            return Homebrew::Bump.prepare_prs(file, autobump_tap, casks: args.cask?)
+          elsif (file = args.commit_pr_from)
+            raise UsageError, "Specify one prepared formula or cask." if args.named.size != 1
+
+            Utils::GemSetup.install_bundler_gems!(groups: ["ast"])
+            return Homebrew::API.with_no_api_env do
+              Homebrew::Bump.commit_prepared_pr(file, args.named.fetch(0), autobump_tap, casks: args.cask?)
+            end
+          end
+
+          return Homebrew::Bump.sign_pr(autobump_tap)
+        end
+
         Utils::GemSetup.install_bundler_gems!(groups: ["livecheck"])
 
         Homebrew::API.with_no_api_env do
@@ -577,7 +608,7 @@ module Homebrew
           puts "Open bump pull requests:  #{open_bump_pull_requests_text}" if open_bump_pull_requests_text
         end
 
-        if !args.open_pr? ||
+        if (!args.open_pr? && !args.write_pr_to) ||
            message?(new_version.general) ||
            all_newer_than_upstream
           return
@@ -607,12 +638,13 @@ module Homebrew
 
         bump_pr_args = [
           "bump-#{version_info.type}-pr",
-          name,
+          formula_or_cask.full_name,
           *version_args,
           "--no-browse",
           "--message=Created by `brew bump`",
         ]
 
+        bump_pr_args << "--write-pr-to=#{args.write_pr_to}" if args.write_pr_to
         bump_pr_args << "--no-fork" if args.no_fork?
 
         if args.bump_synced? && outdated_synced_formulae.present?
@@ -910,7 +942,8 @@ module Homebrew
         return content if content
         return unless url
 
-        stdout, _stderr, status = Utils::Curl.curl_output(*DEFAULT_CURL_ARGS, url, **DEFAULT_CURL_OPTIONS).to_a
+        stdout, _stderr, status = Utils::Curl.curl_output(*Utils::Curl.curl_fail_with_body_args, *DEFAULT_CURL_ARGS,
+                                                          url, **DEFAULT_CURL_OPTIONS).to_a
         stdout.scrub if status.success?
       end
 
@@ -918,7 +951,7 @@ module Homebrew
       def skip_repology?(formula_or_cask)
         return true unless args.repology?
 
-        (ENV["CI"].present? && args.open_pr? && formula_or_cask.livecheck_defined?) ||
+        (ENV["CI"].present? && (args.open_pr? || args.write_pr_to.present?) && formula_or_cask.livecheck_defined?) ||
           (formula_or_cask.is_a?(Formula) && formula_or_cask.versioned_formula?)
       end
 

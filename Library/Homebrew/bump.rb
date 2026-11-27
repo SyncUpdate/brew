@@ -111,11 +111,7 @@ module Homebrew
             ohai "git checkout --quiet -"
             ohai "create pull request with GitHub API (base branch: #{remote_branch})"
           else
-            SystemCommand.safe_system "git", "add", args: changed_files
-            Utils::Git.set_name_email!
-            SystemCommand.safe_system "git", "commit", "--no-edit", "--verbose",
-                                      "--message=#{commit_message}",
-                                      "--", args: changed_files
+            commit_files(changed_files, commit_message)
           end
         end
       end
@@ -138,6 +134,188 @@ module Homebrew
           odie "Unable to open pull request for #{tap_remote_repo}: #{e.message}!"
         end
       end
+    end
+
+    sig { params(paths: T::Array[Pathname], message: String).void }
+    def self.commit_files(paths, message)
+      SystemCommand.safe_system "git", "add", args: paths
+      Utils::Git.set_name_email!
+      SystemCommand.safe_system "git", "commit", "--no-edit", "--verbose", "--message=#{message}", "--", args: paths
+    end
+
+    # Formulae or casks selected in a manual autobump run, including aliases.
+    sig { params(tap: Tap, casks: T::Boolean).returns(T::Array[String]) }
+    private_class_method def self.requested_packages(tap, casks:)
+      require "shellwords"
+
+      input = JSON.parse(File.read(ENV.fetch("GITHUB_EVENT_PATH"))).dig("inputs", casks ? "casks" : "formulae").to_s
+      Shellwords.split(input).map do |arg|
+        name = arg.sub(%r{\A#{Regexp.escape(tap.name)}/}i, "")
+        raise ArgumentError, "Expected a #{tap.name} name." unless name.match?(/\A[a-z0-9][a-z0-9+._@-]*\z/)
+
+        name
+      end
+    end
+
+    # Collect completed bumps even when another formula or cask failed.
+    sig { params(file: String, tap: Tap, casks: T::Boolean).void }
+    def self.prepare_prs(file, tap, casks: false)
+      names = requested_packages(tap, casks:)
+      type, *options = casks ? %w[casks] : %w[formulae --bump-synced]
+      selection = if names.empty?
+        tap.official? ? ["--auto", "--tap=#{tap.name}"] : ["--tap=#{tap.name}"]
+      else
+        ["--", *names.map { "#{tap.name}/#{it}" }]
+      end
+      Dir.mktmpdir do |directory|
+        success = system HOMEBREW_BREW_FILE, "bump", "--#{type}", *options, "--write-pr-to=#{directory}",
+                         *selection
+        Homebrew.failed = true unless success
+        files = Pathname(directory).glob("*.json")
+        next if files.empty?
+
+        max_matrix_jobs = 256
+        opoo "Remaining bumps will be retried on the next run." if files.size > max_matrix_jobs
+        proposals = files.first(max_matrix_jobs).to_h { |path| [path.basename(".json").to_s, JSON.parse(path.read)] }
+        Pathname(file).atomic_write(JSON.generate(proposals))
+        File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |io| io.puts "#{type}=#{proposals.keys.to_json}" }
+      end
+    end
+
+    # Apply a prepared bump using the checked-out formulae or casks and workflow inputs as the reference.
+    sig { params(file: String, name: String, tap: Tap, casks: T::Boolean).void }
+    def self.commit_prepared_pr(file, name, tap, casks: false)
+      type = casks ? "casks" : "formulae"
+      requested = requested_packages(tap, casks:)
+      alias_prefix = tap.core_tap? ? "" : "#{tap.name}/"
+      allowed = if requested.present? && casks
+        requested
+      elsif requested.present?
+        requested.map { |arg| Utils.name_from_full_name(tap.alias_table.fetch("#{alias_prefix}#{arg}", arg)) }
+      elsif tap.official?
+        tap.autobump
+      else
+        (casks ? tap.cask_files_by_name : tap.formula_files_by_name).keys
+      end
+      odie "Unexpected #{type} in the prepared bump." unless allowed.include?(name)
+
+      proposal = JSON.parse(File.read(file)).fetch(name)
+      version, packages = proposal.fetch_values("version", type)
+      # `brew bump-cask-pr` replaces the separators allowed in cask versions in branch names.
+      version_separators = casks ? ",:" : ""
+      branch = "bump-#{name}-#{version.tr(version_separators, "-")}"
+      group = tap.synced_versions_formulae.find { |members| members.include?(name) } || [name]
+      if proposal.fetch("base") != ENV.fetch("GITHUB_SHA") || tap.git_head != proposal.fetch("base") ||
+         !version.match?(/\A[[:alnum:]][[:alnum:].+_#{version_separators}-]*\z/) ||
+         !packages.key?(name) || (packages.keys - group).present?
+        odie "Unexpected #{type}, version or base commit in the prepared bump."
+      end
+      if casks
+        # `brew bump-cask-pr` shortens versions in commit titles and names single-architecture bumps.
+        title = proposal.fetch("title")
+        versions = Regexp.union(version, version.split(",").fetch(0))
+        architecture = title.match(/\A#{Regexp.escape(name)} #{versions}(?: \((arm|intel) only\))?\z/)
+        odie "Unexpected title in the prepared bump." unless architecture
+        branch += "-#{architecture[1]}-only" if architecture[1]
+      end
+      SystemCommand.safe_system "git", "check-ref-format", "refs/heads/#{branch}"
+      return if pull_request_for_branch?(tap, branch)
+
+      require "utils/ast"
+
+      destinations = Set.new
+      changes = packages.map do |package_name, contents|
+        path = (casks ? tap.cask_files_by_name : tap.formula_files_by_name).fetch(package_name)
+        unless (casks ? Utils::AST::CaskAST : Utils::AST::FormulaAST).valid_bump?(path.read, contents, version:)
+          odie "Unexpected changes in the prepared bump for #{package_name}."
+        end
+        aliases = tap.alias_reverse_table
+                     .fetch("#{alias_prefix}#{package_name}", [])
+                     .map { Utils.name_from_full_name(it) }
+        rename = Array(alias_update_pair(aliases, Version.new(version))).map { |a| tap.alias_dir/a }
+        destination = rename.last
+        if destination && (destination.exist? || destination.symlink? || !destinations.add?(destination))
+          odie "Alias #{destination.basename} already exists or is proposed twice."
+        end
+
+        [path, contents, rename]
+      end
+      tap.path.cd do
+        SystemCommand.safe_system "git", "switch", "-c", branch
+        changes.each do |path, contents, aliases|
+          path.atomic_write(contents)
+          source, destination = aliases
+          FileUtils.mv source, destination if source && destination
+          commit_files([path, *aliases], title || "#{path.basename(".rb")} #{version}")
+        end
+      end
+      pr = proposal.slice("title", "body")
+      File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |io| io.puts "branch=#{branch}", "pr=#{pr.to_json}" }
+    end
+
+    # Reuse a matching signed push from an earlier attempt or replace a branch pushed without a pull request.
+    sig { params(tap: Tap).void }
+    def self.sign_pr(tap)
+      tap.path.cd do
+        branch = Utils.safe_popen_read("git", "branch", "--show-current").chomp
+        odie "Expected a bump branch." unless branch.start_with?("bump-")
+        base = ENV.fetch("GITHUB_SHA")
+        ref = "refs/heads/#{branch}"
+        outputs = ["push=true"]
+        sign = tap.official? || Utils.popen_read("git", "config", "--get", "user.signingkey").present?
+        if Utils.safe_popen_read("git", "ls-remote", "--refs", "origin", ref).present?
+          SystemCommand.safe_system "git", "fetch", "origin", ref
+          local, remote = %w[HEAD FETCH_HEAD].map do |head|
+            Utils.safe_popen_read("git", "log", "--format=%T %s", "#{base}..#{head}")
+          end
+          commits = Utils.safe_popen_read("git", "rev-list", "#{base}..FETCH_HEAD").lines(chomp: true)
+          if SystemCommand.quiet_system("git", "merge-base", "--is-ancestor", base, "FETCH_HEAD") &&
+             local.present? && remote == local &&
+             (!sign || SystemCommand.quiet_system("git", "verify-commit", *commits))
+            return
+          end
+
+          odie "A pull request already uses #{branch}." if pull_request_for_branch?(tap, branch)
+
+          opoo "Replacing #{branch}, which was pushed without a pull request."
+          outputs << "force=true"
+        end
+        if sign
+          Utils::Git.set_name_email!(author: false)
+          SystemCommand.safe_system "git", "rebase", "--force-rebase", "--gpg-sign", base
+        end
+        File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |io| io.puts(*outputs) }
+      end
+    end
+
+    # Whether the tap has a pull request from this branch, open or closed.
+    sig { params(tap: Tap, branch: String).returns(T::Boolean) }
+    private_class_method def self.pull_request_for_branch?(tap, branch)
+      odie "Cannot check pull requests as `$HOMEBREW_NO_GITHUB_API` is set!" if Homebrew::EnvConfig.no_github_api?
+
+      url = GitHub.url_to("repos", tap.full_name, "pulls")
+      url.query = URI.encode_www_form(head: "#{tap.user}:#{branch}", state: "all")
+      GitHub::API.open_rest(url).present?
+    end
+
+    sig { params(aliases: T::Array[String], new_formula_version: Version).returns(T.nilable(T::Array[String])) }
+    def self.alias_update_pair(aliases, new_formula_version)
+      versioned_alias = aliases.grep(/^.*@\d+(\.\d+)?$/).first
+      return if versioned_alias.nil?
+
+      name, old_alias_version = versioned_alias.split("@")
+      return if old_alias_version.blank?
+
+      new_alias_regex = if old_alias_version.split(".").length == 1
+        /^\d+/
+      else
+        /^\d+\.\d+/
+      end
+      new_alias_version, = *new_formula_version.to_s.match(new_alias_regex)
+      return if new_alias_version.blank?
+      return if Version.new(new_alias_version) <= Version.new(old_alias_version)
+
+      [versioned_alias, "#{name}@#{new_alias_version}"]
     end
 
     sig { params(url: String).returns(String) }

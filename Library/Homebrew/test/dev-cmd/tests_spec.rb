@@ -158,13 +158,20 @@ RSpec.describe Homebrew::DevCmd::Tests do
 
         before do
           allow(ParallelTests::RSpec::Runner).to receive(:tests_in_groups)
+            .with(%w[test/a_spec.rb test/b_spec.rb], 2, runtime_log: log_path)
             .and_return([%w[test/a_spec.rb], %w[test/b_spec.rb]])
         end
 
-        it "does not replace the recorded runtimes" do
+        it "records timings for this shard separately from the full suite" do
           invoked_arguments
 
-          expect(ENV.fetch("PARALLEL_RSPEC_LOG_PATH")).to eq("#{log_path}.partial")
+          expect(ENV.fetch("PARALLEL_RSPEC_LOG_PATH")).to eq("#{log_path}.shard-1-of-2")
+        end
+
+        it "uses a previous shard run to balance its workers" do
+          Pathname("#{log_path}.shard-1-of-2").write("test/a_spec.rb:3.0\n")
+
+          expect(invoked_arguments).to array_including_cons("--runtime-log", "#{log_path}.shard-1-of-2")
         end
       end
 
@@ -256,7 +263,7 @@ RSpec.describe Homebrew::DevCmd::Tests do
 
     it "fails when a dependency is missing on CI" do
       ENV["CI"] = "1"
-      ENV["HOMEBREW_TEST_BOT"] = "1"
+      ENV.delete("HOMEBREW_TEST_BOT")
 
       expect { ensure_test_dependency!(false, "Dependency is not installed.") }
         .to raise_error(RuntimeError, "Dependency is not installed.")
@@ -267,6 +274,28 @@ RSpec.describe Homebrew::DevCmd::Tests do
 
       expect(self).to receive(:skip).with("Dependency is not installed.")
       ensure_test_dependency!(false, "Dependency is not installed.")
+    end
+
+    it "skips when a dependency is missing under `brew test-bot`" do
+      mktmpdir do |dir|
+        spec = dir/"dependency_spec.rb"
+        spec.write <<~RUBY
+          RSpec.describe "missing dependency" do
+            it("skips") { ensure_test_dependency!(false, "Dependency is not installed.") }
+          end
+        RUBY
+        output, status = Open3.capture2e(
+          {
+            "CI" => "1", "HOMEBREW_TEST_BOT" => "1", "HOMEBREW_TESTS_COVERAGE" => nil,
+            # Use a separate test prefix and cache from the running suite.
+            "HOMEBREW_TEST_TMPDIR" => nil
+          },
+          "bundle", "exec", "rspec",
+          "--require", (HOMEBREW_LIBRARY_PATH/"test/spec_helper").to_s, spec.to_s
+        )
+
+        expect(status.exitstatus).to eq(0), output
+      end
     end
   end
 

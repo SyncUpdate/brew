@@ -11,11 +11,10 @@ module GitHub
   def self.pat_blurb(scopes = ALL_SCOPES)
     require "utils/formatter"
     require "utils/shell"
+    token_url = "https://github.com/settings/tokens/new?scopes=#{scopes.join(",")}&description=Homebrew"
     <<~EOS
       Create a GitHub personal access token:
-        #{Formatter.url(
-          "https://github.com/settings/tokens/new?scopes=#{scopes.join(",")}&description=Homebrew",
-        )}
+        #{Formatter.url(token_url)}
       #{Utils::Shell.set_variable_in_profile("HOMEBREW_GITHUB_API_TOKEN", "your_token_here")}
     EOS
   end
@@ -313,10 +312,9 @@ module GitHub
         return {}
       end
 
-      # This is a Curl format token, not a Ruby one.
-      # rubocop:disable Style/FormatStringToken
-      args = ["--header", "Accept: application/vnd.github+json", "--write-out", "\n%{http_code}"]
-      # rubocop:enable Style/FormatStringToken
+      require "utils/curl"
+      args = ["--header", "Accept: application/vnd.github+json",
+              *Utils::Curl.curl_http_code_write_out_args(prefix: "\n")]
 
       token = credentials
       args += credentials_curl_args

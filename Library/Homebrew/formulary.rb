@@ -355,6 +355,13 @@ module Formulary
       alias_path = Pathname(alias_path) if alias_path.is_a?(String)
       klass(flags:, ignore_errors:)
         .new(name, path, spec, alias_path:, tap:, force_bottle:)
+    rescue FormulaUnavailableError, Homebrew::UntrustedTapError, SignalException, NoMemoryError
+      raise
+    # A formula can raise its own exception class or call exit while being loaded.
+    rescue Exception => e # rubocop:disable Lint/RescueException
+      raise unless Context.current.tolerate_formula_load_errors?
+
+      raise FormulaUnreadableError.new(name, e)
     end
 
     sig { overridable.params(flags: T::Array[String], ignore_errors: T::Boolean).returns(T.class_of(Formula)) }
@@ -919,6 +926,9 @@ module Formulary
         begin
           factory("#{tap}/#{formula_name}", spec, alias_path:, warn: false, force_bottle:, flags:)
         rescue FormulaUnavailableError
+          # During untap, prefer the keg's own copy to a namesake from another tap.
+          raise if Context.current.tolerate_formula_load_errors?
+
           # formula may be migrated to different tap. Try to search in core and all taps.
           factory(formula_name, spec, alias_path:, warn: false, force_bottle:, flags:)
         end
@@ -1019,10 +1029,10 @@ module Formulary
   end
 
   sig {
-    params(tapped_name: String, warn: T::Boolean)
+    params(tapped_name: String, warn: T::Boolean, migrated_from: T::Array[String])
       .returns(T.nilable([String, Tap, T.nilable(Symbol), T.nilable(String)]))
   }
-  def self.tap_formula_name_type(tapped_name, warn:)
+  def self.tap_formula_name_type(tapped_name, warn:, migrated_from: [])
     return unless (tap_with_name = Tap.with_formula_name(tapped_name))
 
     tap, name = tap_with_name
@@ -1058,8 +1068,13 @@ module Formulary
       new_tapped_name = "#{new_tap}/#{new_name}"
 
       if tapped_name != new_tapped_name
+        return if migrated_from.include?(new_tapped_name)
+
         old_name = tap.core_tap? ? name : tapped_name
-        return unless (name_tap_type = tap_formula_name_type(new_tapped_name, warn: false))
+        name_tap_type = tap_formula_name_type(
+          new_tapped_name, warn: false, migrated_from: [*migrated_from, tapped_name]
+        )
+        return unless name_tap_type
 
         name, tap, = name_tap_type
 

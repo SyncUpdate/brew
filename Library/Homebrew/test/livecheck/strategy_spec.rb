@@ -88,12 +88,11 @@ RSpec.describe Homebrew::Livecheck::Strategy do
       #{body.rstrip}
     EOS
 
-    redirect_headers = response_hash[:redirection][:headers]
+    redirect = response_hash[:redirection]
     response_text[:redirection_to_ok] = response_text[:ok].sub(
       "HTTP/1.1 #{response_hash.dig(:ok, :status_code)} #{response_hash.dig(:ok, :status_text)}\r",
-      "HTTP/1.1 #{response_hash.dig(:redirection,
-                                    :status_code)} #{response_hash.dig(:redirection, :status_text)}\r\n" \
-      "Location: #{redirect_headers["location"]}\r",
+      "HTTP/1.1 #{redirect[:status_code]} #{redirect[:status_text]}\r\n" \
+      "Location: #{redirect.dig(:headers, "location")}\r",
     )
 
     response_text
@@ -381,6 +380,7 @@ RSpec.describe Homebrew::Livecheck::Strategy do
       allow_any_instance_of(Utils::Curl).to receive(:curl_version).and_return(curl_version)
 
       expect(strategy).to receive(:curl_output).with(
+        "--no-fail",
         "--fail-with-body",
         "--include",
         "--location",
@@ -409,6 +409,8 @@ RSpec.describe Homebrew::Livecheck::Strategy do
       )
 
       expect_any_instance_of(Utils::Curl).to receive(:curl_output).with(
+        "--no-fail",
+        "--fail-with-body",
         *Homebrew::Livecheck::Strategy::PAGE_CONTENT_CURL_ARGS,
         url,
         **Homebrew::Livecheck::Strategy::DEFAULT_CURL_OPTIONS,

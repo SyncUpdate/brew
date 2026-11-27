@@ -198,21 +198,28 @@ RSpec.describe Cask::CaskLoader, :cask do
             end.to output(%r{Cask #{old_tap}/#{token} was renamed to #{token}\.}).to_stderr
           end
 
-          # FIXME
-          # context "when there is an infinite tap migration loop" do
-          #   before do
-          #     (new_tap.path/"tap_migrations.json").write({
-          #       token => old_tap.name,
-          #     }.to_json)
-          #   end
-          #
-          #   it "stops recursing" do
-          #     expect do
-          #       klass.loader_for("#{new_tap}/#{token}")
-          #     end.not_to output.to_stderr
-          #   end
-          # end
+          it "stops recursing when there is an infinite tap migration loop" do
+            (new_tap.path/"tap_migrations.json").write({
+              token => old_tap.name,
+            }.to_json)
+
+            expect do
+              described_class.loader_for("#{new_tap}/#{token}")
+            end.not_to output.to_stderr
+          end
         end
+      end
+    end
+
+    context "when using the API" do
+      it "does not load from the API when there is an infinite tap migration loop" do
+        token = "foo"
+        core_tap = CoreTap.instance
+        allow(Homebrew::API).to receive(:cask_token?).and_return(true)
+        allow(tap).to receive_messages(cask_renames: {}, tap_migrations: { token => core_tap.name })
+        allow(core_tap).to receive(:tap_migrations).and_return({ token => tap.name })
+
+        expect(described_class.loader_for("#{tap}/#{token}")).not_to be_a described_class::FromAPILoader
       end
     end
   end
@@ -239,6 +246,25 @@ RSpec.describe Cask::CaskLoader, :cask do
 
       expect(described_class.load_from_installed_caskfile(caskfile, api_fallback: false).artifacts_list)
         .to be_empty
+    end
+
+    it "depends on the formulae recorded in the install receipt" do
+      (Cask::Caskroom.path/"stubbed/.metadata/INSTALL_RECEIPT.json").write JSON.generate({
+        "runtime_dependencies" => { "formula" => [{ "full_name" => "foo", "declared_directly" => true }] },
+      })
+
+      expect(described_class.load_from_installed_caskfile(caskfile, api_fallback: false).depends_on.formula)
+        .to eq(["foo"])
+    end
+
+    it "depends on the formulae recorded in a receipt written by the same process" do
+      tab = Cask::Tab.empty
+      tab.tabfile = Cask::Caskroom.path/"stubbed/.metadata/INSTALL_RECEIPT.json"
+      tab.runtime_dependencies = { formula: [{ "full_name" => "foo", "declared_directly" => true }] }
+      tab.write
+
+      expect(described_class.load_from_installed_caskfile(caskfile, api_fallback: false).depends_on.formula)
+        .to eq(["foo"])
     end
   end
 

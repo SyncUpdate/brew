@@ -479,6 +479,7 @@ __fish_brew_complete_arg 'bump' -l repology -d 'Use Repology to check for outdat
 __fish_brew_complete_arg 'bump' -l start-with -d 'Letter or word that the list of package results should alphabetically follow'
 __fish_brew_complete_arg 'bump' -l tap -d 'Check formulae and casks within the given tap, specified as user`/`repo'
 __fish_brew_complete_arg 'bump' -l verbose -d 'Make some output more verbose'
+__fish_brew_complete_arg 'bump' -l write-pr-to -d 'With `--formula` or `--cask`, write one JSON file per proposed pull request in directory for later publication'
 __fish_brew_complete_arg 'bump; and not __fish_seen_argument -l cask -l casks' -a '(__fish_brew_suggest_formulae_all)'
 __fish_brew_complete_arg 'bump; and not __fish_seen_argument -l formula -l formulae' -a '(__fish_brew_suggest_casks_all)'
 
@@ -504,6 +505,7 @@ __fish_brew_complete_arg 'bump-cask-pr' -l version-intel -d 'Specify the new cas
 __fish_brew_complete_arg 'bump-cask-pr' -l version-linux-arm -d 'Specify the new cask version for Linux on ARM'
 __fish_brew_complete_arg 'bump-cask-pr' -l version-linux-intel -d 'Specify the new cask version for Linux on Intel'
 __fish_brew_complete_arg 'bump-cask-pr' -l write-only -d 'Make the expected file modifications without taking any Git actions'
+__fish_brew_complete_arg 'bump-cask-pr' -l write-pr-to -d 'Write the proposed cask changes and pull request details as JSON in directory for publication in a separate step'
 __fish_brew_complete_arg 'bump-cask-pr' -a '(__fish_brew_suggest_casks_all)'
 
 
@@ -544,6 +546,7 @@ __fish_brew_complete_arg 'bump-formula-pr' -l url -d 'Specify the URL for the ne
 __fish_brew_complete_arg 'bump-formula-pr' -l verbose -d 'Make some output more verbose'
 __fish_brew_complete_arg 'bump-formula-pr' -l version -d 'Use the specified version to override the value parsed from the URL or tag. Note that `--version=0` can be used to delete an existing version override from a formula if it has become redundant'
 __fish_brew_complete_arg 'bump-formula-pr' -l write-only -d 'Make the expected file modifications without taking any Git actions'
+__fish_brew_complete_arg 'bump-formula-pr' -l write-pr-to -d 'Write the proposed formula changes and pull request details as JSON in directory for publication in a separate step'
 __fish_brew_complete_arg 'bump-formula-pr' -a '(__fish_brew_suggest_formulae_all)'
 
 
@@ -1108,8 +1111,8 @@ __fish_brew_complete_arg 'extract' -a '(__fish_brew_suggest_taps_installed)'
 __fish_brew_complete_cmd 'fetch' 'Download a bottle (if available) or source packages for formulae and binaries for casks'
 __fish_brew_complete_arg 'fetch' -l HEAD -d 'Fetch HEAD version instead of stable version'
 __fish_brew_complete_arg 'fetch' -l all-platforms -d 'Download for every supported operating system and architecture, plus each language for casks, fetching each distinct URL once'
-__fish_brew_complete_arg 'fetch' -l arch -d 'Download for the given CPU architecture. (Pass `all` to download for all architectures.)'
-__fish_brew_complete_arg 'fetch' -l bottle-tag -d 'Download a bottle for given tag'
+__fish_brew_complete_arg 'fetch' -l arch -d 'Download for the given CPU architecture. Use `arm` for ARM64, `intel` for x86-64 or `all` for both'
+__fish_brew_complete_arg 'fetch' -l bottle-tag -d 'Download a bottle for the given tag (e.g. `arm64_tahoe`)'
 __fish_brew_complete_arg 'fetch' -l build-bottle -d 'Download source packages (for eventual bottling) rather than a bottle'
 __fish_brew_complete_arg 'fetch' -l build-from-source -d 'Download source packages rather than a bottle'
 __fish_brew_complete_arg 'fetch' -l cask -d 'Treat all named arguments as casks'
@@ -1119,11 +1122,11 @@ __fish_brew_complete_arg 'fetch' -l force -d 'Remove a previously cached version
 __fish_brew_complete_arg 'fetch' -l force-bottle -d 'Download a bottle if it exists for the current or newest version of macOS, even if it would not be used during installation'
 __fish_brew_complete_arg 'fetch' -l formula -d 'Treat all named arguments as formulae'
 __fish_brew_complete_arg 'fetch' -l help -d 'Show this message'
-__fish_brew_complete_arg 'fetch' -l os -d 'Download for the given operating system. (Pass `all` to download for all operating systems.)'
+__fish_brew_complete_arg 'fetch' -l os -d 'Download for `macos`, `linux`, a macOS release name (e.g. `tahoe`) or `all` operating systems'
 __fish_brew_complete_arg 'fetch' -l quiet -d 'Make some output more quiet'
 __fish_brew_complete_arg 'fetch' -l retry -d 'Retry if downloading fails or re-download if the checksum of a previously cached version no longer matches. Tries at most 5 times with exponential backoff'
 __fish_brew_complete_arg 'fetch' -l test -d 'Also download test resources and their patches for each formula'
-__fish_brew_complete_arg 'fetch' -l verbose -d 'Do a verbose VCS checkout, if the URL represents a VCS. This is useful for seeing if an existing VCS cache has been updated'
+__fish_brew_complete_arg 'fetch' -l verbose -d 'Print download locations and show VCS checkout details'
 __fish_brew_complete_arg 'fetch; and not __fish_seen_argument -l cask -l casks' -a '(__fish_brew_suggest_formulae_all)'
 __fish_brew_complete_arg 'fetch; and not __fish_seen_argument -l formula -l formulae' -a '(__fish_brew_suggest_casks_all)'
 

@@ -24,23 +24,22 @@ module Homebrew
           and binaries for <cask>s. For files, also print SHA-256 checksums.
         EOS
         flag   "--os=",
-               description: "Download for the given operating system. " \
-                            "(Pass `all` to download for all operating systems.)"
+               description: "Download for `macos`, `linux`, a macOS release name (e.g. `tahoe`) " \
+                            "or `all` operating systems."
         flag   "--arch=",
                description: "Download for the given CPU architecture. " \
-                            "(Pass `all` to download for all architectures.)"
+                            "Use `arm` for ARM64, `intel` for x86-64 or `all` for both."
         switch "--all-platforms",
                description: "Download for every supported operating system and architecture, plus each " \
                             "language for <cask>s, fetching each distinct URL once."
         flag   "--bottle-tag=",
-               description: "Download a bottle for given tag."
+               description: "Download a bottle for the given tag (e.g. `arm64_tahoe`)."
         switch "--HEAD",
                description: "Fetch HEAD version instead of stable version."
         switch "-f", "--force",
                description: "Remove a previously cached version and re-fetch."
         switch "-v", "--verbose",
-               description: "Do a verbose VCS checkout, if the URL represents a VCS. This is useful for " \
-                            "seeing if an existing VCS cache has been updated."
+               description: "Print download locations and show VCS checkout details."
         switch "--retry",
                description: "Retry if downloading fails or re-download if the checksum of a previously cached " \
                             "version no longer matches. Tries at most #{FETCH_MAX_TRIES} times with " \
@@ -82,9 +81,10 @@ module Homebrew
       sig { override.void }
       def run
         Formulary.enable_factory_cache!
+        os_arch_combinations = args.os_arch_combinations
 
         if enqueue_api_formula_bottles? || enqueue_api_cask_downloads?
-          download_queue.fetch
+          download_queue.fetch(verbose: args.verbose?)
           return
         end
 
@@ -104,7 +104,6 @@ module Homebrew
           args.named.to_formulae_and_casks
         end.uniq
 
-        os_arch_combinations = args.os_arch_combinations
         current_os_arch = [SimulateSystem.current_os, SimulateSystem.current_arch]
         fetch_hook_formulae = T.let([], T::Array[Formula])
 
@@ -148,7 +147,9 @@ module Homebrew
                     bottle = formula.bottle_for_tag(bottle_tag)
 
                     if bottle.nil?
-                      opoo "Bottle for tag #{bottle_tag.to_sym.inspect} is unavailable."
+                      message = "The loaded metadata for #{formula.full_name} has no bottle for tag #{bottle_tag}."
+                      message += "\nAPI metadata covers only the host platform." if formula.loaded_from_internal_api?
+                      opoo message
                       next
                     end
 
@@ -188,7 +189,7 @@ module Homebrew
           end
         end
 
-        download_queue.fetch
+        download_queue.fetch(verbose: args.verbose?)
 
         fetch_hook_formulae.each { |formula| run_fetch_hook(formula) }
       ensure

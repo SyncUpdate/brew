@@ -32,10 +32,10 @@ AllCops:
     - "Homebrew/sorbet/rbi/parser*.rbi"
     - "Homebrew/bin/*"
     - "Homebrew/vendor/**/*"
+    - "Taps/*/*/Aliases/*"
     - "Taps/*/*/vendor/**/*"
     - "**/.github/copilot-instructions.md" # This should be treated the same as the `docs/` files.
-  SuggestExtensions:
-    rubocop-minitest: false
+  SuggestExtensions: false
 
 Cask/Desc:
   Description: "Ensure that the desc stanza conforms to various content and style checks."
@@ -124,6 +124,9 @@ Homebrew/NoInstanceVariableAccessInTests:
     - "Homebrew/test/**/*.rb"
   Exclude:
     - "Homebrew/test/support/fixtures/**/*"
+
+Homebrew/NoMultilineInterpolation:
+  Enabled: true
 
 Homebrew/NoSendInTests:
   Description: "Make the target method public and call it directly instead of using `send` in tests."
